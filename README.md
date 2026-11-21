@@ -119,3 +119,7 @@ node scripts/loadtest.mjs http://localhost:8796 5000 40
 Legt 5000 Issues an, misst Lese- und Schreibzugriffe und lässt 40 Mock-Agenten parallel 600 Issues
 abarbeiten, während 100 Clients die Live-Events mitlesen. Die Zeiten für „Board lesen“ enthalten
 das Entpacken und Parsen im Testclient; der Server selbst liefert das Board aus dem RAM.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE). Jede und jeder darf AgentDeck frei nutzen, ändern und weitergeben.
