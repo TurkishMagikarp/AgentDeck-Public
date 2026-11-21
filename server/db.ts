@@ -194,7 +194,7 @@ export function recoverAfterRestart() {
   db.prepare('DELETE FROM run_log WHERE at < ?').run(Date.now() - 30 * 86_400_000)
   // Runs that were alive when the process died can never finish.
   db.exec(
-    "UPDATE runs SET status='failed', ended_at=started_at, note='Server neu gestartet' WHERE status='running'",
+    "UPDATE runs SET status='failed', ended_at=started_at, note='Server restarted' WHERE status='running'",
   )
   db.exec("UPDATE issues SET status='todo' WHERE status='in_progress'")
 }

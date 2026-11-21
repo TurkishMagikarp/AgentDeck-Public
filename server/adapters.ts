@@ -37,7 +37,7 @@ const short = (s: string, n = 160) => (s.length > n ? s.slice(0, n) + '…' : s)
 
 function command(cli: string, o: RunOpts): [string, string[]] {
   const m = (o.model ?? '').trim()
-  if (!MODEL_RE.test(m)) throw new Error('Ungültiger Modellname')
+  if (!MODEL_RE.test(m)) throw new Error('Invalid model name')
   const effort = EFFORTS.includes(o.effort ?? '') ? (o.effort ?? '') : ''
   if (cli === 'claude')
     return [
@@ -161,7 +161,7 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
       if (typeof e.result === 'string' && e.result) st.text = e.result
       st.sawResult = true
       st.ok = !e.is_error
-      if (e.is_error) st.error = short(String(e.result ?? e.subtype ?? 'Fehler'), 400)
+      if (e.is_error) st.error = short(String(e.result ?? e.subtype ?? 'error'), 400)
     }
   } else if (cli === 'codex') {
     const it = e.item
@@ -176,7 +176,7 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
       st.sawResult = true
     } else if (e.type === 'turn.failed' || e.type === 'error') {
       st.ok = false
-      st.error = short(String(e.error?.message ?? e.message ?? 'Fehler'), 400)
+      st.error = short(String(e.error?.message ?? e.message ?? 'error'), 400)
     }
   } else {
     const p = e.part ?? {}
@@ -190,7 +190,7 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
       st.sawResult = true
     } else if (e.type === 'error') {
       st.ok = false
-      st.error = short(String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'Fehler'), 400)
+      st.error = short(String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'error'), 400)
     }
   }
 }
@@ -209,11 +209,11 @@ function killTree(pid: number | undefined) {
 
 export function startRun(o: RunOpts): RunHandle {
   const cli = PROVIDERS[o.provider]?.cli
-  if (!cli) throw new Error(`Unbekannter Provider ${o.provider}`)
+  if (!cli) throw new Error(`Unknown provider ${o.provider}`)
   if (cli === 'mock') return mockRun(o)
   if (cli === 'api') {
     const key = apiKey(o.provider)
-    if (!key) throw new Error('Für diesen Anbieter ist kein API-Key hinterlegt')
+    if (!key) throw new Error('No API key stored for this provider')
     const model = o.model?.trim() || PROVIDERS[o.provider].defaultModel
     return startApiRun(o, PROVIDERS[o.provider].baseUrl!, key, model)
   }
@@ -249,7 +249,7 @@ export function startRun(o: RunOpts): RunHandle {
         ok: false,
         text: st.text,
         usage: st.usage,
-        error: `${cmd} konnte nicht gestartet werden: ${err.message}`,
+        error: `${cmd} failed to start: ${err.message}`,
       }),
     )
     child.on('close', (code) => {
@@ -265,7 +265,7 @@ export function startRun(o: RunOpts): RunHandle {
         ok,
         text: st.text,
         usage: st.usage,
-        error: ok ? undefined : (st.error ?? (short(stderr.trim(), 400) || `Exit-Code ${code}`)),
+        error: ok ? undefined : (st.error ?? (short(stderr.trim(), 400) || `exit code ${code}`)),
       })
     })
   })
@@ -286,26 +286,19 @@ function mockAnswer(o: RunOpts) {
   if (!o.autonomous) return 'PASS'
   if (o.prompt.includes('## Your task: review')) {
     return o.prompt.includes('[mock:changes]')
-      ? '<summary>Ändern: Test fehlt (Mock).</summary>\n<status>changes</status>'
-      : '<summary>Passt: geprüft (Mock).</summary>\n<status>approve</status>'
+      ? '<summary>Changes: test missing (mock).</summary>\n<status>changes</status>'
+      : '<summary>Approved: checked (mock).</summary>\n<status>approve</status>'
   }
-  return '<summary>Mock-Lauf: Aufgabe simuliert umgesetzt.</summary>\n<handoff>Nichts offen. Geändert: keine Dateien (Mock).</handoff>\n<status>review</status>'
+  return '<summary>Mock run: task done (simulated).</summary>\n<handoff>Nothing open. Changed: no files (mock).</handoff>\n<status>review</status>'
 }
 
 function mockRun(o: RunOpts): RunHandle {
   let timer: NodeJS.Timeout
   let finish: (r: RunResult) => void
-  const steps = ['Lese Issue…', 'Read: src/index.ts', '$ npm test', 'Schreibe Zusammenfassung…']
+  const steps = ['Reading issue…', 'Read: src/index.ts', '$ npm test', 'Writing summary…']
 
   if (o.prompt.includes('[mock:create]') && o.env?.AGENTDECK_CLI) {
-    const args = [
-      o.env.AGENTDECK_CLI,
-      'create',
-      '--title',
-      'Vom Mock-Agenten angelegt',
-      '--status',
-      'backlog',
-    ]
+    const args = [o.env.AGENTDECK_CLI, 'create', '--title', 'Filed by the mock agent', '--status', 'backlog']
     execFile(process.execPath, args, { env: { ...process.env, ...o.env } }, () => {})
   }
 
@@ -344,7 +337,7 @@ function mockRun(o: RunOpts): RunHandle {
   return {
     kill: () => {
       clearInterval(timer)
-      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'gestoppt' })
+      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'stopped' })
     },
     done,
   }

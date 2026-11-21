@@ -16,23 +16,22 @@ export function Skills() {
       <div class="page-head">
         <div>
           <h2>Skills</h2>
-          <p class="muted">
-            Wiederverwendbares Wissen. Ein Agent bekommt nur die Skills in den Prompt, die ihm zugewiesen
-            sind.
-          </p>
+          <p class="muted">Reusable knowledge. An agent only gets the skills assigned to it in its prompt.</p>
         </div>
         <button class="primary" onClick={() => setEditing({ name: '', description: '', content: '' })}>
-          Skill hinzufügen
+          Add skill
         </button>
       </div>
 
       <div class="grid">
-        <For each={board.skills} fallback={<p class="muted">Noch keine Skills.</p>}>
+        <For each={board.skills} fallback={<p class="muted">No skills yet.</p>}>
           {(skill) => (
             <article class="tile" onClick={() => setEditing({ ...skill })}>
               <strong>{skill.name}</strong>
-              <p class="muted">{skill.description || 'Keine Beschreibung'}</p>
-              <p>{usedBy(skill.id)} Agenten nutzen diesen Skill</p>
+              <p class="muted">{skill.description || 'No description'}</p>
+              <p>
+                {usedBy(skill.id)} {usedBy(skill.id) === 1 ? 'agent uses' : 'agents use'} this skill
+              </p>
             </article>
           )}
         </For>
@@ -60,26 +59,26 @@ function SkillForm(props: { draft: Draft; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Skill "${draft.name}" löschen?`)) return
+    if (!confirm(`Delete skill "${draft.name}"?`)) return
     await api.del(`/skills/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Skill bearbeiten' : 'Neuer Skill'} onClose={props.onClose} wide>
+    <Modal title={draft.id ? 'Edit skill' : 'New skill'} onClose={props.onClose} wide>
       <form class="form" onSubmit={save}>
         <div class="row">
           <Field label="Name">
             <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
           </Field>
-          <Field label="Kurzbeschreibung">
+          <Field label="Short description">
             <input
               value={draft.description}
               onInput={(e) => setDraft('description', e.currentTarget.value)}
             />
           </Field>
         </div>
-        <Field label="Inhalt (Markdown)">
+        <Field label="Content (Markdown)">
           <textarea
             rows="16"
             class="mono"
@@ -90,15 +89,15 @@ function SkillForm(props: { draft: Draft; onClose: () => void }) {
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Löschen
+              Delete
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Abbrechen
+            Cancel
           </button>
           <button class="primary" type="submit">
-            Speichern
+            Save
           </button>
         </footer>
       </form>

@@ -129,7 +129,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
       }),
     })
     const data: any = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error?.message ?? `API antwortet mit HTTP ${res.status}`)
+    if (!res.ok) throw new Error(data.error?.message ?? `API answered with HTTP ${res.status}`)
 
     usage.input += data.usage?.prompt_tokens ?? 0
     usage.cached = (usage.cached ?? 0) + (data.usage?.prompt_cache_hit_tokens ?? 0)
@@ -152,7 +152,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const reply = await ask(messages)
-      if (!reply) throw new Error('Die API hat keine Antwort geliefert')
+      if (!reply) throw new Error('The API returned no answer')
       messages.push(reply)
       if (reply.content) opts.onActivity?.(reply.content)
 
@@ -169,7 +169,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
         messages.push({ role: 'tool', tool_call_id: call.id, content: clip(result) })
       }
     }
-    return { ok: false, text: '', usage, error: `Nach ${MAX_STEPS} Schritten nicht fertig geworden` }
+    return { ok: false, text: '', usage, error: `Not finished after ${MAX_STEPS} steps` }
   }
 
   const done = loop().catch((err): RunResult => ({ ok: false, text: '', usage, error: err.message }))

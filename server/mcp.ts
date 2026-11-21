@@ -16,38 +16,38 @@ type Connection = {
 export const CONNECTIONS: Record<string, Connection> = {
   github: {
     label: 'GitHub',
-    description: 'Issues, Pull Requests, Code-Suche und Actions',
+    description: 'Issues, pull requests, code search and Actions',
     keyLabel: 'Personal Access Token',
     envVar: 'GITHUB_MCP_TOKEN',
     url: 'https://api.githubcopilot.com/mcp/',
   },
   pixellab: {
     label: 'PixelLab',
-    description: 'Pixel-Art: Charaktere, Animationen, Tilesets',
-    keyLabel: 'API-Token',
+    description: 'Pixel art: characters, animations, tilesets',
+    keyLabel: 'API token',
     envVar: 'PIXELLAB_API_KEY',
     url: 'https://api.pixellab.ai/mcp',
   },
   elevenlabs: {
     label: 'ElevenLabs',
-    description: 'Sprachausgabe, Stimmen, Soundeffekte',
-    keyLabel: 'API-Key',
+    description: 'Text to speech, voices, sound effects',
+    keyLabel: 'API key',
     envVar: 'ELEVENLABS_API_KEY',
     command: 'uvx',
     args: ['elevenlabs-mcp'],
   },
   recraft: {
     label: 'Recraft',
-    description: 'Bilder und Vektorgrafiken erzeugen und bearbeiten',
-    keyLabel: 'API-Key',
+    description: 'Create and edit images and vector graphics',
+    keyLabel: 'API key',
     envVar: 'RECRAFT_API_KEY',
     command: 'npx',
     args: ['-y', '@recraft-ai/mcp-recraft-server@latest'],
   },
   meshy: {
     label: 'Meshy',
-    description: '3D-Modelle aus Text und Bildern',
-    keyLabel: 'API-Key',
+    description: '3D models from text and images',
+    keyLabel: 'API key',
     envVar: 'MESHY_API_KEY',
     command: 'npx',
     args: ['-y', '@meshy-ai/meshy-mcp-server'],
@@ -68,7 +68,7 @@ export function listConnections() {
 }
 
 export function setConnectionKey(id: string, key: string) {
-  if (!CONNECTIONS[id]) throw new Error('Unbekannte Verbindung')
+  if (!CONNECTIONS[id]) throw new Error('Unknown connection')
   if (key)
     run(
       'INSERT OR REPLACE INTO mcp_auth (id, secret, updated_at) VALUES (?,?,?)',

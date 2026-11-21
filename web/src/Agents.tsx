@@ -9,12 +9,12 @@ import { Field, initials, Modal, Select, Toggle } from './ui'
 type Draft = Omit<Agent, 'id'> & { id?: number }
 
 const EFFORTS: [string, string][] = [
-  ['', 'Standard'],
-  ['low', 'niedrig'],
-  ['medium', 'mittel'],
-  ['high', 'hoch'],
-  ['xhigh', 'sehr hoch'],
-  ['max', 'maximal'],
+  ['', 'Default'],
+  ['low', 'Low'],
+  ['medium', 'Medium'],
+  ['high', 'High'],
+  ['xhigh', 'Very high'],
+  ['max', 'Max'],
 ]
 
 const newAgent = (): Draft => ({
@@ -37,18 +37,18 @@ export function Agents() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Agenten</h2>
-          <p class="muted">Wer in diesem Projekt arbeitet, mit welchem Anbieter und wie oft parallel.</p>
+          <h2>Agents</h2>
+          <p class="muted">Who works in this project, with which provider, and how many in parallel.</p>
         </div>
         <button class="primary" onClick={() => setEditing(newAgent())}>
-          Agent hinzufügen
+          Add agent
         </button>
       </div>
 
       <div class="grid">
         <For
           each={board.agents}
-          fallback={<p class="muted">Noch keine Agenten. Ohne Agenten bleibt das Board stehen.</p>}
+          fallback={<p class="muted">No agents yet. Without agents the board stands still.</p>}
         >
           {(agent) => (
             <AgentCard
@@ -78,7 +78,7 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
         <span class={`avatar large ${props.agent.provider}`}>{initials(props.agent.name)}</span>
         <div>
           <strong>{props.agent.name}</strong>
-          <p class="muted">{props.agent.role || 'Keine Rolle'}</p>
+          <p class="muted">{props.agent.role || 'No role'}</p>
         </div>
       </div>
       <p class="muted">
@@ -86,8 +86,8 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
         {props.agent.model && ` · ${props.agent.model}`}
       </p>
       <p>
-        {running()} / {props.agent.max_instances} Instanzen aktiv
-        {!props.agent.enabled && ' · deaktiviert'}
+        {running()} / {props.agent.max_instances} instances active
+        {!props.agent.enabled && ' · disabled'}
       </p>
       <div class="chips">
         <For each={skills()}>{(skill) => <span class="chip">{skill.name}</span>}</For>
@@ -125,21 +125,21 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Agent "${draft.name}" löschen?`)) return
+    if (!confirm(`Delete agent "${draft.name}"?`)) return
     await api.del(`/agents/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Agent bearbeiten' : 'Neuer Agent'} onClose={props.onClose}>
+    <Modal title={draft.id ? 'Edit agent' : 'New agent'} onClose={props.onClose}>
       <form class="form" onSubmit={save}>
         <div class="row">
           <Field label="Name">
             <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
           </Field>
-          <Field label="Rolle">
+          <Field label="Role">
             <input
-              placeholder="z. B. Backend-Entwickler"
+              placeholder="e.g. Backend developer"
               value={draft.role}
               onInput={(e) => setDraft('role', e.currentTarget.value)}
             />
@@ -147,7 +147,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
         </div>
 
         <div class="row">
-          <Field label="Anbieter">
+          <Field label="Provider">
             <select
               onChange={(e) => {
                 // A model of one provider means nothing to another.
@@ -163,21 +163,21 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
               </For>
             </select>
           </Field>
-          <Field label="Modell">
+          <Field label="Model">
             <ModelSelect
               provider={draft.provider}
               value={draft.model}
               onChange={(model) => setDraft('model', model)}
             />
           </Field>
-          <Field label="Effort" hint="Denkaufwand pro Lauf">
+          <Field label="Effort" hint="Thinking effort per run">
             <Select
               value={draft.effort}
               options={EFFORTS}
               onChange={(effort) => setDraft('effort', effort)}
             />
           </Field>
-          <Field label="Max. Instanzen" hint="Parallel laufende Kopien">
+          <Field label="Max instances" hint="Copies running in parallel">
             <input
               type="number"
               min="1"
@@ -188,7 +188,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
           </Field>
         </div>
 
-        <Field label="Anweisungen">
+        <Field label="Instructions">
           <textarea
             rows="6"
             value={draft.instructions}
@@ -216,7 +216,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
 
         <Show when={connections()?.length}>
           <div class="field">
-            <span>MCP-Verbindungen</span>
+            <span>MCP connections</span>
             <div class="chips">
               <For each={connections()}>
                 {(connection) => (
@@ -230,25 +230,25 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
               </For>
             </div>
             <Show when={draft.provider === 'deepseek' && draft.mcp_ids.length}>
-              <small>Der Deepseek-Agent kann MCP-Verbindungen noch nicht nutzen.</small>
+              <small>The Deepseek agent cannot use MCP connections yet.</small>
             </Show>
           </div>
         </Show>
 
-        <Toggle label="Aktiv" checked={draft.enabled} onChange={(on) => setDraft('enabled', on)} />
+        <Toggle label="Active" checked={draft.enabled} onChange={(on) => setDraft('enabled', on)} />
 
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Löschen
+              Delete
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Abbrechen
+            Cancel
           </button>
           <button class="primary" type="submit">
-            Speichern
+            Save
           </button>
         </footer>
       </form>

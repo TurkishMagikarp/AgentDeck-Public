@@ -30,12 +30,12 @@ import { Watchdog } from './Watchdog'
 const TABS = [
   ['board', 'Board'],
   ['dashboard', 'Dashboard'],
-  ['agents', 'Agenten'],
+  ['agents', 'Agents'],
   ['skills', 'Skills'],
-  ['usage', 'Usage & Routing'],
-  ['routines', 'Routinen'],
+  ['usage', 'Usage & routing'],
+  ['routines', 'Routines'],
   ['watchdog', 'Watchdog'],
-  ['settings', 'Projekt'],
+  ['settings', 'Project'],
 ] as const
 
 type Tab = (typeof TABS)[number][0]
@@ -110,10 +110,10 @@ export function App() {
         </ul>
         <span class="spacer" />
         <button class="ghost sidebar-link" onClick={() => setShowProviders(true)}>
-          Anbieter und Zugänge
+          Providers and access
         </button>
         <button class="new-project" onClick={() => setCreating(true)}>
-          + Projekt
+          + Project
         </button>
       </nav>
 
@@ -126,7 +126,7 @@ export function App() {
                 <div class="phone-bar">
                   <select
                     class="project-switch"
-                    aria-label="Projekt wechseln"
+                    aria-label="Switch project"
                     onChange={(e) => selectProject(Number(e.currentTarget.value))}
                   >
                     <For each={projects()}>
@@ -137,8 +137,8 @@ export function App() {
                       )}
                     </For>
                   </select>
-                  <button onClick={() => setShowProviders(true)}>Zugänge</button>
-                  <button onClick={() => setCreating(true)} aria-label="Neues Projekt">
+                  <button onClick={() => setShowProviders(true)}>Access</button>
+                  <button onClick={() => setCreating(true)} aria-label="New project">
                     +
                   </button>
                 </div>
@@ -153,13 +153,13 @@ export function App() {
                 </div>
                 <span class="spacer" />
                 <Toggle
-                  label="ADHD-Modus"
-                  title="Agenten antworten mit einer Ergebniszeile und höchstens drei Stichpunkten"
+                  label="ADHD mode"
+                  title="Agents reply with one result line and at most three bullet points"
                   checked={project().settings.adhd}
                   onChange={(on) => saveSettings((s) => void (s.adhd = on))}
                 />
                 <button classList={{ primary: project().paused }} onClick={togglePause}>
-                  {project().paused ? 'Fortsetzen' : 'Pausieren'}
+                  {project().paused ? 'Resume' : 'Pause'}
                 </button>
               </header>
 
@@ -222,12 +222,10 @@ export function App() {
 function Welcome(props: { onCreate: () => void }) {
   return (
     <div class="welcome">
-      <h1>Noch kein Projekt</h1>
-      <p class="muted">
-        Beschreibe, was gebaut werden soll, und lass die KI Agenten, Skills und Issues vorschlagen.
-      </p>
+      <h1>No project yet</h1>
+      <p class="muted">Describe what you want built and let the AI suggest agents, skills and issues.</p>
       <button class="primary" onClick={props.onCreate}>
-        Erstes Projekt anlegen
+        Create your first project
       </button>
     </div>
   )

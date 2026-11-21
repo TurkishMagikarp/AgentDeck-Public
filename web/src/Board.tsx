@@ -17,13 +17,13 @@ import { initials } from './ui'
 const COLUMNS: { status: Status; label: string; canAdd?: boolean }[] = [
   { status: 'backlog', label: 'Backlog', canAdd: true },
   { status: 'todo', label: 'To Do', canAdd: true },
-  { status: 'in_progress', label: 'In Arbeit' },
+  { status: 'in_progress', label: 'In progress' },
   { status: 'review', label: 'Review' },
-  { status: 'blocked', label: 'Wartet auf Mensch' },
-  { status: 'done', label: 'Fertig' },
+  { status: 'blocked', label: 'Waits for a human' },
+  { status: 'done', label: 'Done' },
 ]
 
-export const PRIORITIES = ['Niedrig', 'Normal', 'Hoch', 'Dringend']
+export const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent']
 
 export function Board() {
   // In an autonomous project nothing waits for a person, so that column only shows up while
@@ -58,7 +58,7 @@ export function Board() {
       <Show when={groups().length}>
         <div class="board-filter">
           <button classList={{ active: groupFilter() === '' }} onClick={() => setGroupFilter('')}>
-            Alle
+            All
           </button>
           <For each={groups()}>
             {(group) => (
@@ -70,7 +70,7 @@ export function Board() {
         </div>
       </Show>
       {/* Phones show one column at a time; this bar says how much is where and jumps there. */}
-      <nav class="board-jump" aria-label="Zur Spalte springen">
+      <nav class="board-jump" aria-label="Jump to column">
         <For each={visibleColumns()}>
           {(column) => (
             <button onClick={() => showColumn(column.status)}>
@@ -141,11 +141,7 @@ function Column(props: { status: Status; label: string; canAdd?: boolean }) {
 
       <Show when={props.canAdd}>
         <form class="quick-add" onSubmit={addIssue}>
-          <input
-            placeholder="+ Issue anlegen"
-            value={draft()}
-            onInput={(e) => setDraft(e.currentTarget.value)}
-          />
+          <input placeholder="+ New issue" value={draft()} onInput={(e) => setDraft(e.currentTarget.value)} />
         </form>
       </Show>
     </section>
@@ -176,7 +172,7 @@ function Card(props: { issue: Issue }) {
           <span class={`priority p${props.issue.priority}`}>{PRIORITIES[props.issue.priority]}</span>
         </Show>
         <Show when={waitingOn().length}>
-          <span class="waiting" title="Wartet auf diese Issues">
+          <span class="waiting" title="Waiting on these issues">
             ⏳{' '}
             {waitingOn()
               .map((n) => `${board.project?.key}-${n}`)
@@ -188,16 +184,16 @@ function Card(props: { issue: Issue }) {
       <p class="card-title">{props.issue.title}</p>
 
       <Show when={props.issue.landing === 'waiting'}>
-        <p class="review-badge">Pull Request wartet auf Checks</p>
+        <p class="review-badge">Pull request waits for checks</p>
       </Show>
       <Show when={props.issue.review_index >= 0}>
-        <p class="review-badge">Prüfung durch {assignee()?.name ?? 'Reviewer'}</p>
+        <p class="review-badge">Review by {assignee()?.name ?? 'reviewer'}</p>
       </Show>
 
       <Show when={run()}>
         <p class="live-line">
           <span class="pulse" />
-          {liveLine[props.issue.id] ?? 'startet…'}
+          {liveLine[props.issue.id] ?? 'starting…'}
         </p>
       </Show>
 

@@ -64,33 +64,33 @@ const agents = Array.from({ length: 8 }, (_, i) => ({
   max_instances: Math.ceil(AGENTS / 8),
 }))
 const issues = Array.from({ length: ISSUES }, (_, i) => ({
-  title: `Lasttest-Issue ${i + 1} mit einem Titel in üblicher Länge`,
-  description: 'Beschreibung mit Akzeptanzkriterien. '.repeat(8),
+  title: `Load test issue ${i + 1} with a title of usual length`,
+  description: 'Description with acceptance criteria. '.repeat(8),
   status: 'backlog',
   priority: i % 4,
 }))
 
 let t = performance.now()
 const { projectId } = await api('POST', '/blueprint', {
-  project: { key: 'LOAD', name: 'Lasttest', settings: { maxConcurrent: AGENTS } },
+  project: { key: 'LOAD', name: 'Load test', settings: { maxConcurrent: AGENTS } },
   agents,
   issues,
 })
-console.log(`Blueprint mit ${ISSUES} Issues angelegt in ${Math.round(performance.now() - t)} ms`)
+console.log(`Blueprint with ${ISSUES} issues created in ${Math.round(performance.now() - t)} ms`)
 
 const board = await fetch(`${BASE}/api/projects/${projectId}/board`)
 const boardBytes = (await board.arrayBuffer()).byteLength
-console.log(`Board-Antwort: ${(boardBytes / 1024).toFixed(0)} KB unkomprimiert\n`)
+console.log(`Board response: ${(boardBytes / 1024).toFixed(0)} KB uncompressed\n`)
 
-await measure('Board lesen (Cache warm)', 2000, 50, () => api('GET', `/projects/${projectId}/board`))
-await measure('Issue-Details lesen', 2000, 50, (i) => api('GET', `/issues/${(i % ISSUES) + 1}`))
-await measure('Issue anlegen', 1000, 20, (i) =>
-  api('POST', `/projects/${projectId}/issues`, { title: `Neu ${i}` }),
+await measure('Read board (warm cache)', 2000, 50, () => api('GET', `/projects/${projectId}/board`))
+await measure('Read issue details', 2000, 50, (i) => api('GET', `/issues/${(i % ISSUES) + 1}`))
+await measure('Create issue', 1000, 20, (i) =>
+  api('POST', `/projects/${projectId}/issues`, { title: `New ${i}` }),
 )
-await measure('Kommentar schreiben', 2000, 20, (i) =>
-  api('POST', `/issues/${(i % ISSUES) + 1}/comments`, { body: 'Kommentar' }),
+await measure('Write comment', 2000, 20, (i) =>
+  api('POST', `/issues/${(i % ISSUES) + 1}/comments`, { body: 'Comment' }),
 )
-await measure('Board lesen bei Schreiblast', 500, 10, async (i) => {
+await measure('Read board under write load', 500, 10, async (i) => {
   await api('PATCH', `/issues/${(i % ISSUES) + 1}`, { priority: i % 4 })
   await api('GET', `/projects/${projectId}/board`)
 })
@@ -102,9 +102,7 @@ const abort = new AbortController()
 for (let i = 0; i < 100; i++) listen(projectId, counter, abort.signal)
 
 t = performance.now()
-await measure('Issue auf "To Do" schieben', BATCH, 20, (i) =>
-  api('PATCH', `/issues/${i + 1}`, { status: 'todo' }),
-)
+await measure('Move issue to "To Do"', BATCH, 20, (i) => api('PATCH', `/issues/${i + 1}`, { status: 'todo' }))
 
 let peakRunning = 0
 let slowestPoll = 0
@@ -123,8 +121,8 @@ const seconds = (performance.now() - t) / 1000
 abort.abort()
 
 console.log(
-  `\n${BATCH} Issues von Agenten abgearbeitet in ${seconds.toFixed(1)} s (${(BATCH / seconds).toFixed(1)} Läufe/s)`,
+  `\n${BATCH} issues worked off by agents in ${seconds.toFixed(1)} s (${(BATCH / seconds).toFixed(1)} runs/s)`,
 )
-console.log(`Gleichzeitig laufende Agenten in der Spitze: ${peakRunning}`)
-console.log(`Langsamster Board-Abruf währenddessen: ${slowestPoll.toFixed(1)} ms`)
-console.log(`100 SSE-Clients haben zusammen ${(counter.bytes / 1024 / 1024).toFixed(1)} MB empfangen`)
+console.log(`Peak of agents running at once: ${peakRunning}`)
+console.log(`Slowest board fetch meanwhile: ${slowestPoll.toFixed(1)} ms`)
+console.log(`100 SSE clients received ${(counter.bytes / 1024 / 1024).toFixed(1)} MB in total`)

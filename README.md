@@ -1,70 +1,75 @@
 # AgentDeck
 
-Agenten-Teams auf einem gemeinsamen Board. Projekte statt Organisationen, Agenten über Claude Code,
-Codex und opencode, Usage-Routing pro Projekt und ein konfigurierbarer Watchdog.
+A self-hosted board for teams of AI coding agents. You create a project, give it agents that run
+through Claude Code, Codex or opencode, and file issues. The agents pick them up, work in their own
+git checkout, hand work to reviewers and land the result, while you watch every run live.
 
-## Lokal starten
+AgentDeck is small on purpose: one Node process, one SQLite file, no external services.
+
+## Features
+
+- **Projects instead of organisations.** Each project has its own repository, agents, board and
+  settings.
+- **Agents through the CLIs you already use.** Claude Code, Codex CLI and opencode run as
+  subprocesses; Deepseek runs through a built-in agent loop against its API. Per provider you choose
+  subscription or API key, and Claude and Codex can be logged in from the web interface.
+- **One branch per issue.** Agents work in git worktrees, either one per issue or one fixed checkout
+  per agent so build caches survive.
+- **Reviews and landing.** Issues can go through a chain of reviewers. Finished work is merged
+  locally or opened as a pull request, with checks and protected paths.
+- **Routines.** Recurring issues at a set time, e.g. a daily report.
+- **Watchdog and autonomy.** Stuck issues are handed to a deputy agent or parked in the backlog, so
+  nothing waits forever. Run budgets cap what a single run may spend.
+- **Live run log.** Follow what an agent is doing while it works.
+- **Usage and dashboard.** Tokens per agent (new and cached), quotas over time, what got done.
+- **Built-in MCP connections.** GitHub, PixelLab, ElevenLabs, Recraft and Meshy, assigned per agent.
+- **ADHD mode.** Per project, agents answer with one result line and at most three bullets.
+- **Owner mails.** When an issue waits for a human, AgentDeck can send a mail through AgentMail.
+- **Skill for Claude Code.** Describe a project in one sentence and let Claude set it up in
+  AgentDeck.
+- **Paperclip import.** Move an existing Paperclip company over, with issue numbers and history.
+
+## Quick start
+
+Requires Node.js 24 or newer.
 
 ```
 npm install
-npm start            # baut die UI und startet auf http://localhost:8790
-npm run dev:mock     # wie oben auf Port 8799, mit Mock-Agent statt echter CLIs
+npm start            # builds the UI and serves it on http://localhost:8790
+npm run dev:mock     # same on port 8799, with a mock agent instead of real CLIs
 ```
 
-Während der UI-Entwicklung: `npm run server` und in einem zweiten Terminal `npm run dev`.
+While working on the UI, run `npm run server` and `npm run dev` in a second terminal.
 
-## Aufbau
-
-| Pfad                  | Inhalt                                                         |
-| --------------------- | -------------------------------------------------------------- |
-| `server/db.ts`        | SQLite-Schema und Zugriff (WAL, großer Page-Cache)             |
-| `server/core.ts`      | Einstellungen, Board-Cache, Events, Usage-Berechnung, Routing  |
-| `server/adapters.ts`  | Start und Auswertung der Agenten-CLIs                          |
-| `server/engine.ts`    | Scheduler, Übergabe zwischen Agenten, Watchdog                 |
-| `server/auth.ts`      | Abo oder API-Key pro Anbieter, Login über die Oberfläche       |
-| `server/apiAgent.ts`  | Eigener Agent für Anbieter mit reiner Chat-API (Deepseek)      |
-| `server/mcp.ts`       | Eingebaute MCP-Verbindungen                                    |
-| `server/blueprint.ts` | Projekt aus einer JSON-Beschreibung anlegen                    |
-| `server/main.ts`      | HTTP-API, Live-Events (SSE), Auslieferung der UI               |
-| `web/src`             | Oberfläche (SolidJS)                                           |
-| `skill/agentdeck`     | Skill und CLI, mit denen eine KI Projekte in AgentDeck aufbaut |
-
-## Umgebungsvariablen
-
-| Variable                | Standard        | Bedeutung                                                      |
-| ----------------------- | --------------- | -------------------------------------------------------------- |
-| `PORT`, `HOST`          | 8790, 127.0.0.1 | Adresse des Servers                                            |
-| `AGENTDECK_DATA`        | `./data`        | Datenbank, Worktrees, Arbeitsordner                            |
-| `AGENTDECK_TOKEN`       | leer            | Wenn gesetzt, verlangt die API `Authorization: Bearer …`       |
-| `AGENTDECK_TRUST_PROXY` | aus             | `1`: Anfragen mit `Remote-User`-Header (Authelia) sind erlaubt |
-| `AGENTDECK_CACHE_MB`    | 256             | SQLite-Page-Cache im RAM                                       |
-| `AGENTDECK_MOCK`        | aus             | `1`: zusätzlicher Anbieter „Mock“ zum Testen ohne Verbrauch    |
-
-## Mit Docker auf einem Server
+## Running with Docker
 
 ```
 echo "AGENTDECK_TOKEN=$(openssl rand -hex 32)" > .env
 docker compose up -d --build
 
-# einmalig in jedem CLI anmelden, die Logins liegen im Volume "home"
+# log in to each CLI once; the logins are kept in the "home" volume
 docker compose exec agentdeck claude
 docker compose exec agentdeck codex login
 docker compose exec agentdeck opencode auth login
 ```
 
-Repos, an denen Agenten arbeiten sollen, liegen unter `/srv/agentdeck/repos` und heißen im Container
-`/repos/<name>`. Diesen Pfad trägst du im Projekt ein.
+Repositories the agents should work on go to `/srv/agentdeck/repos` on the host and appear as
+`/repos/<name>` in the container. That path is what you enter in the project.
 
-Im Image sind Git, Node, Python 3 mit venv, uv und ein C-Compiler enthalten. Agenten dürfen im
-Container per `sudo apt-get install` nachinstallieren; solche Pakete halten bis zum nächsten
-Neuaufbau des Containers. Was dauerhaft gebraucht wird, gehört ins Dockerfile. Mit uv installierte
-Python-Versionen und Pakete liegen im Volume `home` und bleiben erhalten.
+The image contains Git, Node, Python 3 with venv, uv, a C compiler and a virtual display with
+software OpenGL for agents that render or screenshot what they build. Agents may install more with
+`sudo apt-get install` inside the container; those packages last until the container is rebuilt, so
+anything needed permanently belongs in the Dockerfile. Python versions and packages installed with
+uv live in the `home` volume and survive.
 
-nginx braucht für die Live-Events ungepufferte Antworten:
+### Behind a reverse proxy
+
+The compose file binds the port to 127.0.0.1. Put a reverse proxy with authentication in front
+(e.g. nginx with Authelia or oauth2-proxy). Live events need unbuffered responses:
 
 ```
 location / {
-    # … Anmeldung davor, z. B. Authelia oder oauth2-proxy …
+    # ... your authentication ...
     proxy_pass http://127.0.0.1:8790;
     proxy_set_header Remote-User $user;
 }
@@ -76,50 +81,79 @@ location /api/events {
 }
 ```
 
-`AGENTDECK_TRUST_PROXY=1` ist nur sicher, solange der Port ausschließlich über nginx erreichbar ist
-(im Compose-File ist er an 127.0.0.1 gebunden) und nginx den Header `Remote-User` selbst setzt.
+`AGENTDECK_TRUST_PROXY=1` lets requests with a `Remote-User` header in without a token. It is only
+safe while the port is reachable through the proxy alone and the proxy sets that header itself.
 
-## Zugänge
+## Configuration
 
-Unter „Anbieter und Zugänge“ wählst du pro Anbieter Abo oder API-Key. Claude und Codex lassen sich
-dort direkt anmelden: Das Tool startet den Login des CLI und zeigt Link und Code an. Deepseek läuft
-über einen eigenen kleinen Agenten direkt gegen die API. Im selben Dialog hinterlegst du die Keys
-für die MCP-Verbindungen (GitHub, PixelLab, ElevenLabs, Recraft, Meshy) und weist sie danach
-einzelnen Agenten zu.
+| Variable                | Default         | Meaning                                                    |
+| ----------------------- | --------------- | ---------------------------------------------------------- |
+| `PORT`, `HOST`          | 8790, 127.0.0.1 | Server address                                             |
+| `AGENTDECK_DATA`        | `./data`        | Database, worktrees, working folders                       |
+| `AGENTDECK_TOKEN`       | empty           | If set, the API requires `Authorization: Bearer …`         |
+| `AGENTDECK_SECRET`      | empty           | Key for stored API keys; falls back to `data/secret.key`   |
+| `AGENTDECK_TRUST_PROXY` | off             | `1`: trust the `Remote-User` header from a reverse proxy   |
+| `AGENTDECK_CACHE_MB`    | 256             | SQLite page cache in RAM                                   |
+| `AGENTDECK_MOCK`        | off             | `1`: adds a "Mock" provider for testing without real usage |
 
-API-Keys liegen verschlüsselt in der Datenbank. Der Schlüssel dazu kommt aus `AGENTDECK_SECRET`
-oder, wenn die Variable fehlt, aus `secret.key` im Datenordner.
+## Providers and access
 
-## Skill installieren
+Under "Providers and access" you pick subscription or API key per provider. For Claude and Codex
+AgentDeck can start the CLI's login and show you the link and code. The same dialog holds the keys
+for the MCP connections, which you then assign to individual agents.
+
+API keys are stored encrypted in the database.
+
+## Claude Code skill
 
 ```
 cp -r skill/agentdeck ~/.claude/skills/
-export AGENTDECK_URL=https://deine-domain   AGENTDECK_TOKEN=…
+export AGENTDECK_URL=https://your-domain   AGENTDECK_TOKEN=…
 ```
 
-Danach genügt in Claude Code ein Satz wie „Bau mir in AgentDeck ein Projekt für …“.
+Then a sentence like "Set up a project in AgentDeck for …" in Claude Code is enough.
 
-## Aus Paperclip übernehmen
+## Importing from Paperclip
 
-`scripts/import-paperclip.mjs` kopiert eine Paperclip-Company in ein neues AgentDeck-Projekt:
-Agenten, Issues mit ihren Nummern, Kommentare, Blocker, Review-Stufen und aktive Routinen.
-Paperclip wird nur gelesen. Mit `--dry` landet alles in `import-preview.json`, ohne etwas zu senden.
+`scripts/import-paperclip.mjs` copies one Paperclip company into a new AgentDeck project: agents,
+issues with their numbers, comments, blockers, review stages and active routines. Paperclip is only
+read. With `--dry` everything goes to `import-preview.json` and nothing is sent.
 
 ```
-AGENTDECK_TOKEN=… node scripts/import-paperclip.mjs --paperclip http://127.0.0.1:3101   --auth /path/auth.json --company <company id> --key ABC --repo /repos/<name>
+AGENTDECK_TOKEN=… node scripts/import-paperclip.mjs --paperclip http://127.0.0.1:3101 \
+  --auth /path/auth.json --company <company id> --key ABC --repo /repos/<name>
 ```
 
-## Lasttest
+## Project layout
+
+| Path                  | Contents                                                      |
+| --------------------- | ------------------------------------------------------------- |
+| `server/db.ts`        | SQLite schema and access (WAL, large page cache)              |
+| `server/core.ts`      | Settings, board cache, events, usage, routing                 |
+| `server/adapters.ts`  | Starting the agent CLIs and reading their output              |
+| `server/engine.ts`    | Scheduler, hand-over between agents, watchdog                 |
+| `server/landing.ts`   | Merging finished work or opening pull requests                |
+| `server/auth.ts`      | Subscription or API key per provider, login from the UI       |
+| `server/apiAgent.ts`  | Built-in agent for providers with a plain chat API (Deepseek) |
+| `server/mcp.ts`       | Built-in MCP connections                                      |
+| `server/blueprint.ts` | Creating a project from a JSON description                    |
+| `server/main.ts`      | HTTP API, live events (SSE), serving the UI                   |
+| `web/src`             | Web interface (SolidJS)                                       |
+| `skill/agentdeck`     | Skill and CLI that let an AI build projects in AgentDeck      |
+
+Stack: Node 24 (runs TypeScript directly, `node:sqlite`), Hono, SolidJS, Vite, server-sent events.
+
+## Load test
 
 ```
 AGENTDECK_MOCK=1 AGENTDECK_MOCK_MS=300 AGENTDECK_DATA=./data-load PORT=8796 node server/main.ts
 node scripts/loadtest.mjs http://localhost:8796 5000 40
 ```
 
-Legt 5000 Issues an, misst Lese- und Schreibzugriffe und lässt 40 Mock-Agenten parallel 600 Issues
-abarbeiten, während 100 Clients die Live-Events mitlesen. Die Zeiten für „Board lesen“ enthalten
-das Entpacken und Parsen im Testclient; der Server selbst liefert das Board aus dem RAM.
+Creates 5000 issues, measures reads and writes, and lets 40 mock agents work through 600 issues
+while 100 clients follow the live events. The "read board" times include unpacking and parsing in
+the test client; the server itself answers from RAM.
 
-## Lizenz
+## License
 
-MIT, siehe [LICENSE](LICENSE). Jede und jeder darf AgentDeck frei nutzen, ändern und weitergeben.
+MIT, see [LICENSE](LICENSE). Anyone may use, change and share AgentDeck as they like.

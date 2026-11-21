@@ -133,7 +133,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
       issue.id,
       'System',
       'system',
-      `Routing: ${preferred} liegt unter der Schwelle, dieser Lauf nutzt ${PROVIDERS[pick.provider].label}.`,
+      `Routing: ${preferred} is below its threshold, this run uses ${PROVIDERS[pick.provider].label}.`,
     )
   }
 
@@ -169,7 +169,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
   })
     .then(async (workdir) => {
       l.workdir = workdir
-      if (l.stop) return finish(l, agent, failed('gestoppt'))
+      if (l.stop) return finish(l, agent, failed('stopped'))
       try {
         l.handle = startRun({
           provider: pick.provider,
@@ -210,12 +210,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
     .catch((e) => {
       // Without a working directory a retry would fail the same way, so a human has to look.
       l.stop = { to: 'blocked' }
-      addComment(
-        issue.id,
-        'System',
-        'system',
-        `Arbeitsverzeichnis konnte nicht vorbereitet werden: ${e.message}`,
-      )
+      addComment(issue.id, 'System', 'system', `Could not prepare the working directory: ${e.message}`)
       return finish(l, agent, failed(e.message))
     })
     .catch((e) => console.error('run', e))
@@ -256,7 +251,7 @@ async function finish(l: Live, agent: any, res: RunResult) {
   const p = getProject(l.projectId)
   const issue = getIssue(l.issueId)
   if (p && l.workdir) await releaseWorkdir(p, l.workdir)
-  if (!p || !issue) return void endRun(l, 'failed', res, 'Issue gelöscht')
+  if (!p || !issue) return void endRun(l, 'failed', res, 'Issue deleted')
 
   if (l.stop || !res.ok) finishFailed(l, p, issue, agent, res)
   else if (l.kind === 'review') await finishReview(l, p, issue, agent, res)
@@ -285,7 +280,7 @@ function handToDeputy(issue: any, deputy: any, reason: string) {
     issue.id,
     'System',
     'system',
-    `An ${deputy.name} zur Entscheidung: ${reason}\n\nLies, warum es hängt, und entscheide, wie es weitergeht.`,
+    `Handed to ${deputy.name} to decide: ${reason}\n\nRead why it is stuck and decide how it goes on.`,
   )
   patchIssue(issue.id, {
     status: 'todo',
@@ -323,15 +318,10 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
 
   if (issue.status === 'review') {
     if (deputy && deputy.id !== issue.maker_id) {
-      addComment(issue.id, 'System', 'system', `Zur Prüfung an ${deputy.name}.`)
+      addComment(issue.id, 'System', 'system', `Sent to ${deputy.name} for review.`)
       return patchIssue(issue.id, { reviewers: [deputy.id], review_index: 0, assignee_id: deputy.id })
     }
-    addComment(
-      issue.id,
-      'System',
-      'system',
-      'Kein weiterer Prüfer vorhanden, die Arbeit gilt als abgenommen.',
-    )
+    addComment(issue.id, 'System', 'system', 'No other reviewer available, the work counts as approved.')
     patchIssue(issue.id, { status: 'done' })
     return landByHand(issue.id)
   }
@@ -339,7 +329,7 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
   const deputyGaveUp = !deputy || issue.assignee_id === deputy.id || issue.escalated >= MAX_DEPUTY_DECISIONS
   if (!deputyGaveUp) return handToDeputy(issue, deputy, reason)
 
-  const note = `Geparkt: ${reason}\n\nDas Issue liegt im Backlog und hält nichts auf. Es kommt wieder dran, sobald die offene Arbeit erledigt ist.`
+  const note = `Parked: ${reason}\n\nThe issue waits in the backlog and holds nothing up. It comes up again once the open work is done.`
   addComment(issue.id, 'Watchdog', 'watchdog', note)
   patchIssue(issue.id, {
     status: 'backlog',
@@ -365,9 +355,7 @@ function sweepWaitingIssues() {
     for (const { id } of waiting) {
       const issue = getIssue(id)
       const reason =
-        issue.status === 'review'
-          ? 'Wartete auf eine Prüfung durch einen Menschen.'
-          : 'Stand auf „Wartet auf Mensch“.'
+        issue.status === 'review' ? 'Was waiting for a review by a human.' : 'Was set to "Waits for a human".'
       settleWithoutHuman(p, issue, reason)
     }
     if (waiting.length) kick()
@@ -398,12 +386,7 @@ function applyLanding(p: any, issueId: number, outcome: Outcome) {
       patch.status = 'blocked'
       patch.review_rounds = 0
       needsOwner = true
-      addComment(
-        issueId,
-        'Watchdog',
-        'watchdog',
-        'Die Landung ist mehrfach gescheitert. Bitte entscheiden, wie es weitergeht.',
-      )
+      addComment(issueId, 'Watchdog', 'watchdog', 'Landing failed several times. Please decide how to go on.')
     }
   }
 
@@ -435,12 +418,7 @@ export function landByHand(issueId: number) {
 function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
   endRun(l, l.stop ? 'stopped' : 'failed', res, res.error ?? '')
   if (!l.stop) {
-    addComment(
-      issue.id,
-      'System',
-      'system',
-      `Lauf von ${agent.name} fehlgeschlagen: ${res.error ?? 'unbekannter Fehler'}`,
-    )
+    addComment(issue.id, 'System', 'system', `Run of ${agent.name} failed: ${res.error ?? 'unknown error'}`)
   }
 
   // Back into the queue it came from: a failed review stays a review.
@@ -456,14 +434,14 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
         issue.id,
         'Watchdog',
         'watchdog',
-        `${streak} Läufe in Folge ohne Ergebnis. Issue blockiert, bitte prüfen.`,
+        `${streak} runs in a row without a result. Issue blocked, please take a look.`,
       )
     } else {
       retryAfter.set(issue.id, Date.now() + 15_000 * 2 ** streak)
     }
   }
   moveIssue(issue.id, { status: to })
-  if (to === 'blocked') needsHuman(p, issue.id, 'Mehrere Läufe sind ohne Ergebnis geblieben.')
+  if (to === 'blocked') needsHuman(p, issue.id, 'Several runs ended without a result.')
 }
 
 /** Position of the next reviewer who can actually review: enabled, and not the maker. */
@@ -483,7 +461,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
   const patch: Record<string, any> = { handoff: tag(res.text, 'handoff') ?? '' }
   let status = ['done', 'review', 'blocked'].includes(answer) ? answer : 'review'
 
-  addComment(issue.id, agent.name, 'agent', summary || '(keine Zusammenfassung)')
+  addComment(issue.id, agent.name, 'agent', summary || '(no summary)')
 
   if (answer.startsWith('handoff:')) {
     const name = answer.slice('handoff:'.length).trim()
@@ -491,7 +469,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     if (target) {
       status = 'todo'
       patch.assignee_id = target.id
-      addComment(issue.id, 'System', 'system', `Übergabe von ${agent.name} an ${target.name}.`)
+      addComment(issue.id, 'System', 'system', `Handed over from ${agent.name} to ${target.name}.`)
     }
   }
 
@@ -507,7 +485,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
       status = 'review'
       patch.review_index = first
       patch.assignee_id = reviewer.id
-      addComment(issue.id, 'System', 'system', `Zur Prüfung an ${reviewer.name}.`)
+      addComment(issue.id, 'System', 'system', `Sent to ${reviewer.name} for review.`)
     }
   }
 
@@ -522,9 +500,9 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
   }
 
   patchIssue(issue.id, { ...patch, status })
-  if (status === 'blocked') needsHuman(p, issue.id, `${agent.name} kommt nicht weiter: ${summary}`)
+  if (status === 'blocked') needsHuman(p, issue.id, `${agent.name} is stuck: ${summary}`)
   if (status === 'review' && patch.review_index === undefined) {
-    needsHuman(p, issue.id, `${agent.name} ist fertig und bittet um deine Prüfung: ${summary}`)
+    needsHuman(p, issue.id, `${agent.name} is done and asks for your review: ${summary}`)
   }
 }
 
@@ -533,7 +511,7 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
   const { enabled, llm } = p.settings.watchdog
   if (!enabled || !llm.enabled || !PROVIDERS[llm.provider]) return false
 
-  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text: 'Watchdog prüft das Ergebnis…' })
+  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text: 'Watchdog is checking the result…' })
   const started = Date.now()
   const verdict = await oneShot(
     llm.provider,
@@ -555,7 +533,7 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
   )
 
   if (!verdict.ok) {
-    addComment(issue.id, 'Watchdog', 'system', `Prüfung nicht möglich: ${verdict.error}`)
+    addComment(issue.id, 'Watchdog', 'system', `Could not check: ${verdict.error}`)
     return false
   }
   if (!/^\s*FAIL/i.test(verdict.text)) return false
@@ -570,22 +548,17 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
   const verdict = (tag(res.text, 'status') ?? '').toLowerCase()
   const backToMaker = { review_index: -1, assignee_id: maker?.id ?? null }
 
-  addComment(issue.id, reviewer.name, 'review', summary || '(keine Begründung)')
+  addComment(issue.id, reviewer.name, 'review', summary || '(no reason given)')
   endRun(l, 'done', res)
 
   if (verdict === 'approve') {
     const next = nextReviewer(issue, issue.review_index + 1, issue.maker_id, agents)
     if (next >= 0) {
       const following = agents.find((a) => a.id === issue.reviewers[next])
-      addComment(
-        issue.id,
-        'System',
-        'system',
-        `${reviewer.name} hat freigegeben. Weiter an ${following.name}.`,
-      )
+      addComment(issue.id, 'System', 'system', `${reviewer.name} approved. On to ${following.name}.`)
       return moveIssue(issue.id, { status: 'review', review_index: next, assignee_id: following.id })
     }
-    addComment(issue.id, 'System', 'system', `${reviewer.name} hat freigegeben.`)
+    addComment(issue.id, 'System', 'system', `${reviewer.name} approved.`)
     return landAndClose(p, issue)
   }
 
@@ -596,17 +569,21 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
         issue.id,
         'Watchdog',
         'watchdog',
-        `${rounds} Änderungsrunden ohne Freigabe. Bitte entscheiden, wie es weitergeht.`,
+        `${rounds} rounds of changes without approval. Please decide how to go on.`,
       )
       moveIssue(issue.id, { status: 'blocked', review_rounds: 0, ...backToMaker })
-      return needsHuman(p, issue.id, `${rounds} Änderungsrunden ohne Freigabe. Letzter Einwand: ${summary}`)
+      return needsHuman(
+        p,
+        issue.id,
+        `${rounds} rounds of changes without approval. Last objection: ${summary}`,
+      )
     }
     return moveIssue(issue.id, { status: 'todo', review_rounds: rounds, ...backToMaker })
   }
 
   // "blocked", or no verdict at all: a human decides, and the issue stays with this reviewer.
   moveIssue(issue.id, { status: 'blocked' })
-  needsHuman(p, issue.id, `${reviewer.name} braucht deine Entscheidung: ${summary}`)
+  needsHuman(p, issue.id, `${reviewer.name} needs your decision: ${summary}`)
 }
 
 export function stopRun(runId: number, reason: string, to: string, author = 'Watchdog') {
@@ -683,7 +660,7 @@ function scheduleProject(p: any) {
 
   setNotice(
     p.id,
-    exhausted ? 'Usage-Limit erreicht: kein Provider liegt über seiner Schwelle. Agenten pausieren.' : '',
+    exhausted ? 'Usage limit reached: no provider is above its threshold. Agents are paused.' : '',
   )
 }
 
@@ -729,13 +706,13 @@ function watchdog() {
 
       const message =
         rule.type === 'stall'
-          ? `Keine Aktivität seit ${rule.value} Minuten.`
-          : `Lauf dauert länger als ${rule.value} Minuten.`
+          ? `No activity for ${rule.value} minutes.`
+          : `Run is taking longer than ${rule.value} minutes.`
       if (rule.action === 'comment') {
         if (!l.warned.has(rule.type)) addComment(l.issueId, 'Watchdog', 'watchdog', message)
         l.warned.add(rule.type)
       } else {
-        stopRun(l.runId, `${message} Lauf gestoppt.`, rule.action === 'block' ? 'blocked' : 'todo')
+        stopRun(l.runId, `${message} Run stopped.`, rule.action === 'block' ? 'blocked' : 'todo')
         break
       }
     }

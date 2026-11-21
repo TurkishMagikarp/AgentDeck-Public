@@ -21,7 +21,7 @@ export const BLUEPRINT_GUIDE = `A blueprint is one JSON object that sets up (or 
     "name": "Webshop",
     "description": "One paragraph of context every agent receives.",
     "repo_path": "",                // absolute path of a git repo on the server; "" = managed workspace
-    "paused": false,                // true: nothing starts until a human presses "Fortsetzen"
+    "paused": false,                // true: nothing starts until a human presses "Resume"
     "first_issue_number": 1,        // optional, to continue the numbering of an earlier tracker
     "settings": { "maxConcurrent": 3 }   // optional, see "settings"
   },
@@ -93,10 +93,10 @@ function transaction<T>(work: () => T): T {
 
 export function applyBlueprint(bp: any) {
   const pj = bp?.project
-  if (!pj || typeof pj !== 'object') throw new Error('blueprint.project fehlt')
+  if (!pj || typeof pj !== 'object') throw new Error('blueprint.project is missing')
   const key = str(pj.key, 8).toUpperCase()
   if (!/^[A-Z][A-Z0-9]{1,7}$/.test(key))
-    throw new Error('project.key: 2-8 Zeichen, A-Z/0-9, beginnt mit Buchstabe')
+    throw new Error('project.key: 2-8 characters, A-Z/0-9, starting with a letter')
 
   return transaction(() => {
     let p = get('SELECT * FROM projects WHERE key=?', key)
@@ -156,9 +156,9 @@ export function applyBlueprint(bp: any) {
     for (const a of bp.agents ?? []) {
       const name = str(a.name, 80)
       if (!name) continue
-      if (!PROVIDERS[a.provider]) throw new Error(`Agent ${name}: unbekannter Provider "${a.provider}"`)
+      if (!PROVIDERS[a.provider]) throw new Error(`Agent ${name}: unknown provider "${a.provider}"`)
       const model = str(a.model, 80)
-      if (!MODEL_RE.test(model)) throw new Error(`Agent ${name}: ungültiger Modellname`)
+      if (!MODEL_RE.test(model)) throw new Error(`Agent ${name}: invalid model name`)
       const skills = JSON.stringify(
         (a.skills ?? [])
           .map(
@@ -252,6 +252,6 @@ export function applyBlueprint(bp: any) {
 export function extractJson(text: string) {
   const a = text.indexOf('{')
   const b = text.lastIndexOf('}')
-  if (a < 0 || b <= a) throw new Error('Die KI hat kein JSON geliefert')
+  if (a < 0 || b <= a) throw new Error('The AI returned no JSON')
   return JSON.parse(text.slice(a, b + 1))
 }

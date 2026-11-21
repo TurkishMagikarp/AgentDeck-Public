@@ -26,33 +26,33 @@ type LoginState = {
 
 type McpConnection = { id: string; label: string; description: string; keyLabel: string; hasKey: boolean }
 
-const MODE_LABELS: Record<AccessMode, string> = { subscription: 'Abo', apikey: 'API-Key' }
+const MODE_LABELS: Record<AccessMode, string> = { subscription: 'Subscription', apikey: 'API key' }
 
 export function Providers(props: { onClose: () => void }) {
   const [providers, { refetch }] = createResource(() => api.get<ProviderAccess[]>('/providers'))
   const [connections, { refetch: reloadConnections }] = createResource(() => api.get<McpConnection[]>('/mcp'))
 
   return (
-    <Modal title="Anbieter und Zugänge" onClose={props.onClose} wide>
+    <Modal title="Providers and access" onClose={props.onClose} wide>
       <p class="muted intro">
-        Gilt für alle Projekte. Im Abo-Modus nutzt AgentDeck den Login des jeweiligen CLI auf diesem Server,
-        im API-Key-Modus wird pro Token abgerechnet.
+        Applies to all projects. In subscription mode AgentDeck uses each CLI's login on this server. In API
+        key mode you pay per token.
       </p>
       <div class="provider-list">
         <For each={providers()}>{(provider) => <ProviderRow provider={provider} onChange={refetch} />}</For>
       </div>
 
-      <h3 class="modal-section">Mail an dich</h3>
+      <h3 class="modal-section">Email to you</h3>
       <p class="muted intro">
-        Wartet ein Issue auf einen Menschen, schickt AgentDeck eine Mail über AgentMail. Pro Projekt
-        abschaltbar.
+        When an issue waits for a human, AgentDeck sends an email through AgentMail. You can turn this off per
+        project.
       </p>
       <MailSettings />
 
-      <h3 class="modal-section">MCP-Verbindungen</h3>
+      <h3 class="modal-section">MCP connections</h3>
       <p class="muted intro">
-        Mit hinterlegtem Key kannst du die Verbindung einzelnen Agenten zuweisen. Sie funktioniert mit Claude
-        Code, Codex und opencode.
+        Once a key is stored, you can assign the connection to individual agents. It works with Claude Code,
+        Codex and opencode.
       </p>
       <div class="provider-list">
         <For each={connections()}>
@@ -93,11 +93,11 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
         <strong>{provider().label}</strong>
         <Show when={provider().mode === 'apikey'}>
           <span class="badge" classList={{ bad: !provider().hasKey }}>
-            {provider().hasKey ? 'Key hinterlegt' : 'Key fehlt'}
+            {provider().hasKey ? 'Key stored' : 'Key missing'}
           </span>
         </Show>
         <span class="spacer" />
-        <div class="segmented" role="group" aria-label="Zugangsart">
+        <div class="segmented" role="group" aria-label="Access type">
           <For each={provider().modes}>
             {(mode) => (
               <button classList={{ active: provider().mode === mode }} onClick={() => save(mode)}>
@@ -121,19 +121,17 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
               type="password"
               autocomplete="off"
               placeholder={
-                provider().hasKey
-                  ? 'Key ist hinterlegt. Neuen Key eingeben, um ihn zu ersetzen'
-                  : 'API-Key einfügen'
+                provider().hasKey ? 'Key is stored. Enter a new key to replace it' : 'Paste API key'
               }
               value={key()}
               onInput={(e) => setKey(e.currentTarget.value)}
             />
             <button class="primary" type="submit" disabled={!key().trim()}>
-              Speichern
+              Save
             </button>
             <Show when={provider().hasKey}>
               <button type="button" class="ghost danger" onClick={() => save('apikey', '')}>
-                Entfernen
+                Remove
               </button>
             </Show>
           </form>
@@ -153,18 +151,18 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
                 autocomplete="off"
                 placeholder={
                   provider().hasSubscriptionToken
-                    ? 'Abo-Token ist hinterlegt. Neues eingeben, um es zu ersetzen'
-                    : 'Für Server: langlebiges Abo-Token aus „claude setup-token“'
+                    ? 'Subscription token is stored. Enter a new one to replace it'
+                    : 'For servers: long-lived subscription token from "claude setup-token"'
                 }
                 value={key()}
                 onInput={(e) => setKey(e.currentTarget.value)}
               />
               <button class="primary" type="submit" disabled={!key().trim()}>
-                Speichern
+                Save
               </button>
               <Show when={provider().hasSubscriptionToken}>
                 <button type="button" class="ghost danger" onClick={() => saveSubscriptionToken('')}>
-                  Entfernen
+                  Remove
                 </button>
               </Show>
             </form>
@@ -204,11 +202,11 @@ function MailSettings() {
     <section class="provider">
       <div class="row">
         <label class="field">
-          <span>AgentMail-Postfach (Absender)</span>
+          <span>AgentMail inbox (sender)</span>
           <input value={mail()?.inbox ?? ''} onChange={(e) => save({ inbox: e.currentTarget.value })} />
         </label>
         <label class="field">
-          <span>Empfänger</span>
+          <span>Recipient</span>
           <input
             type="email"
             value={mail()?.to ?? ''}
@@ -226,19 +224,15 @@ function MailSettings() {
         <input
           type="password"
           autocomplete="off"
-          placeholder={
-            mail()?.hasKey
-              ? 'Key ist hinterlegt. Neuen Key eingeben, um ihn zu ersetzen'
-              : 'AgentMail-API-Key'
-          }
+          placeholder={mail()?.hasKey ? 'Key is stored. Enter a new key to replace it' : 'AgentMail API key'}
           value={key()}
           onInput={(e) => setKey(e.currentTarget.value)}
         />
         <button class="primary" type="submit" disabled={!key().trim()}>
-          Speichern
+          Save
         </button>
         <button type="button" onClick={test} disabled={!mail()?.hasKey}>
-          {sent() ? 'Gesendet' : 'Testmail'}
+          {sent() ? 'Sent' : 'Send test email'}
         </button>
       </form>
     </section>
@@ -265,7 +259,7 @@ function ConnectionRow(props: { connection: McpConnection; onChange: () => void 
         <span class="muted">{props.connection.description}</span>
         <span class="spacer" />
         <span class="badge" classList={{ off: !props.connection.hasKey }}>
-          {props.connection.hasKey ? 'verbunden' : 'aus'}
+          {props.connection.hasKey ? 'connected' : 'off'}
         </span>
       </header>
       <form
@@ -279,19 +273,17 @@ function ConnectionRow(props: { connection: McpConnection; onChange: () => void 
           type="password"
           autocomplete="off"
           placeholder={
-            props.connection.hasKey
-              ? 'Hinterlegt. Neuen Wert eingeben, um ihn zu ersetzen'
-              : props.connection.keyLabel
+            props.connection.hasKey ? 'Stored. Enter a new value to replace it' : props.connection.keyLabel
           }
           value={key()}
           onInput={(e) => setKey(e.currentTarget.value)}
         />
         <button class="primary" type="submit" disabled={!key().trim()}>
-          Speichern
+          Save
         </button>
         <Show when={props.connection.hasKey}>
           <button type="button" class="ghost danger" onClick={() => save('')}>
-            Entfernen
+            Remove
           </button>
         </Show>
       </form>
@@ -314,7 +306,7 @@ function SubscriptionLogin(props: { provider: ProviderAccess }) {
   async function start() {
     // The CLIs drop the current login as soon as a new one starts, even if it is cancelled.
     const replaceWarning =
-      'Die bestehende Anmeldung wird sofort entfernt, auch wenn du den Login abbrichst. Laufende Agenten dieses Anbieters schlagen bis zur neuen Anmeldung fehl. Fortfahren?'
+      'This removes the current login right away, even if you cancel. Running agents on this provider will fail until you log in again. Continue?'
     if (status()?.loggedIn && !confirm(replaceWarning)) return
     try {
       setLogin(await api.post<LoginState>(`${path()}/login`))
@@ -354,13 +346,13 @@ function SubscriptionLogin(props: { provider: ProviderAccess }) {
   return (
     <div class="login">
       <p class="login-status">
-        <Show when={!status.loading} fallback={<span class="muted">Prüfe Login…</span>}>
-          <Switch fallback={<span class="muted login-detail">{status()?.detail || 'Status unbekannt'}</span>}>
+        <Show when={!status.loading} fallback={<span class="muted">Checking login…</span>}>
+          <Switch fallback={<span class="muted login-detail">{status()?.detail || 'Status unknown'}</span>}>
             <Match when={status()?.loggedIn === true}>
-              <span class="ok">Angemeldet</span> <span class="muted">{status()?.detail}</span>
+              <span class="ok">Logged in</span> <span class="muted">{status()?.detail}</span>
             </Match>
             <Match when={status()?.loggedIn === false}>
-              <span class="bad-text">Nicht angemeldet</span>
+              <span class="bad-text">Not logged in</span>
             </Match>
           </Switch>
         </Show>
@@ -370,7 +362,7 @@ function SubscriptionLogin(props: { provider: ProviderAccess }) {
         when={props.provider.canLogin}
         fallback={
           <p class="muted">
-            Login auf dem Server im Terminal: <code>opencode auth login</code>
+            Log in on the server in a terminal: <code>opencode auth login</code>
           </p>
         }
       >
@@ -378,9 +370,9 @@ function SubscriptionLogin(props: { provider: ProviderAccess }) {
           <Match when={login().state === 'waiting'}>
             <ol class="login-steps">
               <li>
-                <Show when={login().url} fallback="Warte auf den Link…">
+                <Show when={login().url} fallback="Waiting for the link…">
                   <a href={login().url} target="_blank" rel="noreferrer">
-                    Anmeldeseite öffnen
+                    Open login page
                   </a>
                 </Show>
               </li>
@@ -388,35 +380,35 @@ function SubscriptionLogin(props: { provider: ProviderAccess }) {
                 when={login().needsCode}
                 fallback={
                   <li>
-                    Dort diesen Code eingeben: <code class="device-code">{login().code || '…'}</code>
+                    Enter this code there: <code class="device-code">{login().code || '…'}</code>
                   </li>
                 }
               >
                 <li>
                   <form class="key-form" onSubmit={sendCode}>
                     <input
-                      placeholder="Code von der Anmeldeseite einfügen"
+                      placeholder="Paste the code from the login page"
                       autocomplete="off"
                       value={pasted()}
                       onInput={(e) => setPasted(e.currentTarget.value)}
                     />
                     <button class="primary" type="submit" disabled={!pasted().trim()}>
-                      Bestätigen
+                      Confirm
                     </button>
                   </form>
                 </li>
               </Show>
             </ol>
             <button class="ghost" onClick={cancel}>
-              Abbrechen
+              Cancel
             </button>
           </Match>
           <Match when={login().state === 'failed'}>
-            <p class="bad-text">Login fehlgeschlagen. {login().message}</p>
-            <button onClick={start}>Erneut versuchen</button>
+            <p class="bad-text">Login failed. {login().message}</p>
+            <button onClick={start}>Try again</button>
           </Match>
           <Match when={true}>
-            <button onClick={start}>{status()?.loggedIn ? 'Neu anmelden' : 'Anmelden'}</button>
+            <button onClick={start}>{status()?.loggedIn ? 'Log in again' : 'Log in'}</button>
           </Match>
         </Switch>
       </Show>

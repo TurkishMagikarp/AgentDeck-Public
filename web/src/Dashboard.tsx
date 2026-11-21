@@ -34,10 +34,10 @@ type Stats = {
 }
 
 const RANGES = [
-  [7, '7 Tage'],
-  [14, '14 Tage'],
-  [30, '30 Tage'],
-  [90, '90 Tage'],
+  [7, '7 days'],
+  [14, '14 days'],
+  [30, '30 days'],
+  [90, '90 days'],
 ] as const
 
 // Categorical slots in fixed order. A colour belongs to an agent, not to its rank in a chart:
@@ -90,11 +90,9 @@ export function Dashboard() {
       <div class="page-head">
         <div>
           <h2>Dashboard</h2>
-          <p class="muted">
-            Was fertig wurde, wer wie viel verbraucht hat und wie sich das Kontingent bewegt.
-          </p>
+          <p class="muted">What got done, who used how much, and how the quota is moving.</p>
         </div>
-        <div class="segmented" role="group" aria-label="Zeitraum">
+        <div class="segmented" role="group" aria-label="Time range">
           <For each={RANGES}>
             {([value, label]) => (
               <button classList={{ active: days() === value }} onClick={() => setDays(value)}>
@@ -105,88 +103,88 @@ export function Dashboard() {
         </div>
       </div>
 
-      <Show when={stats()} fallback={<p class="muted">Lade Zahlen…</p>}>
+      <Show when={stats()} fallback={<p class="muted">Loading numbers…</p>}>
         {(data) => (
           <>
             <div class="stat-row">
-              <Stat value={data().totals.doneToday} label="heute fertig" />
-              <Stat value={data().totals.doneWeek} label="in 7 Tagen fertig" />
-              <Stat value={data().totals.open} label="noch offen" />
-              <Stat value={data().totals.doneAll} label="insgesamt fertig" />
-              <Stat value={data().totals.runs} label={`Läufe in ${days()} Tagen`} />
+              <Stat value={data().totals.doneToday} label="Done today" />
+              <Stat value={data().totals.doneWeek} label="Done in 7 days" />
+              <Stat value={data().totals.open} label="Still open" />
+              <Stat value={data().totals.doneAll} label="Done in total" />
+              <Stat value={data().totals.runs} label={`Runs in ${days()} days`} />
               <Stat
                 value={
                   data().totals.runs
-                    ? `${Math.round((100 * data().totals.failedRuns) / data().totals.runs)} %`
+                    ? `${Math.round((100 * data().totals.failedRuns) / data().totals.runs)}%`
                     : '–'
                 }
-                label="davon fehlgeschlagen"
+                label="Of those failed"
               />
-              <Stat value={duration(data().totals.avgRunSeconds)} label="mittlere Laufzeit" />
+              <Stat value={duration(data().totals.avgRunSeconds)} label="Average run time" />
             </div>
 
             <div class="chart-grid">
               <section class="section">
-                <h3>Fertige Issues pro Tag</h3>
-                <Columns days={data().days} values={data().done} color="var(--series-1)" name="fertig" />
+                <h3>Issues done per day</h3>
+                <Columns days={data().days} values={data().done} color="var(--series-1)" name="done" />
               </section>
 
               <section class="section">
-                <h3>Offene Issues am Tagesende</h3>
+                <h3>Open issues at end of day</h3>
                 <Lines
                   days={data().days}
-                  series={[{ name: 'offen', color: 'var(--series-1)', values: data().open }]}
-                  label="Offene Issues am Tagesende"
+                  series={[{ name: 'open', color: 'var(--series-1)', values: data().open }]}
+                  label="Open issues at end of day"
                 />
               </section>
 
               <section class="section">
-                <h3>Neue Tokens pro Agent und Tag</h3>
-                <p class="muted">Ohne den Anteil, der aus dem Cache kam.</p>
+                <h3>New tokens per agent and day</h3>
+                <p class="muted">Without the share that came from the cache.</p>
                 <StackedColumns
                   days={data().days}
                   series={toSeries(data().freshTokens)}
-                  label="Neue Tokens pro Agent und Tag"
+                  label="New tokens per agent and day"
                 />
               </section>
 
               <section class="section">
-                <h3>Läufe pro Agent und Tag</h3>
+                <h3>Runs per agent and day</h3>
                 <StackedColumns
                   days={data().days}
                   series={toSeries(data().runsPerDay)}
-                  label="Läufe pro Agent und Tag"
+                  label="Runs per agent and day"
                 />
               </section>
 
               <section class="section wide">
-                <h3>Restkontingent pro Anbieter</h3>
+                <h3>Remaining quota per provider</h3>
                 <Show
                   when={data().quota.length}
-                  fallback={<p class="muted">Noch keine Messwerte. Sie entstehen mit jedem Lauf.</p>}
+                  fallback={<p class="muted">No data yet. Every run adds a reading.</p>}
                 >
-                  <p class="muted">Stand am Tagesende, in Prozent des strengsten Limits.</p>
+                  <p class="muted">At end of day, as a percentage of the strictest limit.</p>
                   <Lines
                     days={data().days}
                     series={quotaSeries()}
-                    label="Restkontingent pro Anbieter"
+                    label="Remaining quota per provider"
                     max={100}
-                    unit=" %"
+                    unit="%"
                   />
                 </Show>
               </section>
             </div>
 
-            <h3>Agenten im Zeitraum</h3>
+            <h3>Agents in this period</h3>
             <table>
               <thead>
                 <tr>
                   <th>Agent</th>
-                  <th class="num">Läufe</th>
-                  <th class="num">Fehlgeschlagen</th>
-                  <th class="num">Tokens neu</th>
-                  <th class="num">aus dem Cache</th>
-                  <th class="num">mittlere Laufzeit</th>
+                  <th class="num">Runs</th>
+                  <th class="num">Failed</th>
+                  <th class="num">New tokens</th>
+                  <th class="num">From cache</th>
+                  <th class="num">Average run time</th>
                 </tr>
               </thead>
               <tbody>
@@ -195,7 +193,7 @@ export function Dashboard() {
                   fallback={
                     <tr>
                       <td colSpan={6} class="muted">
-                        Noch keine Läufe in diesem Zeitraum.
+                        No runs in this period yet.
                       </td>
                     </tr>
                   }
@@ -225,7 +223,7 @@ export function Dashboard() {
 function Stat(props: { value: number | string; label: string }) {
   return (
     <div class="stat">
-      <strong>{typeof props.value === 'number' ? props.value.toLocaleString('de-DE') : props.value}</strong>
+      <strong>{typeof props.value === 'number' ? props.value.toLocaleString('en-US') : props.value}</strong>
       <span>{props.label}</span>
     </div>
   )

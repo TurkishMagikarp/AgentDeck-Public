@@ -103,7 +103,7 @@ export function defaultSettings(): Settings {
         enabled: false,
         provider: 'anthropic',
         prompt:
-          'Prüfe, ob die Aufgabe vollständig umgesetzt wurde, ob Tests ausgeführt wurden und ob nichts außerhalb des Auftrags geändert wurde.',
+          'Check that the task is fully done, that tests were run and that nothing outside the task was changed.',
         onFail: 'todo',
       },
     },
@@ -337,7 +337,7 @@ export function createIssue(
   },
 ) {
   const p = get('SELECT next_number FROM projects WHERE id=?', pid)
-  if (!p) throw new Error('Projekt nicht gefunden')
+  if (!p) throw new Error('Project not found')
   const now = Date.now()
   run('UPDATE projects SET next_number=next_number+1 WHERE id=?', pid)
   const r = run(

@@ -4,20 +4,20 @@ import type { WatchdogRule } from './types'
 import { Field, Select, Toggle } from './ui'
 
 const RULE_TYPES = [
-  ['stall', 'Keine Aktivität seit (Minuten)'],
-  ['runtime', 'Lauf dauert länger als (Minuten)'],
-  ['attempts', 'Fehlversuche in Folge'],
+  ['stall', 'No activity for (minutes)'],
+  ['runtime', 'Run takes longer than (minutes)'],
+  ['attempts', 'Failed attempts in a row'],
 ] as const
 
 const ACTIONS = [
-  ['comment', 'nur kommentieren'],
-  ['stop', 'Lauf stoppen und neu einplanen'],
-  ['block', 'stoppen und auf Mensch warten'],
+  ['comment', 'Comment only'],
+  ['stop', 'Stop run and reschedule'],
+  ['block', 'Stop and wait for a human'],
 ] as const
 
 const ON_FAIL = [
-  ['todo', 'zurück an den Agenten'],
-  ['blocked', 'auf Mensch warten'],
+  ['todo', 'Back to the agent'],
+  ['blocked', 'Wait for a human'],
 ] as const
 
 export function Watchdog() {
@@ -33,11 +33,11 @@ export function Watchdog() {
         <div>
           <h2>Watchdog</h2>
           <p class="muted">
-            Überwacht laufende Agenten und prüft auf Wunsch jedes Ergebnis, bevor ein Issue weiterwandert.
+            Watches running agents and, if you want, checks every result before an issue moves on.
           </p>
         </div>
         <Toggle
-          label="Aktiv"
+          label="Active"
           checked={watchdog().enabled}
           onChange={(on) => saveSettings((s) => void (s.watchdog.enabled = on))}
         />
@@ -45,17 +45,17 @@ export function Watchdog() {
 
       <section class="section">
         <div class="section-head">
-          <h3>Regeln</h3>
+          <h3>Rules</h3>
           <button
             onClick={() =>
               saveSettings((s) => s.watchdog.rules.push({ type: 'stall', value: 10, action: 'comment' }))
             }
           >
-            Regel hinzufügen
+            Add rule
           </button>
         </div>
         <ul class="rules">
-          <For each={watchdog().rules} fallback={<li class="muted">Keine Regeln.</li>}>
+          <For each={watchdog().rules} fallback={<li class="muted">No rules.</li>}>
             {(rule, index) => (
               <li>
                 <Select
@@ -77,7 +77,7 @@ export function Watchdog() {
                 <button
                   class="ghost danger"
                   onClick={() => saveSettings((s) => s.watchdog.rules.splice(index(), 1))}
-                  aria-label="Regel entfernen"
+                  aria-label="Remove rule"
                 >
                   ✕
                 </button>
@@ -89,9 +89,9 @@ export function Watchdog() {
 
       <section class="section">
         <div class="section-head">
-          <h3>Eigene Prüfung per KI</h3>
+          <h3>Custom AI review</h3>
           <Toggle
-            label="Nach jedem Lauf prüfen"
+            label="Review after every run"
             checked={watchdog().llm.enabled}
             onChange={(on) => saveSettings((s) => void (s.watchdog.llm.enabled = on))}
           />
@@ -99,8 +99,8 @@ export function Watchdog() {
         <Show when={watchdog().llm.enabled}>
           <div class="form">
             <Field
-              label="Was soll geprüft werden?"
-              hint="Der Prüfer liest das Arbeitsverzeichnis nur und antwortet mit PASS oder FAIL."
+              label="What should be checked?"
+              hint="The reviewer only reads the working directory and answers PASS or FAIL."
             >
               <textarea
                 rows="5"
@@ -112,7 +112,7 @@ export function Watchdog() {
               />
             </Field>
             <div class="row">
-              <Field label="Prüfer läuft über">
+              <Field label="Reviewer runs on">
                 <select
                   onChange={(e) => {
                     const provider = e.currentTarget.value
@@ -128,7 +128,7 @@ export function Watchdog() {
                   </For>
                 </select>
               </Field>
-              <Field label="Bei FAIL">
+              <Field label="On FAIL">
                 <Select
                   value={watchdog().llm.onFail}
                   options={ON_FAIL}

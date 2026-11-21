@@ -13,7 +13,7 @@ export const agentApi = new Hono<Env>()
 agentApi.use('*', async (c, next) => {
   const header = c.req.header('authorization') ?? ''
   const identity = runOfToken(header.replace(/^Bearer /, ''))
-  if (!identity) return c.json({ error: 'Dieses Lauf-Token ist nicht (mehr) gültig' }, 401)
+  if (!identity) return c.json({ error: 'This run token is invalid or expired' }, 401)
   c.set('run', identity)
   return next()
 })
@@ -33,7 +33,7 @@ function agentIdsByName(projectId: number, names: unknown): number[] {
   const agents = all('SELECT id, name FROM agents WHERE project_id=?', projectId)
   return wanted.map((name) => {
     const agent = agents.find((candidate) => candidate.name.toLowerCase() === name)
-    if (!agent) throw new Error(`Kein Agent namens "${name}" in diesem Projekt`)
+    if (!agent) throw new Error(`No agent named "${name}" in this project`)
     return agent.id
   })
 }
@@ -54,7 +54,7 @@ agentApi.get('/issues', (c) => {
 
 agentApi.get('/issues/:number', (c) => {
   const issue = issueByNumber(c.get('run').projectId, c.req.param('number'))
-  if (!issue) return c.json({ error: 'Issue nicht gefunden' }, 404)
+  if (!issue) return c.json({ error: 'Issue not found' }, 404)
   const comments = all(
     'SELECT author, kind, body, created_at FROM comments WHERE issue_id=? ORDER BY id',
     issue.id,
@@ -65,9 +65,9 @@ agentApi.get('/issues/:number', (c) => {
 agentApi.post('/issues/:number/comments', async (c) => {
   const identity = c.get('run')
   const issue = issueByNumber(identity.projectId, c.req.param('number'))
-  if (!issue) return c.json({ error: 'Issue nicht gefunden' }, 404)
+  if (!issue) return c.json({ error: 'Issue not found' }, 404)
   const body = text((await c.req.json().catch(() => ({}))).body, 20_000).trim()
-  if (!body) return c.json({ error: 'Kommentar leer' }, 400)
+  if (!body) return c.json({ error: 'Comment is empty' }, 400)
   addComment(issue.id, identity.agentName, 'agent', body)
   return c.json({ ok: true }, 201)
 })
@@ -76,7 +76,7 @@ agentApi.post('/issues', async (c) => {
   const identity = c.get('run')
   const body = await c.req.json().catch(() => ({}))
   const title = text(body.title, 300).trim()
-  if (!title) return c.json({ error: 'Titel fehlt' }, 400)
+  if (!title) return c.json({ error: 'Title is missing' }, 400)
 
   try {
     const [assignee] = agentIdsByName(identity.projectId, body.assignee)
@@ -102,7 +102,7 @@ agentApi.post('/issues', async (c) => {
       created.id,
       'System',
       'system',
-      `Angelegt von ${identity.agentName} während ${project.key}-${origin?.number ?? '?'}.`,
+      `Filed by ${identity.agentName} while working on ${project.key}-${origin?.number ?? '?'}.`,
     )
     kick()
     return c.json({ number: created.number, key: `${project.key}-${created.number}` }, 201)

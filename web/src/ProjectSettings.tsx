@@ -4,14 +4,14 @@ import { For, Show } from 'solid-js'
 import { Field, Select, Toggle } from './ui'
 
 const LANDING_MODES = [
-  ['off', 'Aus'],
-  ['merge', 'Direkt mergen'],
-  ['pr', 'Pull Request, Merge nach grünen Checks'],
+  ['off', 'Off'],
+  ['merge', 'Merge directly'],
+  ['pr', 'Pull request, merge after green checks'],
 ] as const
 
 const WORKSPACES = [
-  ['issue', 'Pro Issue ein Worktree'],
-  ['agent', 'Pro Agent ein Checkout'],
+  ['issue', 'One worktree per issue'],
+  ['agent', 'One checkout per agent'],
 ] as const
 
 export function ProjectSettings() {
@@ -22,7 +22,7 @@ export function ProjectSettings() {
   }
 
   async function remove() {
-    if (!confirm(`Projekt "${project().name}" mit allen Issues, Agenten und Läufen löschen?`)) return
+    if (!confirm(`Delete project "${project().name}" with all its issues, agents and runs?`)) return
     await api.del(`/projects/${project().id}`).catch(fail)
     closeProject()
     await loadProjects()
@@ -31,14 +31,14 @@ export function ProjectSettings() {
   return (
     <div class="page narrow">
       <div class="page-head">
-        <h2>Projekt</h2>
+        <h2>Project</h2>
       </div>
       <div class="form">
         <div class="row">
           <Field label="Name">
             <input value={project().name} onChange={(e) => save({ name: e.currentTarget.value })} />
           </Field>
-          <Field label="Gleichzeitige Agenten" hint="Obergrenze für das ganze Projekt">
+          <Field label="Concurrent agents" hint="Limit for the whole project">
             <input
               type="number"
               min="1"
@@ -53,8 +53,8 @@ export function ProjectSettings() {
         </div>
         <div class="row">
           <Field
-            label="Arbeitsordner"
-            hint="Pro Agent: ein fester Checkout je Agent, Build-Caches (Godot-Import, node_modules) bleiben erhalten."
+            label="Checkout"
+            hint="Per agent: each agent keeps its own checkout, so build caches (Godot import, node_modules) survive."
           >
             <Select
               value={project().settings.workspace}
@@ -62,7 +62,7 @@ export function ProjectSettings() {
               onChange={(workspace) => saveSettings((s) => void (s.workspace = workspace))}
             />
           </Field>
-          <Field label="Änderungsrunden im Review" hint="Danach entscheidet ein Mensch">
+          <Field label="Review rounds" hint="After that, a human decides">
             <input
               type="number"
               min="1"
@@ -76,14 +76,14 @@ export function ProjectSettings() {
           </Field>
         </div>
         <Field
-          label="Git-Repository auf dem Server"
-          hint="Jedes Issue bekommt einen eigenen Worktree und Branch agentdeck/KEY-n."
+          label="Git repository on the server"
+          hint="Each issue gets its own worktree and branch agentdeck/KEY-n."
         >
           <input value={project().repo_path} onChange={(e) => save({ repo_path: e.currentTarget.value })} />
         </Field>
         <section class="section">
           <div class="section-head">
-            <h3>Landung</h3>
+            <h3>Landing</h3>
             <Select
               value={project().settings.landing.mode}
               options={LANDING_MODES}
@@ -91,12 +91,12 @@ export function ProjectSettings() {
             />
           </div>
           <p class="muted">
-            Nach der letzten Freigabe bringt AgentDeck den Branch des Issues in den Basis-Branch. Agenten
-            landen nie selbst.
+            After the last approval, AgentDeck brings the issue's branch into the base branch. Agents never
+            land on their own.
           </p>
           <Show when={project().settings.landing.mode !== 'off'}>
             <div class="row">
-              <Field label="Basis-Branch" hint="Leer = der im Repository ausgecheckte Branch">
+              <Field label="Base branch" hint="Empty = the branch checked out in the repository">
                 <input
                   placeholder="main"
                   value={project().settings.landing.baseBranch}
@@ -108,15 +108,15 @@ export function ProjectSettings() {
               </Field>
               <Show when={project().settings.landing.mode === 'merge'}>
                 <Toggle
-                  label="Nach dem Merge pushen"
+                  label="Push after merge"
                   checked={project().settings.landing.push}
                   onChange={(on) => saveSettings((s) => void (s.landing.push = on))}
                 />
               </Show>
             </div>
             <Field
-              label="Geschützte Pfade"
-              hint="Ein Pfad pro Zeile. Ändert ein Branch etwas darunter, landet er nicht automatisch, sondern wartet auf dich."
+              label="Protected paths"
+              hint="One path per line. If a branch changes anything under them, it does not land automatically and waits for you instead."
             >
               <textarea
                 rows="3"
@@ -136,15 +136,15 @@ export function ProjectSettings() {
         </section>
 
         <Toggle
-          label="Vollautonom: nichts wartet auf einen Menschen"
-          title="Blockierte Issues und offene Prüfungen entscheidet der Agent unten. Was auch er nicht klären kann, wird ins Backlog geparkt und später erneut versucht."
+          label="Fully autonomous: nothing waits for a human"
+          title="The agent below decides blocked issues and open reviews. Whatever it cannot resolve goes to the backlog and is retried later."
           checked={project().settings.autonomous}
           onChange={(on) => saveSettings((s) => void (s.autonomous = on))}
         />
 
         <Field
-          label="Blockierte Issues gehen zuerst an"
-          hint="Dieser Agent entscheidet einmal, wie es weitergeht. Erst was er nicht klären kann, landet bei dir."
+          label="Blocked issues go first to"
+          hint="This agent decides once how to proceed. Only what it cannot resolve comes to you."
         >
           <select
             onChange={(e) => {
@@ -152,7 +152,7 @@ export function ProjectSettings() {
               saveSettings((s) => void (s.escalationAgentId = agentId))
             }}
           >
-            <option value="0">direkt an mich</option>
+            <option value="0">Straight to me</option>
             <For each={board.agents}>
               {(agent) => (
                 <option value={agent.id} selected={agent.id === project().settings.escalationAgentId}>
@@ -164,20 +164,20 @@ export function ProjectSettings() {
         </Field>
 
         <Toggle
-          label="Gruppen nacheinander öffnen"
-          title="Ist nichts mehr offen, wandert das Backlog der nächsten Gruppe (nach Name sortiert) auf To Do"
+          label="Open groups in order"
+          title="When nothing is left open, the backlog of the next group (sorted by name) moves to To do"
           checked={project().settings.openGroupsInOrder}
           onChange={(on) => saveSettings((s) => void (s.openGroupsInOrder = on))}
         />
 
         <Toggle
-          label="Mail an mich, wenn ein Issue auf mich wartet"
-          title="Postfach und Empfänger stehen unter „Anbieter und Zugänge“"
+          label="Email me when an issue waits for me"
+          title="Inbox and recipient are set under Providers and access"
           checked={project().settings.notifyOwner}
           onChange={(on) => saveSettings((s) => void (s.notifyOwner = on))}
         />
 
-        <Field label="Kontext für alle Agenten">
+        <Field label="Context for all agents">
           <textarea
             rows="6"
             value={project().description}
@@ -186,7 +186,7 @@ export function ProjectSettings() {
         </Field>
         <footer>
           <button class="ghost danger" onClick={remove}>
-            Projekt löschen
+            Delete project
           </button>
         </footer>
       </div>

@@ -11,7 +11,7 @@ export function Modal(props: ParentProps<{ title: string; onClose: () => void; w
       <div class="modal" classList={{ wide: props.wide }} role="dialog" aria-label={props.title}>
         <header>
           <h2>{props.title}</h2>
-          <button class="ghost" onClick={props.onClose} aria-label="Schließen">
+          <button class="ghost" onClick={props.onClose} aria-label="Close">
             ✕
           </button>
         </header>
@@ -80,9 +80,9 @@ export function formatTokens(n: number) {
 
 export function timeAgo(timestamp: number) {
   const minutes = Math.round((Date.now() - timestamp) / 60_000)
-  if (minutes < 1) return 'gerade eben'
-  if (minutes < 60) return `vor ${minutes} min`
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min ago`
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `vor ${hours} h`
-  return new Date(timestamp).toLocaleDateString('de-DE')
+  if (hours < 24) return `${hours} h ago`
+  return new Date(timestamp).toLocaleDateString('en-US')
 }

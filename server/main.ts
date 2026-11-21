@@ -88,7 +88,7 @@ const SESSION_VALUE = createHash('sha256').update(`agentdeck-session:${TOKEN}`).
 
 app.post('/api/login', async (c) => {
   const given = String((await c.req.json().catch(() => ({}))).token ?? '')
-  if (!TOKEN || !sameSecret(given, TOKEN)) return c.json({ error: 'Token stimmt nicht' }, 401)
+  if (!TOKEN || !sameSecret(given, TOKEN)) return c.json({ error: 'Wrong token' }, 401)
   setCookie(c, SESSION_COOKIE, SESSION_VALUE, {
     httpOnly: true,
     sameSite: 'Strict',
@@ -111,8 +111,8 @@ app.use('/api/*', async (c, next) => {
 const skipsCompression = (path: string) => path === '/api/events' || path.endsWith('/board')
 app.use('/api/*', (c, next) => (skipsCompression(c.req.path) ? next() : compress()(c, next)))
 
-const id = (c: any, name = 'id') => Number(c.req.param(name)) || bad('ungültige id')
-const body = async (c: any) => (await c.req.json().catch(() => null)) ?? bad('JSON erwartet')
+const id = (c: any, name = 'id') => Number(c.req.param(name)) || bad('invalid id')
+const body = async (c: any) => (await c.req.json().catch(() => null)) ?? bad('JSON expected')
 const s = (v: any, max = 20000) => String(v ?? '').slice(0, max)
 
 // ---------- meta & projects ----------
@@ -136,7 +136,7 @@ app.get('/api/projects', (c) =>
 app.post('/api/projects', async (c) => {
   const b = await body(c)
   if (get('SELECT 1 FROM projects WHERE key=?', s(b.key, 8).toUpperCase()))
-    bad('Projekt-Key existiert bereits', 409)
+    bad('Project key already exists', 409)
   let r: any
   try {
     r = applyBlueprint({ project: b })
@@ -147,7 +147,7 @@ app.post('/api/projects', async (c) => {
 })
 
 app.get('/api/projects/:id/board', (c) => {
-  const cached = board(id(c)) ?? bad('nicht gefunden', 404)
+  const cached = board(id(c)) ?? bad('not found', 404)
   const headers: Record<string, string> = { 'content-type': 'application/json', vary: 'accept-encoding' }
   if (!(c.req.header('accept-encoding') ?? '').includes('gzip')) return c.body(cached.json, 200, headers)
   return c.body(new Uint8Array(cached.gzip), 200, { ...headers, 'content-encoding': 'gzip' })
@@ -156,7 +156,7 @@ app.get('/api/projects/:id/board', (c) => {
 app.patch('/api/projects/:id', async (c) => {
   const pid = id(c)
   const b = await body(c)
-  const p = getProject(pid) ?? bad('nicht gefunden', 404)
+  const p = getProject(pid) ?? bad('not found', 404)
   run(
     'UPDATE projects SET name=?, description=?, repo_path=?, paused=?, settings=? WHERE id=?',
     s(b.name ?? p.name, 120),
@@ -174,7 +174,7 @@ app.patch('/api/projects/:id', async (c) => {
 app.delete('/api/projects/:id', (c) => {
   const pid = id(c)
   for (const r of all("SELECT id FROM runs WHERE project_id=? AND status='running'", pid))
-    stopRun(r.id, 'Projekt gelöscht', 'backlog', 'System')
+    stopRun(r.id, 'Project deleted', 'backlog', 'System')
   run('DELETE FROM projects WHERE id=?', pid)
   forgetBoards(pid)
   touch(pid)
@@ -189,17 +189,17 @@ function saveAgentExtras(agentId: number, b: any) {
     run('UPDATE agents SET mcp_ids=? WHERE id=?', JSON.stringify(ids), agentId)
   }
   if (typeof b.effort === 'string') {
-    if (!EFFORTS.includes(b.effort)) bad('unbekannte Effort-Stufe')
+    if (!EFFORTS.includes(b.effort)) bad('unknown effort level')
     run('UPDATE agents SET effort=? WHERE id=?', b.effort, agentId)
   }
 }
 
 function agentFields(b: any, cur: any = {}) {
   const provider = b.provider ?? cur.provider
-  if (!PROVIDERS[provider]) bad('unbekannter Provider')
+  if (!PROVIDERS[provider]) bad('unknown provider')
   const model = s(b.model ?? cur.model ?? '', 80)
-  if (!MODEL_RE.test(model)) bad('ungültiger Modellname')
-  const name = s(b.name ?? cur.name, 80).trim() || bad('Name fehlt')
+  if (!MODEL_RE.test(model)) bad('invalid model name')
+  const name = s(b.name ?? cur.name, 80).trim() || bad('Name is missing')
   return [
     name,
     s(b.role ?? cur.role ?? '', 200),
@@ -213,7 +213,7 @@ function agentFields(b: any, cur: any = {}) {
 }
 app.post('/api/projects/:id/agents', async (c) => {
   const pid = id(c)
-  getProject(pid) ?? bad('nicht gefunden', 404)
+  getProject(pid) ?? bad('not found', 404)
   const b = await body(c)
   const r = run(
     'INSERT INTO agents (name, role, provider, model, instructions, skill_ids, max_instances, enabled, project_id) VALUES (?,?,?,?,?,?,?,?,?)',
@@ -226,7 +226,7 @@ app.post('/api/projects/:id/agents', async (c) => {
   return c.json(mapAgent(get('SELECT * FROM agents WHERE id=?', r.lastInsertRowid)), 201)
 })
 app.patch('/api/agents/:id', async (c) => {
-  const cur = mapAgent(get('SELECT * FROM agents WHERE id=?', id(c))) ?? bad('nicht gefunden', 404)
+  const cur = mapAgent(get('SELECT * FROM agents WHERE id=?', id(c))) ?? bad('not found', 404)
   const b = await body(c)
   run(
     'UPDATE agents SET name=?, role=?, provider=?, model=?, instructions=?, skill_ids=?, max_instances=?, enabled=? WHERE id=?',
@@ -239,9 +239,9 @@ app.patch('/api/agents/:id', async (c) => {
   return c.json(mapAgent(get('SELECT * FROM agents WHERE id=?', cur.id)))
 })
 app.delete('/api/agents/:id', (c) => {
-  const cur = get('SELECT * FROM agents WHERE id=?', id(c)) ?? bad('nicht gefunden', 404)
+  const cur = get('SELECT * FROM agents WHERE id=?', id(c)) ?? bad('not found', 404)
   for (const r of all("SELECT id FROM runs WHERE agent_id=? AND status='running'", cur.id))
-    stopRun(r.id, 'Agent gelöscht', 'todo', 'System')
+    stopRun(r.id, 'Agent deleted', 'todo', 'System')
   run('DELETE FROM agents WHERE id=?', cur.id)
   touch(cur.project_id)
   return c.json({ ok: true })
@@ -249,12 +249,12 @@ app.delete('/api/agents/:id', (c) => {
 
 app.post('/api/projects/:id/skills', async (c) => {
   const pid = id(c)
-  getProject(pid) ?? bad('nicht gefunden', 404)
+  getProject(pid) ?? bad('not found', 404)
   const b = await body(c)
   const r = run(
     'INSERT INTO skills (project_id, name, description, content) VALUES (?,?,?,?)',
     pid,
-    s(b.name, 80).trim() || bad('Name fehlt'),
+    s(b.name, 80).trim() || bad('Name is missing'),
     s(b.description, 400),
     s(b.content),
   )
@@ -262,7 +262,7 @@ app.post('/api/projects/:id/skills', async (c) => {
   return c.json(get('SELECT * FROM skills WHERE id=?', r.lastInsertRowid), 201)
 })
 app.patch('/api/skills/:id', async (c) => {
-  const cur = get('SELECT * FROM skills WHERE id=?', id(c)) ?? bad('nicht gefunden', 404)
+  const cur = get('SELECT * FROM skills WHERE id=?', id(c)) ?? bad('not found', 404)
   const b = await body(c)
   run(
     'UPDATE skills SET name=?, description=?, content=? WHERE id=?',
@@ -275,7 +275,7 @@ app.patch('/api/skills/:id', async (c) => {
   return c.json(get('SELECT * FROM skills WHERE id=?', cur.id))
 })
 app.delete('/api/skills/:id', (c) => {
-  const cur = get('SELECT * FROM skills WHERE id=?', id(c)) ?? bad('nicht gefunden', 404)
+  const cur = get('SELECT * FROM skills WHERE id=?', id(c)) ?? bad('not found', 404)
   run('DELETE FROM skills WHERE id=?', cur.id)
   touch(cur.project_id)
   return c.json({ ok: true })
@@ -295,14 +295,14 @@ app.get('/api/projects/:id/issues', (c) =>
 app.post('/api/projects/:id/issues', async (c) => {
   const pid = id(c)
   const b = await body(c)
-  const title = s(b.title, 300).trim() || bad('Titel fehlt')
+  const title = s(b.title, 300).trim() || bad('Title is missing')
   const issue = tx(() => createIssue(pid, { ...b, title, description: s(b.description) }))
   kick()
   return c.json(issue, 201)
 })
 
 app.get('/api/issues/:id', (c) => {
-  const issue = getIssue(id(c)) ?? bad('nicht gefunden', 404)
+  const issue = getIssue(id(c)) ?? bad('not found', 404)
   return c.json({
     issue,
     comments: all('SELECT * FROM comments WHERE issue_id=? ORDER BY id', issue.id),
@@ -311,10 +311,10 @@ app.get('/api/issues/:id', (c) => {
 })
 
 app.patch('/api/issues/:id', async (c) => {
-  const cur = getIssue(id(c)) ?? bad('nicht gefunden', 404)
+  const cur = getIssue(id(c)) ?? bad('not found', 404)
   const b = await body(c)
   const patch: Record<string, any> = {}
-  if ('title' in b) patch.title = s(b.title, 300).trim() || bad('Titel fehlt')
+  if ('title' in b) patch.title = s(b.title, 300).trim() || bad('Title is missing')
   if ('description' in b) patch.description = s(b.description)
   if ('priority' in b) patch.priority = Math.max(0, Math.min(3, Number(b.priority) || 0))
   if ('rank' in b) patch.rank = Number(b.rank) || 0
@@ -326,7 +326,7 @@ app.patch('/api/issues/:id', async (c) => {
   if ('grp' in b) patch.grp = s(b.grp, 80).trim()
   if ('model' in b) {
     patch.model = s(b.model, 80).trim()
-    if (!MODEL_RE.test(patch.model)) bad('ungültiger Modellname')
+    if (!MODEL_RE.test(patch.model)) bad('invalid model name')
   }
   if ('reviewers' in b) {
     const known = new Set(all('SELECT id FROM agents WHERE project_id=?', cur.project_id).map((a) => a.id))
@@ -335,7 +335,7 @@ app.patch('/api/issues/:id', async (c) => {
       .filter((a: number) => known.has(a))
   }
   if ('status' in b && b.status !== cur.status) {
-    if (!STATUSES.includes(b.status)) bad('unbekannter Status')
+    if (!STATUSES.includes(b.status)) bad('unknown status')
     // "in progress" is owned by the scheduler: a human moving a card there means "start it".
     patch.status = b.status === 'in_progress' ? 'todo' : b.status
     // Pulling an issue out of a running review by hand ends that review: it goes back to its maker.
@@ -352,14 +352,14 @@ app.patch('/api/issues/:id', async (c) => {
     cur.status === 'in_progress' &&
     (patch.status || ('assignee_id' in patch && patch.assignee_id !== cur.assignee_id))
   )
-    stopIssueRun(cur.id, 'Lauf gestoppt, Issue wurde manuell geändert.', patch.status ?? 'todo', 'System')
+    stopIssueRun(cur.id, 'Run stopped, the issue was changed by hand.', patch.status ?? 'todo', 'System')
   kick()
   return c.json(issue)
 })
 
 app.delete('/api/issues/:id', (c) => {
-  const cur = getIssue(id(c)) ?? bad('nicht gefunden', 404)
-  stopIssueRun(cur.id, 'Issue gelöscht', 'backlog', 'System')
+  const cur = getIssue(id(c)) ?? bad('not found', 404)
+  stopIssueRun(cur.id, 'Issue deleted', 'backlog', 'System')
   run('DELETE FROM issues WHERE id=?', cur.id)
   forgetIssue(cur.project_id, cur.id)
   touch(cur.project_id)
@@ -367,22 +367,22 @@ app.delete('/api/issues/:id', (c) => {
 })
 
 app.post('/api/issues/:id/comments', async (c) => {
-  const cur = getIssue(id(c)) ?? bad('nicht gefunden', 404)
+  const cur = getIssue(id(c)) ?? bad('not found', 404)
   const b = await body(c)
-  const text = s(b.body).trim() || bad('Kommentar leer')
+  const text = s(b.body).trim() || bad('Comment is empty')
   return c.json(
-    addComment(cur.id, s(b.author || c.req.header('remote-user') || 'Du', 60), 'comment', text),
+    addComment(cur.id, s(b.author || c.req.header('remote-user') || 'You', 60), 'comment', text),
     201,
   )
 })
 
 app.post('/api/issues/:id/stop', (c) =>
-  c.json({ stopped: stopIssueRun(id(c), 'Lauf manuell gestoppt.', 'backlog', 'System') }),
+  c.json({ stopped: stopIssueRun(id(c), 'Run stopped by hand.', 'backlog', 'System') }),
 )
 
 // ---------- tokens RTK kept out of the agents' context ----------
 app.get('/api/projects/:id/rtk', async (c) =>
-  c.json(await rtkReport(getProject(id(c)) ?? bad('nicht gefunden', 404))),
+  c.json(await rtkReport(getProject(id(c)) ?? bad('not found', 404))),
 )
 
 // ---------- what a run printed ----------
@@ -395,14 +395,14 @@ app.get('/api/models', async (c) => c.json(await listModels(c.req.query('refresh
 
 // ---------- dashboard ----------
 app.get('/api/projects/:id/stats', (c) => {
-  const project = getProject(id(c)) ?? bad('nicht gefunden', 404)
+  const project = getProject(id(c)) ?? bad('not found', 404)
   const days = Math.max(7, Math.min(180, Number(c.req.query('days')) || 14))
   return c.json(projectStats(project.id, days))
 })
 
 // ---------- usage ----------
 app.get('/api/projects/:id/usage', (c) => {
-  const p = getProject(id(c)) ?? bad('nicht gefunden', 404)
+  const p = getProject(id(c)) ?? bad('not found', 404)
   return c.json({
     providers: Object.keys(PROVIDERS).map((k) => ({ ...providerLeft(p, k), label: PROVIDERS[k].label })),
     byAgent: all(
@@ -422,7 +422,7 @@ app.get('/api/projects/:id/usage', (c) => {
 // ---------- provider access: subscription login or API key ----------
 const knownProvider = (c: any) => {
   const provider = c.req.param('id')
-  if (!PROVIDERS[provider]) bad('unbekannter Anbieter', 404)
+  if (!PROVIDERS[provider]) bad('unknown provider', 404)
   return provider as string
 }
 
@@ -488,7 +488,7 @@ app.get('/api/projects/:id/routines', (c) => c.json(listRoutines(id(c))))
 
 app.post('/api/projects/:id/routines', async (c) => {
   const pid = id(c)
-  getProject(pid) ?? bad('nicht gefunden', 404)
+  getProject(pid) ?? bad('not found', 404)
   try {
     return c.json(createRoutine(pid, await body(c)), 201)
   } catch (e: any) {
@@ -498,7 +498,7 @@ app.post('/api/projects/:id/routines', async (c) => {
 
 app.patch('/api/routines/:id', async (c) => {
   try {
-    return c.json(updateRoutine(id(c), await body(c)) ?? bad('nicht gefunden', 404))
+    return c.json(updateRoutine(id(c), await body(c)) ?? bad('not found', 404))
   } catch (e: any) {
     return bad(e.message, e.status)
   }
@@ -513,7 +513,7 @@ app.put('/api/mail', async (c) => c.json(saveMailSettings(await body(c))))
 
 app.post('/api/mail/test', async (c) => {
   try {
-    await sendMail('[AgentDeck] Testmail', 'Wenn du das liest, kann AgentDeck dir Mails schicken.')
+    await sendMail('[AgentDeck] Test mail', 'If you can read this, AgentDeck can send you mail.')
     return c.json({ ok: true })
   } catch (e: any) {
     return bad(e.message, 502)
@@ -557,13 +557,13 @@ app.post('/api/blueprint', async (c) => {
 app.post('/api/blueprint/generate', async (c) => {
   const b = await body(c)
   const provider = PROVIDERS[b.provider] ? b.provider : 'anthropic'
-  const wish = s(b.prompt, 8000).trim() || bad('Beschreibung fehlt')
+  const wish = s(b.prompt, 8000).trim() || bad('Description is missing')
   const res = await oneShot(
     provider,
     `${BLUEPRINT_GUIDE}\n\nCreate a blueprint for the following request. Write names, descriptions and issues in the language of the request. Reply with the JSON object only, no prose, no code fence.\n\n## Request\n${wish}`,
     DATA_DIR,
   )
-  if (!res.ok) bad(`KI-Aufruf fehlgeschlagen: ${res.error}`, 502)
+  if (!res.ok) bad(`AI call failed: ${res.error}`, 502)
   try {
     return c.json(extractJson(res.text))
   } catch (e: any) {

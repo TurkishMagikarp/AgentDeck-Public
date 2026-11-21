@@ -16,8 +16,8 @@ type Routine = {
 }
 
 const SCHEDULES = [
-  ['daily', 'Täglich um'],
-  ['interval', 'Alle … Minuten'],
+  ['daily', 'Daily at'],
+  ['interval', 'Every … minutes'],
 ] as const
 
 const newRoutine = (): Routine => ({
@@ -31,7 +31,7 @@ const newRoutine = (): Routine => ({
 })
 
 const describeSchedule = (routine: Routine) =>
-  routine.schedule === 'daily' ? `täglich um ${routine.at}` : `alle ${routine.every_minutes} Minuten`
+  routine.schedule === 'daily' ? `daily at ${routine.at}` : `every ${routine.every_minutes} minutes`
 
 export function Routines() {
   const projectId = () => board.project!.id
@@ -49,19 +49,19 @@ export function Routines() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Routinen</h2>
+          <h2>Routines</h2>
           <p class="muted">
-            Wiederkehrende Arbeit. Ist eine Routine fällig, legt sie ein Issue für ihren Agenten an. Solange
-            das letzte noch offen ist, kommt kein weiteres dazu.
+            Recurring work. When a routine is due, it creates an issue for its agent. While the last one is
+            still open, no new one is added.
           </p>
         </div>
         <button class="primary" onClick={() => setEditing(newRoutine())}>
-          Routine hinzufügen
+          Add routine
         </button>
       </div>
 
       <div class="grid">
-        <For each={routines()} fallback={<p class="muted">Noch keine Routinen.</p>}>
+        <For each={routines()} fallback={<p class="muted">No routines yet.</p>}>
           {(routine) => (
             <article
               class="tile"
@@ -70,7 +70,7 @@ export function Routines() {
             >
               <strong>{routine.name}</strong>
               <p class="muted">
-                {describeSchedule(routine)} · {agentById(routine.agent_id)?.name ?? 'beliebiger Agent'}
+                {describeSchedule(routine)} · {agentById(routine.agent_id)?.name ?? 'any agent'}
               </p>
               <p class="clamp">{routine.prompt}</p>
             </article>
@@ -98,13 +98,13 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Routine "${draft.name}" löschen?`)) return
+    if (!confirm(`Delete routine "${draft.name}"?`)) return
     await api.del(`/routines/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Routine bearbeiten' : 'Neue Routine'} onClose={props.onClose}>
+    <Modal title={draft.id ? 'Edit routine' : 'New routine'} onClose={props.onClose}>
       <form class="form" onSubmit={save}>
         <div class="row">
           <Field label="Name">
@@ -112,7 +112,7 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
           </Field>
           <Field label="Agent">
             <select onChange={(e) => setDraft('agent_id', Number(e.currentTarget.value) || null)}>
-              <option value="">Beliebiger freier Agent</option>
+              <option value="">Any free agent</option>
               <For each={board.agents}>
                 {(agent) => (
                   <option value={agent.id} selected={agent.id === draft.agent_id}>
@@ -125,7 +125,7 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
         </div>
 
         <div class="row">
-          <Field label="Rhythmus">
+          <Field label="Schedule">
             <Select
               value={draft.schedule}
               options={SCHEDULES}
@@ -135,7 +135,7 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
           <Show
             when={draft.schedule === 'daily'}
             fallback={
-              <Field label="Minuten" hint="Mindestens 5">
+              <Field label="Minutes" hint="At least 5">
                 <input
                   type="number"
                   min="5"
@@ -145,13 +145,13 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
               </Field>
             }
           >
-            <Field label="Uhrzeit" hint="Zeitzone des Servers">
+            <Field label="Time" hint="Server time zone">
               <input type="time" value={draft.at} onInput={(e) => setDraft('at', e.currentTarget.value)} />
             </Field>
           </Show>
         </div>
 
-        <Field label="Auftrag" hint="Wird zur Beschreibung des angelegten Issues">
+        <Field label="Task" hint="Becomes the description of the new issue">
           <textarea
             rows="8"
             value={draft.prompt}
@@ -159,20 +159,20 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
           />
         </Field>
 
-        <Toggle label="Aktiv" checked={!!draft.enabled} onChange={(on) => setDraft('enabled', on)} />
+        <Toggle label="Active" checked={!!draft.enabled} onChange={(on) => setDraft('enabled', on)} />
 
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Löschen
+              Delete
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Abbrechen
+            Cancel
           </button>
           <button class="primary" type="submit">
-            Speichern
+            Save
           </button>
         </footer>
       </form>

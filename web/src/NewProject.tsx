@@ -15,13 +15,13 @@ export function NewProject(props: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="Neues Projekt" onClose={props.onClose} wide>
+    <Modal title="New project" onClose={props.onClose} wide>
       <div class="tabs small">
         <button classList={{ active: mode() === 'ai' }} onClick={() => setMode('ai')}>
-          Von der KI aufbauen lassen
+          Let the AI set it up
         </button>
         <button classList={{ active: mode() === 'manual' }} onClick={() => setMode('manual')}>
-          Leeres Projekt
+          Empty project
         </button>
       </div>
       <Switch>
@@ -70,7 +70,7 @@ function ManualSetup(props: { onDone: (projectId: number) => void }) {
         <Field label="Name">
           <input required value={name()} onInput={(e) => setName(e.currentTarget.value)} />
         </Field>
-        <Field label="Kürzel" hint="Präfix der Issues, z. B. SHOP-12">
+        <Field label="Key" hint="Issue prefix, e.g. SHOP-12">
           <input
             placeholder={suggestedKey()}
             maxLength={8}
@@ -80,22 +80,22 @@ function ManualSetup(props: { onDone: (projectId: number) => void }) {
         </Field>
       </div>
       <Field
-        label="Git-Repository auf dem Server"
-        hint="Absoluter Pfad. Leer = AgentDeck legt einen Arbeitsordner an."
+        label="Git repository on the server"
+        hint="Absolute path. Leave empty and AgentDeck creates a checkout."
       >
         <input
-          placeholder="/srv/repos/mein-projekt"
+          placeholder="/srv/repos/my-project"
           value={repoPath()}
           onInput={(e) => setRepoPath(e.currentTarget.value)}
         />
       </Field>
-      <Field label="Kontext für alle Agenten">
+      <Field label="Context for all agents">
         <textarea rows="4" value={description()} onInput={(e) => setDescription(e.currentTarget.value)} />
       </Field>
       <footer>
         <span class="spacer" />
         <button class="primary" type="submit">
-          Projekt anlegen
+          Create project
         </button>
       </footer>
     </form>
@@ -136,13 +136,13 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
       fallback={
         <form class="form" onSubmit={generate}>
           <Field
-            label="Was soll gebaut werden?"
-            hint="Die KI schlägt Agenten, Skills und Issues vor. Du siehst den Vorschlag, bevor etwas angelegt wird."
+            label="What should be built?"
+            hint="The AI suggests agents, skills and issues. You see the proposal before anything is created."
           >
             <textarea
               rows="8"
               required
-              placeholder="Baue einen Webshop mit Next.js und Stripe. Ein Architekt plant, zwei Entwickler setzen um, ein Reviewer prüft…"
+              placeholder="Build an online shop with Next.js and Stripe. An architect plans, two developers build, a reviewer checks…"
               value={wish()}
               onInput={(e) => setWish(e.currentTarget.value)}
             />
@@ -159,14 +159,14 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
             </select>
             <span class="spacer" />
             <button class="primary" type="submit" disabled={busy()}>
-              {busy() ? 'KI plant…' : 'Vorschlag erstellen'}
+              {busy() ? 'AI is planning…' : 'Create proposal'}
             </button>
           </footer>
         </form>
       }
     >
       <div class="form">
-        <Field label="Vorschlag (bearbeitbar)">
+        <Field label="Proposal (editable)">
           <textarea
             rows="20"
             class="mono"
@@ -175,10 +175,10 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
           />
         </Field>
         <footer>
-          <button onClick={() => setBlueprint('')}>Zurück</button>
+          <button onClick={() => setBlueprint('')}>Back</button>
           <span class="spacer" />
           <button class="primary" onClick={apply}>
-            So anlegen
+            Create as shown
           </button>
         </footer>
       </div>

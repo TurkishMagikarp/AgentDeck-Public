@@ -70,7 +70,7 @@ const touchesProtected = (files: string[], settings: LandingSettings) =>
   files.filter((file) => settings.protectedPaths.some((path) => path && file.startsWith(path)))
 
 const OWNER_REVIEW = (files: string[]) =>
-  `Der Branch ändert geschützte Dateien (${files.slice(0, 5).join(', ')}). Das landet nicht automatisch, bitte selbst prüfen und mergen.`
+  `The branch changes protected files (${files.slice(0, 5).join(', ')}). It does not land automatically, please review and merge it yourself.`
 
 export function landIssue(project: Project, issue: Issue): Promise<Outcome> {
   const settings = project.settings.landing
@@ -98,7 +98,7 @@ export function landIssue(project: Project, issue: Issue): Promise<Outcome> {
       : openPullRequest(repo, base, branch, project, issue)
   }).catch((error): Outcome => ({
     status: 'blocked',
-    note: `Landung fehlgeschlagen: ${error.message}`,
+    note: `Landing failed: ${error.message}`,
     needsOwner: true,
   }))
 }
@@ -115,7 +115,7 @@ async function mergeLocally(
   if (checkedOut !== base) {
     return {
       status: 'blocked',
-      note: `Im Repository ist "${checkedOut}" ausgecheckt, gelandet wird aber auf "${base}".`,
+      note: `The repository has "${checkedOut}" checked out, but landing targets "${base}".`,
       needsOwner: true,
     }
   }
@@ -127,7 +127,7 @@ async function mergeLocally(
     await succeeds(git(repo, 'merge', '--abort'))
     return {
       status: 'todo',
-      note: `Der Branch lässt sich nicht konfliktfrei in ${base} mergen. Bitte ${base} in den Branch mergen, die Konflikte lösen und erneut abgeben.`,
+      note: `The branch does not merge cleanly into ${base}. Please merge ${base} into the branch, resolve the conflicts and hand it in again.`,
     }
   }
 
@@ -135,11 +135,11 @@ async function mergeLocally(
   if (settings.push && !(await succeeds(git(repo, 'push', 'origin', base)))) {
     return {
       status: 'blocked',
-      note: `Lokal in ${base} gemergt (${commit}), aber der Push ist fehlgeschlagen.`,
+      note: `Merged into ${base} locally (${commit}), but the push failed.`,
       needsOwner: true,
     }
   }
-  return { status: 'done', note: `In ${base} gelandet (${commit}).` }
+  return { status: 'done', note: `Landed in ${base} (${commit}).` }
 }
 
 async function openPullRequest(
@@ -174,7 +174,7 @@ async function openPullRequest(
   }
 
   run("UPDATE issues SET pr_number=?, landing='waiting' WHERE id=?", number, issue.id)
-  return { status: 'review', note: `Pull Request #${number} ist offen und wartet auf seine Checks.` }
+  return { status: 'review', note: `Pull request #${number} is open and waits for its checks.` }
 }
 
 // ---------- pull requests that wait for their checks ----------
@@ -207,12 +207,11 @@ async function settlePullRequest(
     await gh(repo, 'pr', 'view', String(issue.pr_number), '--json', 'state,headRefOid,statusCheckRollup'),
   )
 
-  if (view.state === 'MERGED')
-    return { status: 'done', note: `Pull Request #${issue.pr_number} ist gemergt.` }
+  if (view.state === 'MERGED') return { status: 'done', note: `Pull request #${issue.pr_number} was merged.` }
   if (view.state === 'CLOSED') {
     return {
       status: 'blocked',
-      note: `Pull Request #${issue.pr_number} wurde geschlossen, ohne zu mergen.`,
+      note: `Pull request #${issue.pr_number} was closed without merging.`,
       needsOwner: true,
     }
   }
@@ -222,14 +221,14 @@ async function settlePullRequest(
   if (verdict === 'fail') {
     return {
       status: 'todo',
-      note: `Checks im Pull Request #${issue.pr_number} sind fehlgeschlagen: ${failed.join(', ')}.`,
+      note: `Checks failed in pull request #${issue.pr_number}: ${failed.join(', ')}.`,
     }
   }
 
   // Merge exactly the commit that was reviewed and checked, never something pushed in between.
   await gh(repo, 'pr', 'merge', String(issue.pr_number), '--merge', '--match-head-commit', view.headRefOid)
   await succeeds(git(repo, 'pull', '--ff-only'))
-  return { status: 'done', note: `Pull Request #${issue.pr_number} gemergt.` }
+  return { status: 'done', note: `Merged pull request #${issue.pr_number}.` }
 }
 
 /** Looks at every pull request that is waiting and reports the ones that reached a result. */

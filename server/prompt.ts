@@ -41,7 +41,7 @@ function latestComments(issueId: number) {
 
 function workRules(project: any, branch?: string) {
   const summary = project.settings.adhd
-    ? `${ADHD_SUMMARY} Start line 1 with "Fertig:", "Teilweise:" or "Blockiert:".`
+    ? `${ADHD_SUMMARY} Start line 1 with "Done:", "Partial:" or "Blocked:".`
     : 'What you did and the result, concise.'
   const where = branch ? ` (branch ${branch}); commit your changes on this branch, do not push` : ''
 
@@ -57,7 +57,7 @@ function workRules(project: any, branch?: string) {
 
 function reviewRules(project: any, makerName: string, branch?: string) {
   const summary = project.settings.adhd
-    ? `${ADHD_SUMMARY} Start line 1 with "Passt:" or "Ändern:".`
+    ? `${ADHD_SUMMARY} Start line 1 with "Approved:" or "Changes:".`
     : 'Your verdict. For "changes": each point concrete enough that the maker can fix it without asking.'
   const where = branch ? ` It holds the state of branch ${branch}.` : ''
 

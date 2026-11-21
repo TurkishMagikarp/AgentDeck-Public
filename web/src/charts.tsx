@@ -24,12 +24,12 @@ function niceMax(value: number) {
 }
 
 export function compact(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)} M`
-  if (value >= 10_000) return `${Math.round(value / 1000)} k`
-  return value.toLocaleString('de-DE')
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
+  if (value >= 10_000) return `${Math.round(value / 1000)}k`
+  return value.toLocaleString('en-US')
 }
 
-const shortDay = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}.`
+const shortDay = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}`
 
 /** Axis, grid, day labels, the hover band and the tooltip. The marks come in as children. */
 function Frame(props: {
@@ -209,7 +209,7 @@ export function StackedColumns(props: { days: string[]; series: Series[]; label:
               color: series.color,
               value: compact(series.values[index]!),
             })),
-          { name: 'gesamt', color: 'transparent', value: compact(totals()[index]) },
+          { name: 'total', color: 'transparent', value: compact(totals()[index]) },
         ]}
       >
         {(hovered) => (

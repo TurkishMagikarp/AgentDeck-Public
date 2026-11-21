@@ -34,14 +34,14 @@ function fire(routine: Routine, now: Date) {
   const stillOpen = get("SELECT 1 FROM issues WHERE routine_id=? AND status NOT IN ('done')", routine.id)
   if (stillOpen) return false
 
-  const date = now.toLocaleDateString('de-DE')
+  const date = now.toLocaleDateString('en-US')
   tx(() =>
     createIssue(routine.project_id, {
       title: `${routine.name} (${date})`,
       description: routine.prompt,
       status: 'todo',
       assignee_id: routine.agent_id,
-      grp: 'Routinen',
+      grp: 'Routines',
       routine_id: routine.id,
     }),
   )
@@ -76,9 +76,9 @@ const text = (value: unknown, max: number) => String(value ?? '').slice(0, max)
 
 function fields(body: any, current: Partial<Routine> = {}) {
   const name = text(body.name ?? current.name, 120).trim()
-  if (!name) throw new Error('Name fehlt')
+  if (!name) throw new Error('Name is missing')
   const at = text(body.at ?? current.at ?? '07:00', 5)
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error('Uhrzeit im Format HH:MM angeben')
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error('Give the time as HH:MM')
 
   return [
     name,

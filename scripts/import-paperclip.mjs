@@ -128,7 +128,7 @@ const issues = await mapPool(issueList, 4, async (summary) => {
     imported.push({
       author: 'System',
       kind: 'system',
-      body: 'In Paperclip abgebrochen.',
+      body: 'Cancelled in Paperclip.',
       created_at: issue.cancelledAt,
     })
   }

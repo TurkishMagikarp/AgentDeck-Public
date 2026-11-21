@@ -102,7 +102,7 @@ const codexApiHome = () => join(DATA_DIR, 'codex-api')
 /** Saves the mode and, when a new key is given, the key. An empty string removes the stored key. */
 export async function setAccess(provider: string, mode: AccessMode, newKey?: string) {
   if (!ACCESS[provider]?.modes.includes(mode))
-    throw new Error('Diese Zugangsart gibt es für den Anbieter nicht')
+    throw new Error('This provider does not offer that access mode')
 
   const current = get('SELECT secret FROM provider_auth WHERE provider=?', provider)
   let secret: string | null = current?.secret ?? null
@@ -127,7 +127,7 @@ function storeCodexApiKey(key: string) {
     const child = spawnCli('codex', ['login', '--with-api-key'], { CODEX_HOME: codexApiHome() })
     child.on('error', reject)
     child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error('Codex hat den API-Key nicht angenommen')),
+      code === 0 ? resolve() : reject(new Error('Codex did not accept the API key')),
     )
     child.stdin!.end(key)
   })
@@ -141,7 +141,7 @@ export function runEnv(provider: string, cli: string): NodeJS.ProcessEnv {
 
   const access = getAccess(provider)
   const key = access.mode === 'apikey' ? apiKey(provider) : null
-  if (access.mode === 'apikey' && !key) throw new Error('Für diesen Anbieter ist kein API-Key hinterlegt')
+  if (access.mode === 'apikey' && !key) throw new Error('No API key stored for this provider')
 
   if (cli === 'claude') {
     // An inherited key would silently bill the API although "subscription" is selected.
@@ -180,7 +180,7 @@ export function loginStatus(provider: string) {
     child.stdout!.on('data', (chunk) => (output += chunk))
     child.stderr!.on('data', (chunk) => (output += chunk))
     const timer = setTimeout(() => child.kill(), 15_000)
-    child.on('error', () => resolve({ loggedIn: null, detail: `${command[0]} ist nicht installiert` }))
+    child.on('error', () => resolve({ loggedIn: null, detail: `${command[0]} is not installed` }))
     child.on('close', (code) => {
       clearTimeout(timer)
       resolve(readStatus(provider, stripAnsi(output), code))
@@ -190,10 +190,10 @@ export function loginStatus(provider: string) {
 
 function readStatus(provider: string, output: string, exitCode: number | null) {
   if (provider === 'anthropic') {
-    if (getSecret(SUBSCRIPTION_TOKEN)) return { loggedIn: true, detail: 'über hinterlegtes Abo-Token' }
+    if (getSecret(SUBSCRIPTION_TOKEN)) return { loggedIn: true, detail: 'via stored subscription token' }
     try {
       const status = JSON.parse(output)
-      return { loggedIn: !!status.loggedIn, detail: status.loggedIn ? `über ${status.authMethod}` : '' }
+      return { loggedIn: !!status.loggedIn, detail: status.loggedIn ? `via ${status.authMethod}` : '' }
     } catch {
       return { loggedIn: false, detail: '' }
     }
@@ -204,7 +204,7 @@ function readStatus(provider: string, output: string, exitCode: number | null) {
   }
   // opencode prints one line per stored credential; account names stay on the server.
   const stored = output.split('\n').filter((line) => /\bstored\b/.test(line)).length
-  return { loggedIn: stored > 0, detail: stored ? `${stored} Zugänge hinterlegt` : '' }
+  return { loggedIn: stored > 0, detail: stored ? `${stored} credentials stored` : '' }
 }
 
 // ---------- login from the browser ----------
@@ -228,7 +228,7 @@ const LOGIN_COMMANDS: Record<LoginKind, [string, string[]]> = {
 
 export function startLogin(provider: string) {
   const kind = ACCESS[provider]?.login
-  if (!kind) throw new Error('Für diesen Anbieter gibt es keinen Login über das Tool')
+  if (!kind) throw new Error('This provider has no login through AgentDeck')
   cancelLogin(provider)
 
   const [command, args] = LOGIN_COMMANDS[kind]
@@ -276,8 +276,8 @@ export function loginView(provider: string) {
 
 export function submitLoginCode(provider: string, code: string) {
   const login = logins.get(provider)
-  if (!login || login.state !== 'waiting') throw new Error('Kein laufender Login')
-  if (!/^[\w#.~-]{4,400}$/.test(code)) throw new Error('Der Code sieht nicht richtig aus')
+  if (!login || login.state !== 'waiting') throw new Error('No login in progress')
+  if (!/^[\w#.~-]{4,400}$/.test(code)) throw new Error('That code does not look right')
   login.child.stdin!.write(code + '\n')
 }
 

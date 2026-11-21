@@ -5,7 +5,7 @@ import { onRunOutput } from './store'
 
 type Line = { at: number; text: string }
 
-const clock = (at: number) => new Date(at).toLocaleTimeString('de-DE')
+const clock = (at: number) => new Date(at).toLocaleTimeString('en-US')
 
 /**
  * What an agent printed during one run: its messages and every tool call. For a running agent
@@ -37,8 +37,8 @@ export function RunLog(props: { runId: number; live?: boolean }) {
 
   return (
     <div class="run-log" ref={box}>
-      <Show when={!loaded.loading} fallback={<p class="muted">Lade Ausgabe…</p>}>
-        <For each={lines} fallback={<p class="muted">Noch keine Ausgabe.</p>}>
+      <Show when={!loaded.loading} fallback={<p class="muted">Loading output…</p>}>
+        <For each={lines} fallback={<p class="muted">No output yet.</p>}>
           {(line) => (
             <p>
               <time>{clock(line.at)}</time>
