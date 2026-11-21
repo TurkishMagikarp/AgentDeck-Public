@@ -1,0 +1,257 @@
+import { createResource, createSignal, For, Show } from 'solid-js'
+import { createStore } from 'solid-js/store'
+import { api } from './api'
+import { ModelSelect } from './ModelSelect'
+import { board, fail, providerLabel, providers } from './store'
+import type { Agent } from './types'
+import { Field, initials, Modal, Select, Toggle } from './ui'
+
+type Draft = Omit<Agent, 'id'> & { id?: number }
+
+const EFFORTS: [string, string][] = [
+  ['', 'Standard'],
+  ['low', 'niedrig'],
+  ['medium', 'mittel'],
+  ['high', 'hoch'],
+  ['xhigh', 'sehr hoch'],
+  ['max', 'maximal'],
+]
+
+const newAgent = (): Draft => ({
+  name: '',
+  role: '',
+  provider: providers()[0]?.id ?? 'anthropic',
+  model: '',
+  instructions: '',
+  skill_ids: [],
+  mcp_ids: [],
+  max_instances: 1,
+  effort: '',
+  enabled: true,
+})
+
+export function Agents() {
+  const [editing, setEditing] = createSignal<Draft | null>(null)
+
+  return (
+    <div class="page">
+      <div class="page-head">
+        <div>
+          <h2>Agenten</h2>
+          <p class="muted">Wer in diesem Projekt arbeitet, mit welchem Anbieter und wie oft parallel.</p>
+        </div>
+        <button class="primary" onClick={() => setEditing(newAgent())}>
+          Agent hinzufügen
+        </button>
+      </div>
+
+      <div class="grid">
+        <For
+          each={board.agents}
+          fallback={<p class="muted">Noch keine Agenten. Ohne Agenten bleibt das Board stehen.</p>}
+        >
+          {(agent) => (
+            <AgentCard
+              agent={agent}
+              onEdit={() =>
+                setEditing({ ...agent, skill_ids: [...agent.skill_ids], mcp_ids: [...agent.mcp_ids] })
+              }
+            />
+          )}
+        </For>
+      </div>
+
+      <Show when={editing()}>
+        {(draft) => <AgentForm draft={draft()} onClose={() => setEditing(null)} />}
+      </Show>
+    </div>
+  )
+}
+
+function AgentCard(props: { agent: Agent; onEdit: () => void }) {
+  const running = () => board.runs.filter((run) => run.agent_id === props.agent.id).length
+  const skills = () => board.skills.filter((skill) => props.agent.skill_ids.includes(skill.id))
+
+  return (
+    <article class="tile" classList={{ disabled: !props.agent.enabled }} onClick={props.onEdit}>
+      <div class="tile-head">
+        <span class={`avatar large ${props.agent.provider}`}>{initials(props.agent.name)}</span>
+        <div>
+          <strong>{props.agent.name}</strong>
+          <p class="muted">{props.agent.role || 'Keine Rolle'}</p>
+        </div>
+      </div>
+      <p class="muted">
+        {providerLabel(props.agent.provider)}
+        {props.agent.model && ` · ${props.agent.model}`}
+      </p>
+      <p>
+        {running()} / {props.agent.max_instances} Instanzen aktiv
+        {!props.agent.enabled && ' · deaktiviert'}
+      </p>
+      <div class="chips">
+        <For each={skills()}>{(skill) => <span class="chip">{skill.name}</span>}</For>
+      </div>
+    </article>
+  )
+}
+
+function AgentForm(props: { draft: Draft; onClose: () => void }) {
+  const [draft, setDraft] = createStore<Draft>(props.draft)
+
+  function toggleSkill(skillId: number, on: boolean) {
+    setDraft('skill_ids', (ids) => (on ? [...ids, skillId] : ids.filter((id) => id !== skillId)))
+  }
+
+  // Only connections with a stored key can be handed to an agent.
+  const [connections] = createResource(async () => {
+    const all = await api.get<{ id: string; label: string; description: string; hasKey: boolean }[]>('/mcp')
+    return all.filter((connection) => connection.hasKey)
+  })
+
+  function toggleConnection(id: string, on: boolean) {
+    setDraft('mcp_ids', (ids) => (on ? [...ids, id] : ids.filter((other) => other !== id)))
+  }
+
+  async function save(e: SubmitEvent) {
+    e.preventDefault()
+    try {
+      if (draft.id) await api.patch(`/agents/${draft.id}`, draft)
+      else await api.post(`/projects/${board.project!.id}/agents`, draft)
+      props.onClose()
+    } catch (err) {
+      fail(err)
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Agent "${draft.name}" löschen?`)) return
+    await api.del(`/agents/${draft.id}`).catch(fail)
+    props.onClose()
+  }
+
+  return (
+    <Modal title={draft.id ? 'Agent bearbeiten' : 'Neuer Agent'} onClose={props.onClose}>
+      <form class="form" onSubmit={save}>
+        <div class="row">
+          <Field label="Name">
+            <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
+          </Field>
+          <Field label="Rolle">
+            <input
+              placeholder="z. B. Backend-Entwickler"
+              value={draft.role}
+              onInput={(e) => setDraft('role', e.currentTarget.value)}
+            />
+          </Field>
+        </div>
+
+        <div class="row">
+          <Field label="Anbieter">
+            <select
+              onChange={(e) => {
+                // A model of one provider means nothing to another.
+                setDraft({ provider: e.currentTarget.value, model: '' })
+              }}
+            >
+              <For each={providers()}>
+                {(provider) => (
+                  <option value={provider.id} selected={provider.id === draft.provider}>
+                    {provider.label}
+                  </option>
+                )}
+              </For>
+            </select>
+          </Field>
+          <Field label="Modell">
+            <ModelSelect
+              provider={draft.provider}
+              value={draft.model}
+              onChange={(model) => setDraft('model', model)}
+            />
+          </Field>
+          <Field label="Effort" hint="Denkaufwand pro Lauf">
+            <Select
+              value={draft.effort}
+              options={EFFORTS}
+              onChange={(effort) => setDraft('effort', effort)}
+            />
+          </Field>
+          <Field label="Max. Instanzen" hint="Parallel laufende Kopien">
+            <input
+              type="number"
+              min="1"
+              max="20"
+              value={draft.max_instances}
+              onInput={(e) => setDraft('max_instances', Number(e.currentTarget.value))}
+            />
+          </Field>
+        </div>
+
+        <Field label="Anweisungen">
+          <textarea
+            rows="6"
+            value={draft.instructions}
+            onInput={(e) => setDraft('instructions', e.currentTarget.value)}
+          />
+        </Field>
+
+        <Show when={board.skills.length}>
+          <div class="field">
+            <span>Skills</span>
+            <div class="chips">
+              <For each={board.skills}>
+                {(skill) => (
+                  <Toggle
+                    label={skill.name}
+                    title={skill.description}
+                    checked={draft.skill_ids.includes(skill.id)}
+                    onChange={(on) => toggleSkill(skill.id, on)}
+                  />
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={connections()?.length}>
+          <div class="field">
+            <span>MCP-Verbindungen</span>
+            <div class="chips">
+              <For each={connections()}>
+                {(connection) => (
+                  <Toggle
+                    label={connection.label}
+                    title={connection.description}
+                    checked={draft.mcp_ids.includes(connection.id)}
+                    onChange={(on) => toggleConnection(connection.id, on)}
+                  />
+                )}
+              </For>
+            </div>
+            <Show when={draft.provider === 'deepseek' && draft.mcp_ids.length}>
+              <small>Der Deepseek-Agent kann MCP-Verbindungen noch nicht nutzen.</small>
+            </Show>
+          </div>
+        </Show>
+
+        <Toggle label="Aktiv" checked={draft.enabled} onChange={(on) => setDraft('enabled', on)} />
+
+        <footer>
+          <Show when={draft.id}>
+            <button type="button" class="ghost danger" onClick={remove}>
+              Löschen
+            </button>
+          </Show>
+          <span class="spacer" />
+          <button type="button" onClick={props.onClose}>
+            Abbrechen
+          </button>
+          <button class="primary" type="submit">
+            Speichern
+          </button>
+        </footer>
+      </form>
+    </Modal>
+  )
+}
