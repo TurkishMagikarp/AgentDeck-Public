@@ -3,6 +3,7 @@
 import { getSecret, setSecret } from './auth.ts'
 import { addComment } from './core.ts'
 import { get, run } from './db.ts'
+import { sendPush } from './push.ts'
 
 type MailSettings = { inbox: string; to: string; hasKey: boolean }
 
@@ -37,12 +38,20 @@ export async function sendMail(subject: string, text: string) {
 
 const PUBLIC_URL = (process.env.AGENTDECK_PUBLIC_URL ?? '').replace(/\/$/, '')
 
-/** Tells the owner that an issue needs them. Quietly does nothing when mail is off or not set up. */
+/**
+ * Tells the owner that an issue needs them: by push on every subscribed device, and by mail when
+ * mail is set up. Quietly does nothing when the project does not want to be told.
+ */
 export function notifyOwner(project: any, issue: any, reason: string) {
-  const { inbox, to, hasKey } = mailSettings()
-  if (!project.settings.notifyOwner || !inbox || !to || !hasKey) return
-
+  if (!project.settings.notifyOwner) return
   const key = `${project.key}-${issue.number}`
+  sendPush(`${key}: ${issue.title}`, reason, `/#${key}`).catch((error) =>
+    console.error('push', error.message),
+  )
+
+  const { inbox, to, hasKey } = mailSettings()
+  if (!inbox || !to || !hasKey) return
+
   const text = [reason, issue.description, PUBLIC_URL && `${PUBLIC_URL}/#${key}`].filter(Boolean).join('\n\n')
 
   sendMail(`[${project.name}] ${key} waits for you: ${issue.title}`, text).catch((error) => {

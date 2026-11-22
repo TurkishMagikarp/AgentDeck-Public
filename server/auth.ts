@@ -5,6 +5,7 @@ import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'node:
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR, get, run } from './db.ts'
+import { wakeProvider } from './recovery.ts'
 
 export type AccessMode = 'subscription' | 'apikey'
 type LoginKind = 'claude' | 'codex'
@@ -24,6 +25,7 @@ export const ACCESS: Record<string, AccessInfo> = {
   },
   opencode: { modes: ['subscription', 'apikey'], statusCommand: ['opencode', ['auth', 'list']] },
   deepseek: { modes: ['apikey'] },
+  'claude-managed': { modes: ['apikey'] },
   mock: { modes: ['subscription'] },
 }
 
@@ -119,6 +121,8 @@ export async function setAccess(provider: string, mode: AccessMode, newKey?: str
   // Codex only takes an API key through its own login, so it gets a config folder of its own.
   // The subscription login in the default folder stays untouched.
   if (provider === 'openai' && newKey) await storeCodexApiKey(newKey)
+  // New access, new chance: a provider resting after a broken login may be asked again at once.
+  wakeProvider(provider)
 }
 
 function storeCodexApiKey(key: string) {
@@ -257,6 +261,7 @@ export function startLogin(provider: string) {
   child.on('close', (exitCode) => {
     clearTimeout(login.timer)
     if (login.state === 'waiting') login.state = exitCode === 0 ? 'done' : 'failed'
+    if (login.state === 'done') wakeProvider(provider)
   })
   return loginView(provider)
 }

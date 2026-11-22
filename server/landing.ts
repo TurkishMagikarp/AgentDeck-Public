@@ -3,10 +3,11 @@
 //   pr:    pushed and opened as a pull request; it is merged once its checks pass.
 // Agents never land anything themselves. This runs in the server, after the last approval.
 import { execFile } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { apiKeyOfConnection } from './mcp.ts'
-import { DATA_DIR, all, run } from './db.ts'
+import { DATA_DIR, all, get, run } from './db.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -18,6 +19,19 @@ export type LandingSettings = {
   push: boolean
   /** Paths (prefixes) only a human may change. A branch touching them is not landed automatically. */
   protectedPaths: string[]
+  /**
+   * A file that holds this project's own GitHub token, e.g. a short-lived GitHub App token for one
+   * repository that a host job keeps fresh. Empty: the GitHub connection or the gh login.
+   */
+  githubTokenFile: string
+  /** pr mode only: how GitHub merges the pull request. */
+  mergeMethod: 'merge' | 'squash' | 'rebase'
+  /**
+   * Proof the maker has to give before a branch lands, e.g. screenshots for a visible change:
+   * when the branch touches one of the paths, the maker's last summary must contain one of the
+   * markers. Otherwise the issue goes back to the maker. Empty paths: no such rule.
+   */
+  evidence: { paths: string[]; markers: string[] }
 }
 
 export type Outcome = {
@@ -46,11 +60,44 @@ const succeeds = (command: Promise<unknown>) =>
     () => false,
   )
 
-/** gh uses the GitHub connection's token when one is stored, otherwise its own login. */
-async function gh(repo: string, ...args: string[]) {
-  const token = apiKeyOfConnection('github')
+/**
+ * The project's own token file wins, then the GitHub connection. Null: gh uses its own login.
+ * The file is read every time because the host job replaces it before the token expires.
+ */
+export function githubTokenOf(project: { settings: { landing: LandingSettings } }): string | null {
+  const file = project.settings.landing.githubTokenFile
+  if (file) {
+    // A missing or empty file must not fall back to a login with wider rights.
+    let token = ''
+    try {
+      token = readFileSync(file, 'utf8').trim()
+    } catch {}
+    if (!token) throw new Error(`The GitHub token file ${file} is missing or empty.`)
+    return token
+  }
+  return apiKeyOfConnection('github')
+}
+
+async function gh(project: Project, ...args: string[]) {
+  const token = githubTokenOf(project)
   const env = token ? { ...process.env, GH_TOKEN: token } : process.env
-  const { stdout } = await execFileAsync('gh', args, { cwd: repo, env, maxBuffer: 16 * 1024 * 1024 })
+  const { stdout } = await execFileAsync('gh', args, {
+    cwd: repoOf(project),
+    env,
+    maxBuffer: 16 * 1024 * 1024,
+  })
+  return stdout.trim()
+}
+
+/** Pushes with the project's token through gh's credential helper; without a token git decides. */
+async function push(project: Project, ...args: string[]) {
+  const token = githubTokenOf(project)
+  if (!token) return git(repoOf(project), 'push', ...args)
+  const helper = ['-c', 'credential.helper=', '-c', 'credential.helper=!gh auth git-credential']
+  const { stdout } = await execFileAsync('git', ['-C', repoOf(project), ...helper, 'push', ...args], {
+    env: { ...process.env, GH_TOKEN: token },
+    maxBuffer: 16 * 1024 * 1024,
+  })
   return stdout.trim()
 }
 
@@ -68,6 +115,27 @@ function inTurn<T>(repo: string, work: () => Promise<T>): Promise<T> {
 
 const touchesProtected = (files: string[], settings: LandingSettings) =>
   files.filter((file) => settings.protectedPaths.some((path) => path && file.startsWith(path)))
+
+/** What the maker wrote at the end of its last run on this issue. */
+function makerSummary(issue: Issue): string {
+  const row = get(
+    `SELECT c.body FROM comments c JOIN issues i ON i.id = c.issue_id
+       JOIN agents a ON a.id = COALESCE(i.maker_id, i.assignee_id)
+     WHERE c.issue_id = ? AND c.kind = 'agent' AND c.author = a.name
+     ORDER BY c.id DESC LIMIT 1`,
+    issue.id,
+  )
+  return row?.body ?? ''
+}
+
+function missingEvidence(files: string[], issue: Issue, settings: LandingSettings): string | null {
+  const { paths, markers } = settings.evidence
+  const touched = files.filter((file) => paths.some((path) => path && file.startsWith(path)))
+  if (!touched.length || !markers.length) return null
+  const summary = makerSummary(issue)
+  if (markers.some((marker) => summary.includes(marker))) return null
+  return `The branch changes ${touched.slice(0, 3).join(', ')}, but your summary contains no proof (${markers.map((m) => `"${m}"`).join(' or ')}). Please add it and hand in again.`
+}
 
 const OWNER_REVIEW = (files: string[]) =>
   `The branch changes protected files (${files.slice(0, 5).join(', ')}). It does not land automatically, please review and merge it yourself.`
@@ -92,6 +160,8 @@ export function landIssue(project: Project, issue: Issue): Promise<Outcome> {
       .filter(Boolean)
     const guarded = touchesProtected(changed, settings)
     if (guarded.length) return { status: 'blocked', note: OWNER_REVIEW(guarded), needsOwner: true }
+    const evidenceNote = missingEvidence(changed, issue, settings)
+    if (evidenceNote) return { status: 'todo', note: evidenceNote }
 
     return settings.mode === 'merge'
       ? mergeLocally(repo, base, branch, project, issue, settings)
@@ -132,7 +202,7 @@ async function mergeLocally(
   }
 
   const commit = (await git(repo, 'rev-parse', '--short', 'HEAD')) || '?'
-  if (settings.push && !(await succeeds(git(repo, 'push', 'origin', base)))) {
+  if (settings.push && !(await succeeds(push(project, 'origin', base)))) {
     return {
       status: 'blocked',
       note: `Merged into ${base} locally (${commit}), but the push failed.`,
@@ -142,6 +212,17 @@ async function mergeLocally(
   return { status: 'done', note: `Landed in ${base} (${commit}).` }
 }
 
+function pullRequestBody(project: Project, issue: Issue) {
+  const summary = makerSummary(issue).trim()
+  const head = `${project.key}-${issue.number}, opened by AgentDeck after review.`
+  // GitHub refuses bodies above 65536 characters.
+  return summary
+    ? `${head}
+
+${summary}`.slice(0, 60_000)
+    : head
+}
+
 async function openPullRequest(
   repo: string,
   base: string,
@@ -149,16 +230,16 @@ async function openPullRequest(
   project: Project,
   issue: Issue,
 ): Promise<Outcome> {
-  await git(repo, 'push', '--force-with-lease', 'origin', `${branch}:${branch}`)
+  await push(project, '--force-with-lease', 'origin', `${branch}:${branch}`)
 
   const open = JSON.parse(
-    await gh(repo, 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'),
+    await gh(project, 'pr', 'list', '--head', branch, '--state', 'open', '--json', 'number'),
   )
   let number: number = open[0]?.number
   if (!number) {
     const title = `${project.key}-${issue.number}: ${issue.title}`
     const url = await gh(
-      repo,
+      project,
       'pr',
       'create',
       '--base',
@@ -168,7 +249,7 @@ async function openPullRequest(
       '--title',
       title,
       '--body',
-      'Opened by AgentDeck after review.',
+      pullRequestBody(project, issue),
     )
     number = Number(url.split('/').pop())
   }
@@ -204,7 +285,7 @@ async function settlePullRequest(
 ): Promise<Outcome | null> {
   const repo = repoOf(project)
   const view = JSON.parse(
-    await gh(repo, 'pr', 'view', String(issue.pr_number), '--json', 'state,headRefOid,statusCheckRollup'),
+    await gh(project, 'pr', 'view', String(issue.pr_number), '--json', 'state,headRefOid,statusCheckRollup'),
   )
 
   if (view.state === 'MERGED') return { status: 'done', note: `Pull request #${issue.pr_number} was merged.` }
@@ -226,7 +307,17 @@ async function settlePullRequest(
   }
 
   // Merge exactly the commit that was reviewed and checked, never something pushed in between.
-  await gh(repo, 'pr', 'merge', String(issue.pr_number), '--merge', '--match-head-commit', view.headRefOid)
+  const method = project.settings.landing.mergeMethod
+  await gh(
+    project,
+    'pr',
+    'merge',
+    String(issue.pr_number),
+    `--${method}`,
+    ...(method === 'merge' ? [] : ['--delete-branch']),
+    '--match-head-commit',
+    view.headRefOid,
+  )
   await succeeds(git(repo, 'pull', '--ff-only'))
   return { status: 'done', note: `Merged pull request #${issue.pr_number}.` }
 }

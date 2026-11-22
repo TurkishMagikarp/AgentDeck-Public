@@ -1,4 +1,4 @@
-import { createSignal, For, Match, Show, Switch } from 'solid-js'
+import { createResource, createSignal, For, Match, Show, Switch } from 'solid-js'
 import { api } from './api'
 import { fail, loadProjects, openProject, providers } from './store'
 import { Field, Modal } from './ui'
@@ -6,7 +6,7 @@ import { Field, Modal } from './ui'
 type ApplyResult = { projectId: number; agents: number; skills: number; issues: number }
 
 export function NewProject(props: { onClose: () => void }) {
-  const [mode, setMode] = createSignal<'ai' | 'manual'>('ai')
+  const [mode, setMode] = createSignal<'ai' | 'template' | 'manual'>('ai')
 
   async function finish(projectId: number) {
     await loadProjects()
@@ -20,6 +20,9 @@ export function NewProject(props: { onClose: () => void }) {
         <button classList={{ active: mode() === 'ai' }} onClick={() => setMode('ai')}>
           Let the AI set it up
         </button>
+        <button classList={{ active: mode() === 'template' }} onClick={() => setMode('template')}>
+          From a template
+        </button>
         <button classList={{ active: mode() === 'manual' }} onClick={() => setMode('manual')}>
           Empty project
         </button>
@@ -27,6 +30,9 @@ export function NewProject(props: { onClose: () => void }) {
       <Switch>
         <Match when={mode() === 'ai'}>
           <AiSetup onDone={finish} />
+        </Match>
+        <Match when={mode() === 'template'}>
+          <TemplateSetup onDone={finish} />
         </Match>
         <Match when={mode() === 'manual'}>
           <ManualSetup onDone={finish} />
@@ -183,5 +189,89 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
         </footer>
       </div>
     </Show>
+  )
+}
+
+type Template = { id: string; name: string; summary: string; agents: string[]; issues: number }
+
+function TemplateSetup(props: { onDone: (projectId: number) => void }) {
+  const [templates] = createResource(() => api.get<Template[]>('/templates'))
+  const [chosen, setChosen] = createSignal('')
+  const [name, setName] = createSignal('')
+  const [key, setKey] = createSignal('')
+  const [repoPath, setRepoPath] = createSignal('')
+
+  const suggestedKey = () =>
+    name()
+      .replace(/[^a-zA-Z]/g, '')
+      .slice(0, 4)
+      .toUpperCase()
+
+  async function create(e: SubmitEvent) {
+    e.preventDefault()
+    try {
+      const result = await api.post<ApplyResult>(`/templates/${chosen()}`, {
+        name: name(),
+        key: key() || suggestedKey(),
+        repo_path: repoPath(),
+      })
+      props.onDone(result.projectId)
+    } catch (err) {
+      fail(err)
+    }
+  }
+
+  return (
+    <form class="form" onSubmit={create}>
+      <div class="templates">
+        <For each={templates()}>
+          {(template) => (
+            <button
+              type="button"
+              class="template"
+              classList={{ active: chosen() === template.id }}
+              onClick={() => setChosen(template.id)}
+            >
+              <strong>{template.name}</strong>
+              <span>{template.summary}</span>
+              <small class="muted">
+                {template.agents.join(', ')} · {template.issues} starter issues
+              </small>
+            </button>
+          )}
+        </For>
+      </div>
+      <Show when={chosen()}>
+        <div class="row">
+          <Field label="Name">
+            <input required value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+          </Field>
+          <Field label="Key" hint="Issue prefix, e.g. SHOP-12">
+            <input
+              placeholder={suggestedKey()}
+              maxLength={8}
+              value={key()}
+              onInput={(e) => setKey(e.currentTarget.value.toUpperCase())}
+            />
+          </Field>
+        </div>
+        <Field label="Git repository on the server" hint="Empty = AgentDeck creates a working folder.">
+          <input
+            placeholder="/repos/my-project"
+            value={repoPath()}
+            onInput={(e) => setRepoPath(e.currentTarget.value)}
+          />
+        </Field>
+        <p class="muted">
+          The project is fully autonomous and starts paused: check agents and providers, then press "Resume".
+        </p>
+      </Show>
+      <footer>
+        <span class="spacer" />
+        <button class="primary" type="submit" disabled={!chosen()}>
+          Create project
+        </button>
+      </footer>
+    </form>
   )
 }

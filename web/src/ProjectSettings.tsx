@@ -1,6 +1,7 @@
 import { api } from './api'
+import { Icon } from './icons'
 import { board, closeProject, fail, loadProjects, saveSettings } from './store'
-import { For, Show } from 'solid-js'
+import { createResource, createSignal, For, Show } from 'solid-js'
 import { Field, Select, Toggle } from './ui'
 
 const LANDING_MODES = [
@@ -8,6 +9,26 @@ const LANDING_MODES = [
   ['merge', 'Merge directly'],
   ['pr', 'Pull request, merge after green checks'],
 ] as const
+
+const MERGE_METHODS = [
+  ['merge', 'Merge commit'],
+  ['squash', 'Squash'],
+  ['rebase', 'Rebase'],
+] as const
+
+const splitLines = (text: string) =>
+  text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+/** Long enough that nobody guesses the showcase link. */
+function randomSlug() {
+  const bytes = crypto.getRandomValues(new Uint8Array(9))
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+}
 
 const WORKSPACES = [
   ['issue', 'One worktree per issue'],
@@ -54,7 +75,7 @@ export function ProjectSettings() {
         <div class="row">
           <Field
             label="Checkout"
-            hint="Per agent: each agent keeps its own checkout, so build caches (Godot import, node_modules) survive."
+            hint="Per agent: each agent keeps its own checkout, so build caches (asset import, node_modules) survive."
           >
             <Select
               value={project().settings.workspace}
@@ -85,6 +106,7 @@ export function ProjectSettings() {
           <div class="section-head">
             <h3>Landing</h3>
             <Select
+              aria-label="Landing"
               value={project().settings.landing.mode}
               options={LANDING_MODES}
               onChange={(mode) => saveSettings((s) => void (s.landing.mode = mode))}
@@ -113,6 +135,15 @@ export function ProjectSettings() {
                   onChange={(on) => saveSettings((s) => void (s.landing.push = on))}
                 />
               </Show>
+              <Show when={project().settings.landing.mode === 'pr'}>
+                <Field label="Merge method">
+                  <Select
+                    value={project().settings.landing.mergeMethod}
+                    options={MERGE_METHODS}
+                    onChange={(method) => saveSettings((s) => void (s.landing.mergeMethod = method))}
+                  />
+                </Field>
+              </Show>
             </div>
             <Field
               label="Protected paths"
@@ -129,6 +160,49 @@ export function ProjectSettings() {
                     .map((path) => path.trim())
                     .filter(Boolean)
                   saveSettings((s) => void (s.landing.protectedPaths = paths))
+                }}
+              />
+            </Field>
+            <div class="row">
+              <Field
+                label="Evidence required for"
+                hint="Paths, one per line. If a branch changes anything under them, the agent's summary must contain one of the evidence lines on the right, otherwise the issue goes back to the agent."
+              >
+                <textarea
+                  rows="3"
+                  class="mono"
+                  placeholder={'src/ui/\nassets/'}
+                  value={project().settings.landing.evidence.paths.join('\n')}
+                  onChange={(e) => {
+                    const paths = splitLines(e.currentTarget.value)
+                    saveSettings((s) => void (s.landing.evidence.paths = paths))
+                  }}
+                />
+              </Field>
+              <Field label="Evidence lines" hint='Text, one per line, e.g. "Screenshot:".'>
+                <textarea
+                  rows="3"
+                  class="mono"
+                  placeholder={'Screenshot:\nUI unchanged'}
+                  value={project().settings.landing.evidence.markers.join('\n')}
+                  onChange={(e) => {
+                    const markers = splitLines(e.currentTarget.value)
+                    saveSettings((s) => void (s.landing.evidence.markers = markers))
+                  }}
+                />
+              </Field>
+            </div>
+            <Field
+              label="GitHub token file"
+              hint="Optional. Path in the container to a token for this project only, such as a GitHub App token that a host job renews. Agents get it as GH_TOKEN, and landing uses it. Empty = GitHub connection or gh login."
+            >
+              <input
+                class="mono"
+                placeholder="/run/github/token"
+                value={project().settings.landing.githubTokenFile}
+                onChange={(e) => {
+                  const file = e.currentTarget.value.trim()
+                  saveSettings((s) => void (s.landing.githubTokenFile = file))
                 }}
               />
             </Field>
@@ -177,6 +251,121 @@ export function ProjectSettings() {
           onChange={(on) => saveSettings((s) => void (s.notifyOwner = on))}
         />
 
+        <section class="section">
+          <div class="section-head">
+            <h3>Cost cap per issue</h3>
+          </div>
+          <p class="muted">
+            If an issue uses more, it is parked after the current run and you get notified. "Allow another
+            round" lets it use the same amount again. 0 = no cap.
+          </p>
+          <div class="row">
+            <Field label="Dollars" hint="As reported by the provider, also on a subscription">
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={project().settings.issueCap.usd}
+                onChange={(e) => {
+                  const usd = Math.max(0, Number(e.currentTarget.value) || 0)
+                  saveSettings((s) => void (s.issueCap.usd = usd))
+                }}
+              />
+            </Field>
+            <Field label="Thousand tokens" hint="New tokens, without cache">
+              <input
+                type="number"
+                min="0"
+                step="50"
+                value={project().settings.issueCap.tokens / 1000}
+                onChange={(e) => {
+                  const tokens = Math.max(0, Math.round(Number(e.currentTarget.value) * 1000) || 0)
+                  saveSettings((s) => void (s.issueCap.tokens = tokens))
+                }}
+              />
+            </Field>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h3>Preview with screenshots</h3>
+          </div>
+          <p class="muted">
+            When work goes to review, AgentDeck starts the app from the branch, takes a desktop and a phone
+            screenshot and stops it again. The images show in the issue, and the reviewer gets them too.
+          </p>
+          <div class="row">
+            <Field label="Start command" hint="$PORT is replaced by a free port. Empty = off.">
+              <input
+                class="mono"
+                placeholder="npm run dev -- --port $PORT"
+                value={project().settings.preview.command}
+                onChange={(e) => {
+                  const command = e.currentTarget.value.trim()
+                  saveSettings((s) => void (s.preview.command = command))
+                }}
+              />
+            </Field>
+            <Field label="Page" hint="Path that gets captured">
+              <input
+                class="mono"
+                value={project().settings.preview.path}
+                onChange={(e) => {
+                  const path = e.currentTarget.value.trim() || '/'
+                  saveSettings((s) => void (s.preview.path = path))
+                }}
+              />
+            </Field>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-head">
+            <h3>Showcase</h3>
+            <Toggle
+              label="Public page"
+              checked={project().settings.showcase.enabled}
+              onChange={(on) =>
+                saveSettings((s) => {
+                  s.showcase.enabled = on
+                  if (on && !s.showcase.slug) s.showcase.slug = randomSlug()
+                })
+              }
+            />
+          </div>
+          <p class="muted">
+            A page without login that shows which agents are working right now and what got done. No code, no
+            comments, no costs. Anyone with the link can see it.
+          </p>
+          <Show when={project().settings.showcase.enabled}>
+            <div class="inline-row">
+              <a
+                class="mono"
+                href={`/show/${project().settings.showcase.slug}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {location.origin}/show/{project().settings.showcase.slug}
+              </a>
+              <button
+                class="ghost"
+                title="The old link stops working afterwards"
+                onClick={() => saveSettings((s) => void (s.showcase.slug = randomSlug()))}
+              >
+                New link
+              </button>
+            </div>
+            <Toggle
+              label="Show issue titles"
+              checked={project().settings.showcase.titles}
+              onChange={(on) => saveSettings((s) => void (s.showcase.titles = on))}
+            />
+          </Show>
+        </section>
+
+        <Lessons projectId={project().id} />
+
         <Field label="Context for all agents">
           <textarea
             rows="6"
@@ -191,5 +380,71 @@ export function ProjectSettings() {
         </footer>
       </div>
     </div>
+  )
+}
+
+type Lesson = { id: number; body: string; source: string; created_at: number }
+
+/** Notes every run of the project reads: written by agents, by the self-healing, or by hand. */
+function Lessons(props: { projectId: number }) {
+  const [lessons, { mutate }] = createResource(
+    () => props.projectId,
+    (id) => api.get<Lesson[]>(`/projects/${id}/lessons`),
+  )
+  const [draft, setDraft] = createSignal('')
+
+  function add() {
+    if (!draft().trim()) return
+    api
+      .post<Lesson[]>(`/projects/${props.projectId}/lessons`, { body: draft() })
+      .then((list) => {
+        mutate(list)
+        setDraft('')
+      })
+      .catch(fail)
+  }
+
+  function remove(lesson: Lesson) {
+    api.del<Lesson[]>(`/projects/${props.projectId}/lessons/${lesson.id}`).then(mutate).catch(fail)
+  }
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Lessons learned</h3>
+      </div>
+      <p class="muted">
+        Every run reads the latest 15 notes. Agents write them themselves when they find out something that is
+        not in the repository.
+      </p>
+      <ul class="lessons">
+        <For each={lessons()} fallback={<li class="muted">Nothing learned yet.</li>}>
+          {(lesson) => (
+            <li>
+              <span>{lesson.body}</span>
+              <small class="muted">{lesson.source}</small>
+              <button
+                class="ghost icon-button"
+                title="Delete note"
+                aria-label="Delete note"
+                onClick={() => remove(lesson)}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+      <div class="inline-row">
+        <input
+          placeholder='e.g. Tests run with "npm test -- --run"'
+          aria-label="New note"
+          value={draft()}
+          onInput={(e) => setDraft(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+        />
+        <button onClick={add}>Add</button>
+      </div>
+    </section>
   )
 }

@@ -11,23 +11,61 @@ AgentDeck is small on purpose: one Node process, one SQLite file, no external se
 - **Projects instead of organisations.** Each project has its own repository, agents, board and
   settings.
 - **Agents through the CLIs you already use.** Claude Code, Codex CLI and opencode run as
-  subprocesses; Deepseek runs through a built-in agent loop against its API. Per provider you choose
+  subprocesses; Deepseek runs through a built-in agent loop against its API, and Claude Managed
+  Agents run the agent loop at Anthropic with the tools on your server. Per provider you choose
   subscription or API key, and Claude and Codex can be logged in from the web interface.
+- **Templates.** Ready-made teams (SaaS MVP, game studio, blog with a daily article) create a
+  project with agents, first issues and a planning routine in one step. New projects start paused.
 - **One branch per issue.** Agents work in git worktrees, either one per issue or one fixed checkout
   per agent so build caches survive.
 - **Reviews and landing.** Issues can go through a chain of reviewers. Finished work is merged
-  locally or opened as a pull request, with checks and protected paths.
-- **Routines.** Recurring issues at a set time, e.g. a daily report.
+  locally or opened as a pull request, with checks and protected paths. A project can ask for proof
+  (e.g. screenshots) before a branch that touches certain paths lands.
+- **Branch preview.** When work goes to review, AgentDeck can start the app from the issue's branch
+  and take a desktop and a phone screenshot with Playwright. Owner and reviewer see the result
+  without starting anything.
+- **Code changes and git view.** Each issue shows its commits and diff against the base branch,
+  including uncommitted work while an agent is still on it. A graph per project shows the base
+  branch, one lane per issue branch, what has landed and which agent works where.
+- **Dependencies and blocker priority.** Issues can wait on other issues. An issue that holds up
+  others starts first, boosted by how many it holds up through the whole chain. Rings of issues
+  that wait on each other are resolved: the deputy agent decides which dependency goes, otherwise
+  AgentDeck removes the newest one.
+- **Waiting reasons.** Every issue that does not start says why: a blocker, a retry, a busy agent,
+  the project limit, no provider left, or quota being saved.
+- **Self-healing.** A failed run is sorted by kind of failure. A rate limit or a broken login rests
+  the provider and does not count as a failed attempt; a missing tool or an overfull context gets a
+  hint for the next run; the same unexplained error twice moves the issue to another provider.
+- **Lessons.** Build commands, pitfalls and tools that had to be installed are recorded per project,
+  by agents, by self-healing or by you. Every run reads the newest ones.
+- **Quota pacing.** AgentDeck reads how full the subscription windows are and when they reset. With
+  little left and the reset far away it runs one issue at a time and holds back big ones; shortly
+  before a reset with plenty left, big issues go first.
+- **Cost cap per issue.** An issue that used more than the project allows (dollars or tokens) is
+  parked instead of eating everyone else's budget. You can grant it another round.
+- **Routines.** Recurring issues at a set time, e.g. a daily report, or a planner that only fires
+  when nothing in the project is open.
 - **Watchdog and autonomy.** Stuck issues are handed to a deputy agent or parked in the backlog, so
-  nothing waits forever. Run budgets cap what a single run may spend.
+  nothing waits forever. A parked issue that blocks open work goes back into the queue. Run budgets
+  cap what a single run may spend.
 - **Live run log.** Follow what an agent is doing while it works.
-- **Usage and dashboard.** Tokens per agent (new and cached), quotas over time, what got done.
+- **Issue search and issue page.** Search across all projects by key, number or words. Each issue
+  has its own page with dependencies, history of changes, comments, screenshots and code.
+- **Usage, outcomes and dashboard.** Tokens per agent (new and cached), quotas over time, what got
+  done, and what the runs achieved: per agent how much of its work landed and how often reviewers
+  approved it, per model how often a run ended with a usable result.
 - **Built-in MCP connections.** GitHub, PixelLab, ElevenLabs, Recraft and Meshy, assigned per agent.
 - **ADHD mode.** Per project, agents answer with one result line and at most three bullets.
-- **Owner mails.** When an issue waits for a human, AgentDeck can send a mail through AgentMail.
+- **Owner notifications.** When an issue waits for a human, AgentDeck sends a web push to your
+  devices and, if set up, a mail through AgentMail.
+- **Morning report.** Once a day at a set time, one look at the last 24 hours across all projects:
+  one line per project, parked and finished work first. Sent by push and mail.
+- **Showcase.** An optional read-only public page per project at `/show/<slug>` that shows the
+  agents at work, for a demo or a job application. Never code, costs or comments.
+- **Housekeeping.** Old run logs, finished branches, temp files and CLI sessions are cleaned up once
+  a day; checkouts that grew too big lose their build output before their next run.
 - **Skill for Claude Code.** Describe a project in one sentence and let Claude set it up in
   AgentDeck.
-- **Paperclip import.** Move an existing Paperclip company over, with issue numbers and history.
 
 ## Quick start
 
@@ -84,17 +122,35 @@ location /api/events {
 `AGENTDECK_TRUST_PROXY=1` lets requests with a `Remote-User` header in without a token. It is only
 safe while the port is reachable through the proxy alone and the proxy sets that header itself.
 
+### Showcase behind Authelia
+
+The showcase is reachable without a login on purpose. If Authelia guards the whole domain, it needs
+an exception for exactly these paths, or nobody sees the page:
+
+```
+access_control:
+  rules:
+    - domain: agents.example.com
+      resources: ['^/show/[\w-]+$', '^/api/public/[\w-]+$', '^/icon\.svg$']
+      policy: bypass
+```
+
+The page shows agents, states and counts, and issue titles only when switched on. Code, comments,
+costs and settings never leave the login. "New link" invalidates the old one at once.
+
 ## Configuration
 
-| Variable                | Default         | Meaning                                                    |
-| ----------------------- | --------------- | ---------------------------------------------------------- |
-| `PORT`, `HOST`          | 8790, 127.0.0.1 | Server address                                             |
-| `AGENTDECK_DATA`        | `./data`        | Database, worktrees, working folders                       |
-| `AGENTDECK_TOKEN`       | empty           | If set, the API requires `Authorization: Bearer …`         |
-| `AGENTDECK_SECRET`      | empty           | Key for stored API keys; falls back to `data/secret.key`   |
-| `AGENTDECK_TRUST_PROXY` | off             | `1`: trust the `Remote-User` header from a reverse proxy   |
-| `AGENTDECK_CACHE_MB`    | 256             | SQLite page cache in RAM                                   |
-| `AGENTDECK_MOCK`        | off             | `1`: adds a "Mock" provider for testing without real usage |
+| Variable                      | Default         | Meaning                                                       |
+| ----------------------------- | --------------- | ------------------------------------------------------------- |
+| `PORT`, `HOST`                | 8790, 127.0.0.1 | Server address                                                |
+| `AGENTDECK_DATA`              | `./data`        | Database, worktrees, working folders                          |
+| `AGENTDECK_TOKEN`             | empty           | If set, the API requires `Authorization: Bearer …`            |
+| `AGENTDECK_SECRET`            | empty           | Key for stored API keys; falls back to `data/secret.key`      |
+| `AGENTDECK_TRUST_PROXY`       | off             | `1`: trust the `Remote-User` header from a reverse proxy      |
+| `AGENTDECK_CACHE_MB`          | 256             | SQLite page cache in RAM                                      |
+| `AGENTDECK_MOCK`              | off             | `1`: adds a "Mock" provider for testing without real usage    |
+| `AGENTDECK_PUBLIC_URL`        | empty           | Public address for links in mails and as the web push sender  |
+| `AGENTDECK_CHECKOUT_LIMIT_GB` | 10              | Checkouts above this size lose their build output on next run |
 
 ## Providers and access
 
@@ -113,33 +169,44 @@ export AGENTDECK_URL=https://your-domain   AGENTDECK_TOKEN=…
 
 Then a sentence like "Set up a project in AgentDeck for …" in Claude Code is enough.
 
-## Importing from Paperclip
+## Importing from another tracker
 
-`scripts/import-paperclip.mjs` copies one Paperclip company into a new AgentDeck project: agents,
-issues with their numbers, comments, blockers, review stages and active routines. Paperclip is only
-read. With `--dry` everything goes to `import-preview.json` and nothing is sent.
-
-```
-AGENTDECK_TOKEN=… node scripts/import-paperclip.mjs --paperclip http://127.0.0.1:3101 \
-  --auth /path/auth.json --company <company id> --key ABC --repo /repos/<name>
-```
+`POST /api/import` creates a project from a JSON description and keeps issue numbers, dates and
+comments (see `server/importer.ts`). The imported project starts paused.
 
 ## Project layout
 
-| Path                  | Contents                                                      |
-| --------------------- | ------------------------------------------------------------- |
-| `server/db.ts`        | SQLite schema and access (WAL, large page cache)              |
-| `server/core.ts`      | Settings, board cache, events, usage, routing                 |
-| `server/adapters.ts`  | Starting the agent CLIs and reading their output              |
-| `server/engine.ts`    | Scheduler, hand-over between agents, watchdog                 |
-| `server/landing.ts`   | Merging finished work or opening pull requests                |
-| `server/auth.ts`      | Subscription or API key per provider, login from the UI       |
-| `server/apiAgent.ts`  | Built-in agent for providers with a plain chat API (Deepseek) |
-| `server/mcp.ts`       | Built-in MCP connections                                      |
-| `server/blueprint.ts` | Creating a project from a JSON description                    |
-| `server/main.ts`      | HTTP API, live events (SSE), serving the UI                   |
-| `web/src`             | Web interface (SolidJS)                                       |
-| `skill/agentdeck`     | Skill and CLI that let an AI build projects in AgentDeck      |
+| Path                     | Contents                                                      |
+| ------------------------ | ------------------------------------------------------------- |
+| `server/db.ts`           | SQLite schema and access (WAL, large page cache)              |
+| `server/core.ts`         | Settings, board cache, events, usage, routing                 |
+| `server/adapters.ts`     | Starting the agent CLIs and reading their output              |
+| `server/engine.ts`       | Scheduler, hand-over between agents, watchdog                 |
+| `server/landing.ts`      | Merging finished work or opening pull requests                |
+| `server/auth.ts`         | Subscription or API key per provider, login from the UI       |
+| `server/apiAgent.ts`     | Built-in agent for providers with a plain chat API (Deepseek) |
+| `server/managedAgent.ts` | Claude Managed Agents with the tools running on this server   |
+| `server/mcp.ts`          | Built-in MCP connections                                      |
+| `server/blueprint.ts`    | Creating a project from a JSON description                    |
+| `server/importer.ts`     | Taking over a project from another tracker                    |
+| `server/recovery.ts`     | Self-healing: kind of failure, resting providers, hints       |
+| `server/lessons.ts`      | What a project has learned, read by every run                 |
+| `server/pacing.ts`       | Spending quota along the subscription windows                 |
+| `server/blockers.ts`     | Blocker priority and dependency rings                         |
+| `server/issueCap.ts`     | Cost cap per issue                                            |
+| `server/preview.ts`      | Starting a branch's app and taking screenshots                |
+| `server/diff.ts`         | Code changes of an issue (branch diff, uncommitted work)      |
+| `server/gitGraph.ts`     | Data for the git graph: branches, commits, agents             |
+| `server/search.ts`       | Issue search across all projects                              |
+| `server/stats.ts`        | Usage and outcome metrics                                     |
+| `server/push.ts`         | Web push to your devices                                      |
+| `server/report.ts`       | Morning report across all projects                            |
+| `server/showcase.ts`     | Public showcase of a project at `/show/…`                     |
+| `server/templates.ts`    | Ready-made teams for new projects                             |
+| `server/housekeeping.ts` | Daily cleanup of logs, branches, temp files and sessions      |
+| `server/main.ts`         | HTTP API, live events (SSE), serving the UI                   |
+| `web/src`                | Web interface (SolidJS)                                       |
+| `skill/agentdeck`        | Skill and CLI that let an AI build projects in AgentDeck      |
 
 Stack: Node 24 (runs TypeScript directly, `node:sqlite`), Hono, SolidJS, Vite, server-sent events.
 

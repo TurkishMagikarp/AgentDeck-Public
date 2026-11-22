@@ -14,16 +14,34 @@ export type WatchdogRule = {
   action: 'comment' | 'stop' | 'block'
 }
 
+export type WaitReason = {
+  kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'
+  text: string
+}
+
 export type Settings = {
   maxConcurrent: number
   adhd: boolean
   workspace: 'issue' | 'agent'
   maxReviewRounds: number
-  landing: { mode: 'off' | 'merge' | 'pr'; baseBranch: string; push: boolean; protectedPaths: string[] }
+  landing: {
+    mode: 'off' | 'merge' | 'pr'
+    baseBranch: string
+    push: boolean
+    protectedPaths: string[]
+    githubTokenFile: string
+    mergeMethod: 'merge' | 'squash' | 'rebase'
+    evidence: { paths: string[]; markers: string[] }
+  }
   notifyOwner: boolean
   escalationAgentId: number
   openGroupsInOrder: boolean
   autonomous: boolean
+  quotaPacing: boolean
+  blockerBoost: boolean
+  issueCap: { usd: number; tokens: number }
+  showcase: { enabled: boolean; slug: string; titles: boolean }
+  preview: { command: string; path: string }
   budgets: Record<string, Budget>
   fallbackEnabled: boolean
   fallback: string[]
@@ -88,6 +106,11 @@ export type Issue = {
   model?: string
   description?: string
   handoff?: string
+  maker_id?: number | null
+  created_by?: string
+  created_at?: number
+  updated_at?: number
+  done_at?: number | null
 }
 
 export type Run = {
@@ -116,6 +139,31 @@ export type Comment = {
   created_at: number
 }
 
-export type IssueDetail = { issue: Issue; comments: Comment[]; runs: Run[] }
+/** One change of a field, as the history tab shows it. old/new are stored as text. */
+export type IssueEvent = {
+  id: number
+  at: number
+  actor: string
+  field: string
+  old: string | null
+  new: string | null
+}
+
+/** An issue on the other end of a dependency. */
+export type IssueLink = {
+  id: number
+  number: number
+  title: string
+  status: Status
+  assignee_id: number | null
+}
+
+export type IssueDetail = {
+  issue: Issue
+  comments: Comment[]
+  runs: Run[]
+  events: IssueEvent[]
+  links: { blockers: IssueLink[]; dependents: IssueLink[] }
+}
 
 export type Provider = { id: string; label: string }

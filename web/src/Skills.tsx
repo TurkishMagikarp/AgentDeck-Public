@@ -3,7 +3,7 @@ import { createStore } from 'solid-js/store'
 import { api } from './api'
 import { board, fail } from './store'
 import type { Skill } from './types'
-import { Field, Modal } from './ui'
+import { Field, Modal, onActivateKey } from './ui'
 
 type Draft = Omit<Skill, 'id'> & { id?: number }
 
@@ -26,7 +26,14 @@ export function Skills() {
       <div class="grid">
         <For each={board.skills} fallback={<p class="muted">No skills yet.</p>}>
           {(skill) => (
-            <article class="tile" onClick={() => setEditing({ ...skill })}>
+            <article
+              class="tile"
+              role="button"
+              tabIndex={0}
+              aria-label={`Edit skill ${skill.name}`}
+              onClick={() => setEditing({ ...skill })}
+              onKeyDown={onActivateKey(() => setEditing({ ...skill }))}
+            >
               <strong>{skill.name}</strong>
               <p class="muted">{skill.description || 'No description'}</p>
               <p>

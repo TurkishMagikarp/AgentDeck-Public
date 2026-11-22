@@ -1,13 +1,14 @@
 // Where an agent works. Two layouts, chosen per project:
 //   issue: every issue has its own worktree. Nothing is shared, nothing has to be switched.
 //   agent: every agent keeps one checkout and switches to the issue's branch. Build caches that
-//          are expensive to recreate (a Godot import, node_modules) survive between issues.
+//          are expensive to recreate (an engine's asset import, node_modules) survive between issues.
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { DATA_DIR } from './db.ts'
+import { oversized } from './housekeeping.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -89,6 +90,12 @@ async function agentCheckout(base: string, branch: string, request: Request): Pr
   const name = `agent-${request.agentId}-${request.slot}`
   const worktree = join(DATA_DIR, 'worktrees', request.project.key, name)
   if (!existsSync(worktree)) await git(base, 'worktree', 'add', '--detach', worktree)
+  if (oversized.delete(worktree)) {
+    // Housekeeping found this checkout too big. Only what git ignores goes (node_modules, build
+    // output, import caches); work that is not committed yet stays.
+    await succeeds(git(worktree, 'clean', '-fdXq'))
+    console.log(`housekeeping: emptied the build output of ${worktree}`)
+  }
 
   const branchExists = await succeeds(git(base, 'rev-parse', '--verify', `refs/heads/${branch}`))
   const checkout = request.readOnly

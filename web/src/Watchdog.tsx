@@ -1,5 +1,6 @@
 import { For, Show } from 'solid-js'
 import { board, providers, saveSettings } from './store'
+import { Icon } from './icons'
 import type { WatchdogRule } from './types'
 import { Field, Select, Toggle } from './ui'
 
@@ -79,7 +80,7 @@ export function Watchdog() {
                   onClick={() => saveSettings((s) => s.watchdog.rules.splice(index(), 1))}
                   aria-label="Remove rule"
                 >
-                  ✕
+                  <Icon name="close" size={14} />
                 </button>
               </li>
             )}

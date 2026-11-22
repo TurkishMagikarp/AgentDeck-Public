@@ -17,6 +17,8 @@ type ProviderUsage = {
   quotas: { window: string; utilization: number; resets_at: number | null }[]
   left: number
   available: boolean
+  /** Set while the provider rests after a limit or a broken login. */
+  resting: { until: number; reason: string } | null
   ready: boolean
   mode: 'subscription' | 'apikey'
 }
@@ -76,8 +78,25 @@ export function Usage() {
       </div>
 
       <div class="grid">
-        <For each={usage()?.providers}>{(item) => <ProviderCard usage={item} />}</For>
+        <For each={usage()?.providers}>{(item) => <ProviderCard usage={item} onWake={refetch} />}</For>
       </div>
+
+      <section class="section">
+        <div class="section-head">
+          <h3>Pace the quota</h3>
+          <Toggle
+            label="Plan by subscription window"
+            checked={board.project!.settings.quotaPacing}
+            onChange={(on) => saveSettings((s) => void (s.quotaPacing = on))}
+          />
+        </div>
+        <p class="muted">
+          When less than 30 % of a subscription window is left and the reset is more than three hours away,
+          only one agent runs at a time and large issues wait. When the window resets within an hour with more
+          than 30 % left, large issues go first. An issue is large when its previous runs used more than twice
+          as much as a typical run in the project.
+        </p>
+      </section>
 
       <FallbackOrder />
 
@@ -129,7 +148,10 @@ export function Usage() {
   )
 }
 
-function ProviderCard(props: { usage: ProviderUsage }) {
+const restEnd = (at: number) =>
+  new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+
+function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
   const usage = () => props.usage
   const budget = () => usage().budget
 
@@ -161,6 +183,19 @@ function ProviderCard(props: { usage: ProviderUsage }) {
       <p>
         <strong>{Math.round(usage().left)}%</strong> left · used {usedText()}
       </p>
+      <Show when={usage().resting}>
+        {(rest) => (
+          <p class="resting">
+            {rest().reason}, paused until {restEnd(rest().until)}.{' '}
+            <button
+              class="link"
+              onClick={() => api.post(`/providers/${usage().provider}/wake`).then(props.onWake)}
+            >
+              Release now
+            </button>
+          </p>
+        )}
+      </Show>
       <Show when={usage().quotaLeft !== null}>
         <p class="muted">
           Subscription quota used, as reported by the CLI: {Math.round(100 - usage().quotaLeft!)}%

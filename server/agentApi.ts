@@ -1,9 +1,10 @@
 // What a running agent may do on the board: read issues of its own project, comment, and file
 // new issues. It authenticates with the token of its run, never with the board token.
 import { Hono } from 'hono'
-import { addComment, createIssue, getIssue, getProject, mapIssue } from './core.ts'
+import { addComment, createIssue, getIssue, getProject, mapIssue, patchIssue } from './core.ts'
 import { all, get, tx } from './db.ts'
 import { kick } from './engine.ts'
+import { addLesson } from './lessons.ts'
 import { runOfToken, type RunIdentity } from './runTokens.ts'
 
 type Env = { Variables: { run: RunIdentity } }
@@ -62,6 +63,25 @@ agentApi.get('/issues/:number', (c) => {
   return c.json({ issue, comments })
 })
 
+agentApi.post('/issues/:number/unblock', async (c) => {
+  const identity = c.get('run')
+  const issue = issueByNumber(identity.projectId, c.req.param('number'))
+  if (!issue) return c.json({ error: 'Issue not found' }, 404)
+  const blocker = Number((await c.req.json().catch(() => ({}))).blocker)
+  if (!issue.blocked_by.includes(blocker)) {
+    return c.json({ error: `Issue ${issue.number} does not wait for ${blocker}` }, 400)
+  }
+  patchIssue(
+    issue.id,
+    { blocked_by: issue.blocked_by.filter((number: number) => number !== blocker) },
+    identity.agentName,
+  )
+  const key = getProject(identity.projectId).key
+  addComment(issue.id, identity.agentName, 'agent', `No longer waits for ${key}-${blocker}.`)
+  kick()
+  return c.json({ ok: true })
+})
+
 agentApi.post('/issues/:number/comments', async (c) => {
   const identity = c.get('run')
   const issue = issueByNumber(identity.projectId, c.req.param('number'))
@@ -70,6 +90,17 @@ agentApi.post('/issues/:number/comments', async (c) => {
   if (!body) return c.json({ error: 'Comment is empty' }, 400)
   addComment(issue.id, identity.agentName, 'agent', body)
   return c.json({ ok: true }, 201)
+})
+
+agentApi.post('/lessons', async (c) => {
+  const identity = c.get('run')
+  const body = await c.req.json().catch(() => ({}))
+  try {
+    addLesson(identity.projectId, text(body.body, 2000), identity.agentName)
+    return c.json({ ok: true }, 201)
+  } catch (e: any) {
+    return c.json({ error: e.message }, 400)
+  }
 })
 
 agentApi.post('/issues', async (c) => {
@@ -96,6 +127,7 @@ agentApi.post('/issues', async (c) => {
           .filter(Boolean),
         reviewers: agentIdsByName(identity.projectId, body.reviewers),
         grp: text(body.group, 80),
+        created_by: identity.agentName,
       }),
     )
     addComment(

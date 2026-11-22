@@ -46,6 +46,16 @@ const commands = {
     console.log('commented')
   },
 
+  async unblock([number, blocker]) {
+    await call('POST', `/issues/${number}/unblock`, { blocker: Number(blocker) })
+    console.log(`issue ${number} no longer waits for ${blocker}`)
+  },
+
+  async learn(words) {
+    await call('POST', '/lessons', { body: words.join(' ') })
+    console.log('learned')
+  },
+
   async create(_, options) {
     const created = await call('POST', '/issues', options)
     console.log(`created ${created.key}`)

@@ -13,6 +13,7 @@ type Routine = {
   at: string
   every_minutes: number
   enabled: boolean | number
+  only_when_idle: boolean | number
 }
 
 const SCHEDULES = [
@@ -28,10 +29,14 @@ const newRoutine = (): Routine => ({
   at: '07:00',
   every_minutes: 60,
   enabled: true,
+  only_when_idle: false,
 })
 
-const describeSchedule = (routine: Routine) =>
-  routine.schedule === 'daily' ? `daily at ${routine.at}` : `every ${routine.every_minutes} minutes`
+function describeSchedule(routine: Routine) {
+  const when =
+    routine.schedule === 'daily' ? `daily at ${routine.at}` : `every ${routine.every_minutes} minutes`
+  return routine.only_when_idle ? `${when}, when nothing is open` : when
+}
 
 export function Routines() {
   const projectId = () => board.project!.id
@@ -159,6 +164,12 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
           />
         </Field>
 
+        <Toggle
+          label="Only when nothing is open"
+          title="Waits until no issue is in progress, in review or blocked. For planners that create the next task."
+          checked={!!draft.only_when_idle}
+          onChange={(on) => setDraft('only_when_idle', on)}
+        />
         <Toggle label="Active" checked={!!draft.enabled} onChange={(on) => setDraft('enabled', on)} />
 
         <footer>

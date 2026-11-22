@@ -13,6 +13,8 @@ type Routine = {
   at: string
   every_minutes: number
   enabled: number
+  /** 1: fire only while no issue of the project is on its way, like a planner's routine. */
+  only_when_idle: number
   last_fired_at: number
 }
 
@@ -27,7 +29,17 @@ function isDue(routine: Routine, now: Date) {
   return now >= todayAt && routine.last_fired_at < todayAt.getTime()
 }
 
+// Parked issues stay in the backlog for good, so only work that is on its way counts as busy.
+// Issues of other routines (a daily report) are no reason to hold back planning.
+const isBusy = (projectId: number) =>
+  !!get(
+    "SELECT 1 FROM issues WHERE project_id=? AND status NOT IN ('done', 'backlog') AND routine_id IS NULL",
+    projectId,
+  )
+
 function fire(routine: Routine, now: Date) {
+  // Not marked as fired: the routine stays due and fires as soon as the project is free.
+  if (routine.only_when_idle && isBusy(routine.project_id)) return false
   run('UPDATE routines SET last_fired_at=? WHERE id=?', now.getTime(), routine.id)
 
   // If the last issue of this routine is still open, a second one would only pile up.
@@ -43,6 +55,7 @@ function fire(routine: Routine, now: Date) {
       assignee_id: routine.agent_id,
       grp: 'Routines',
       routine_id: routine.id,
+      created_by: 'Routine',
     }),
   )
   return true
@@ -88,6 +101,7 @@ function fields(body: any, current: Partial<Routine> = {}) {
     at,
     Math.max(5, Number(body.every_minutes ?? current.every_minutes ?? 60) || 60),
     (body.enabled ?? current.enabled ?? true) ? 1 : 0,
+    (body.only_when_idle ?? current.only_when_idle ?? false) ? 1 : 0,
   ]
 }
 
@@ -97,8 +111,9 @@ export const listRoutines = (projectId: number) =>
 export function createRoutine(projectId: number, body: any) {
   // A new routine waits for its next slot instead of firing at once for a time already past today.
   const inserted = run(
-    `INSERT INTO routines (name, agent_id, prompt, schedule, at, every_minutes, enabled, project_id, last_fired_at)
-     VALUES (?,?,?,?,?,?,?,?,?)`,
+    `INSERT INTO routines (name, agent_id, prompt, schedule, at, every_minutes, enabled, only_when_idle,
+       project_id, last_fired_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?)`,
     ...fields(body),
     projectId,
     Date.now(),
@@ -111,7 +126,7 @@ export function updateRoutine(id: number, body: any) {
   const current = get<Routine>('SELECT * FROM routines WHERE id=?', id)
   if (!current) return null
   run(
-    'UPDATE routines SET name=?, agent_id=?, prompt=?, schedule=?, at=?, every_minutes=?, enabled=? WHERE id=?',
+    'UPDATE routines SET name=?, agent_id=?, prompt=?, schedule=?, at=?, every_minutes=?, enabled=?, only_when_idle=? WHERE id=?',
     ...fields(body, current),
     id,
   )

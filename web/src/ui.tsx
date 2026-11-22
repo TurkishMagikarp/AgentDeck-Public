@@ -1,5 +1,6 @@
 import type { JSX, ParentProps } from 'solid-js'
-import { onCleanup, onMount } from 'solid-js'
+import { onCleanup, onMount, splitProps } from 'solid-js'
+import { Icon } from './icons'
 
 export function Modal(props: ParentProps<{ title: string; onClose: () => void; wide?: boolean }>) {
   const onKey = (e: KeyboardEvent) => e.key === 'Escape' && props.onClose()
@@ -11,14 +12,23 @@ export function Modal(props: ParentProps<{ title: string; onClose: () => void; w
       <div class="modal" classList={{ wide: props.wide }} role="dialog" aria-label={props.title}>
         <header>
           <h2>{props.title}</h2>
-          <button class="ghost" onClick={props.onClose} aria-label="Close">
-            ✕
+          <button class="ghost icon-button" onClick={props.onClose} aria-label="Close">
+            <Icon name="close" />
           </button>
         </header>
         {props.children}
       </div>
     </div>
   )
+}
+
+// Lets a clickable card open with Enter or Space, like a real button.
+export function onActivateKey(action: () => void) {
+  return (e: KeyboardEvent) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return
+    e.preventDefault()
+    action()
+  }
 }
 
 export function Field(props: ParentProps<{ label: string; hint?: string }>) {
@@ -56,10 +66,11 @@ type SelectProps<T extends string> = {
 } & Omit<JSX.SelectHTMLAttributes<HTMLSelectElement>, 'onChange' | 'value'>
 
 export function Select<T extends string>(props: SelectProps<T>) {
+  const [own, rest] = splitProps(props, ['value', 'options', 'onChange'])
   return (
-    <select value={props.value} onChange={(e) => props.onChange(e.currentTarget.value as T)}>
-      {props.options.map(([value, label]) => (
-        <option value={value} selected={value === props.value}>
+    <select {...rest} value={own.value} onChange={(e) => own.onChange(e.currentTarget.value as T)}>
+      {own.options.map(([value, label]) => (
+        <option value={value} selected={value === own.value}>
           {label}
         </option>
       ))}

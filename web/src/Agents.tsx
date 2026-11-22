@@ -4,7 +4,7 @@ import { api } from './api'
 import { ModelSelect } from './ModelSelect'
 import { board, fail, providerLabel, providers } from './store'
 import type { Agent } from './types'
-import { Field, initials, Modal, Select, Toggle } from './ui'
+import { Field, initials, Modal, onActivateKey, Select, Toggle } from './ui'
 
 type Draft = Omit<Agent, 'id'> & { id?: number }
 
@@ -73,7 +73,15 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
   const skills = () => board.skills.filter((skill) => props.agent.skill_ids.includes(skill.id))
 
   return (
-    <article class="tile" classList={{ disabled: !props.agent.enabled }} onClick={props.onEdit}>
+    <article
+      class="tile"
+      classList={{ disabled: !props.agent.enabled }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Edit ${props.agent.name}`}
+      onClick={props.onEdit}
+      onKeyDown={onActivateKey(props.onEdit)}
+    >
       <div class="tile-head">
         <span class={`avatar large ${props.agent.provider}`}>{initials(props.agent.name)}</span>
         <div>

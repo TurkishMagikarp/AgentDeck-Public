@@ -20,6 +20,10 @@ RUN apt-get update \
       libxcursor1 libxinerama1 libxkbcommon0 libasound2t64 libpulse0 libdbus-1-3 \
       libfontconfig1 libfreetype6 fonts-dejavu-core fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/* \
+ # The system libraries of Playwright's Chromium, for projects that screenshot their web UI.
+ # The browser itself comes from the project (PLAYWRIGHT_BROWSERS_PATH), in the version it pins.
+ && npx -y playwright@1.65.0 install-deps chromium \
+ && rm -rf /var/lib/apt/lists/* /root/.npm \
  && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
  && npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 

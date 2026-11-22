@@ -136,6 +136,47 @@ addColumn('issues', 'routine_id', 'INTEGER')
 addColumn('runs', 'kind', "TEXT NOT NULL DEFAULT 'work'")
 // The part of input_tokens that was read from the provider's prompt cache (about a tenth of the price).
 addColumn('runs', 'cached_tokens', 'INTEGER NOT NULL DEFAULT 0')
+db.exec(`
+CREATE TABLE IF NOT EXISTS lessons (
+  id INTEGER PRIMARY KEY,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  body TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lessons_project ON lessons(project_id, id);
+`)
+db.exec(`
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+  endpoint TEXT PRIMARY KEY,
+  keys TEXT NOT NULL,
+  device TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL
+);
+`)
+// Cost cap: how many rounds of the project's cap the owner granted this issue, and whether it is
+// parked because it used them up.
+addColumn('issues', 'cap_factor', 'INTEGER NOT NULL DEFAULT 1')
+addColumn('issues', 'capped', 'INTEGER NOT NULL DEFAULT 0')
+// How often a backlog issue that blocks open work was put back into the queue (engine.ts).
+addColumn('issues', 'blocker_returns', 'INTEGER NOT NULL DEFAULT 0')
+db.exec(`
+-- What changed on an issue, by whom: the history tab of the issue page.
+CREATE TABLE IF NOT EXISTS issue_events (
+  id INTEGER PRIMARY KEY,
+  issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  field TEXT NOT NULL,
+  old TEXT,
+  new TEXT
+);
+CREATE INDEX IF NOT EXISTS issue_events_issue ON issue_events(issue_id, id);
+`)
+// Kind of failure of a failed run (recovery.ts), '' for runs that did not fail or were stopped.
+addColumn('runs', 'failure', "TEXT NOT NULL DEFAULT ''")
+// What a finished run answered: done, review, blocked, handoff for work; approve, changes, blocked for reviews.
+addColumn('runs', 'verdict', "TEXT NOT NULL DEFAULT ''")
 // Landing: '' or 'waiting' while a pull request is open and its checks run.
 addColumn('issues', 'landing', "TEXT NOT NULL DEFAULT ''")
 addColumn('issues', 'pr_number', 'INTEGER')
@@ -143,6 +184,8 @@ addColumn('issues', 'pr_number', 'INTEGER')
 addColumn('issues', 'escalated', 'INTEGER NOT NULL DEFAULT 0')
 // When the issue reached "done". Empty again if it is reopened.
 addColumn('issues', 'done_at', 'INTEGER')
+// Who filed the issue: 'Owner' from the board, an agent's name, 'Routine'. Empty for older issues.
+addColumn('issues', 'created_by', "TEXT NOT NULL DEFAULT ''")
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS quota_history (
@@ -180,6 +223,8 @@ CREATE TABLE IF NOT EXISTS routines (
   last_fired_at INTEGER NOT NULL DEFAULT 0
 );
 `)
+// A planner's routine waits until nothing in the project is open any more.
+addColumn('routines', 'only_when_idle', 'INTEGER NOT NULL DEFAULT 0')
 
 /**
  * Clean-up that is only right when the server itself starts: nothing can be running then.

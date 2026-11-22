@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline'
 import { startApiRun } from './apiAgent.ts'
 import { apiKey, getAccess, runEnv } from './auth.ts'
 import { EFFORTS, PROVIDERS, MODEL_RE } from './core.ts'
+import { startManagedRun } from './managedAgent.ts'
 import { prepareMcp } from './mcp.ts'
 import { run } from './db.ts'
 
@@ -217,6 +218,11 @@ export function startRun(o: RunOpts): RunHandle {
     const model = o.model?.trim() || PROVIDERS[o.provider].defaultModel
     return startApiRun(o, PROVIDERS[o.provider].baseUrl!, key, model)
   }
+  if (cli === 'managed') {
+    const model = o.model?.trim() || PROVIDERS[o.provider].defaultModel
+    if (!MODEL_RE.test(model)) throw new Error('Invalid model name')
+    return startManagedRun(o, model)
+  }
   const [cmd, baseArgs] = command(cli, o)
   const mcp = prepareMcp(cli, o.mcp ?? [], randomUUID())
   const env = { ...runEnv(o.provider, cli), ...mcp.env, ...o.env }
@@ -280,11 +286,15 @@ export const oneShot = (provider: string, prompt: string, cwd: string, model = '
  * Stands in for a real agent in tests. Markers in the issue text steer it:
  * "[mock:changes]" makes a reviewer ask for changes, "[mock:create]" makes a worker file an issue
  * through the board commands, exactly as a real agent would. "[mock:commit:<path>]" makes a worker
- * commit that file, so landing can be tested.
+ * commit that file, so landing can be tested. "[mock:fail:<message>]" makes a run fail with that
+ * message until the self-healing has left a hint on the issue.
  */
 function mockAnswer(o: RunOpts) {
   if (!o.autonomous) return 'PASS'
   if (o.prompt.includes('## Your task: review')) {
+    // A reviewer that forgets its status block, as real ones sometimes do.
+    if (o.prompt.includes('[mock:nostatus]'))
+      return '<summary>Approved: checked, just without a status block (Mock).</summary>'
     return o.prompt.includes('[mock:changes]')
       ? '<summary>Changes: test missing (mock).</summary>\n<status>changes</status>'
       : '<summary>Approved: checked (mock).</summary>\n<status>approve</status>'
@@ -299,6 +309,12 @@ function mockRun(o: RunOpts): RunHandle {
 
   if (o.prompt.includes('[mock:create]') && o.env?.AGENTDECK_CLI) {
     const args = [o.env.AGENTDECK_CLI, 'create', '--title', 'Filed by the mock agent', '--status', 'backlog']
+    execFile(process.execPath, args, { env: { ...process.env, ...o.env } }, () => {})
+  }
+
+  const unblock = o.prompt.match(/\[mock:unblock:(\d+):(\d+)\]/)
+  if (unblock && o.env?.AGENTDECK_CLI) {
+    const args = [o.env.AGENTDECK_CLI, 'unblock', unblock[1], unblock[2]]
     execFile(process.execPath, args, { env: { ...process.env, ...o.env } }, () => {})
   }
 
@@ -329,6 +345,10 @@ function mockRun(o: RunOpts): RunHandle {
       () => {
         if (i < steps.length) return o.onActivity?.(steps[i++])
         clearInterval(timer)
+        const failWith = o.prompt.match(/\[mock:fail:([^\]]+)\]/)?.[1]
+        if (failWith && o.autonomous && !o.prompt.includes('**Self-healing:**')) {
+          return resolve({ ok: false, text: '', usage: { input: 100, output: 0, cost: 0 }, error: failWith })
+        }
         resolve({ ok: true, text: mockAnswer(o), usage: { input: 1200, output: 300, cost: 0.01 } })
       },
       Number(process.env.AGENTDECK_MOCK_MS ?? 800),

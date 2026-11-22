@@ -84,6 +84,7 @@ export async function listModels(refresh = false) {
 
   const offered: Record<string, string[]> = {
     anthropic: CLAUDE_MODELS,
+    'claude-managed': CLAUDE_MODELS,
     openai: codexModels(),
     opencode: await opencodeModels(),
     deepseek: await deepseekModels(),

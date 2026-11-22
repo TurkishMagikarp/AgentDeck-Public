@@ -31,7 +31,25 @@ type Stats = {
     avgMs: number
   }[]
   quota: { provider: string; label: string; values: (number | null)[] }[]
+  outcomeByAgent: {
+    agent: string
+    landed: number
+    approvalRate: number | null
+    costPerLanded: number | null
+  }[]
+  outcomeByModel: {
+    provider: string
+    label: string
+    model: string
+    runs: number
+    failed: number
+    usableRate: number
+    costPerRun: number
+  }[]
 }
+
+const percent = (rate: number | null) => (rate === null ? '–' : `${Math.round(rate * 100)} %`)
+const dollars = (value: number | null) => (value === null ? '–' : `$${value.toFixed(2)}`)
 
 const RANGES = [
   [7, '7 days'],
@@ -208,6 +226,74 @@ export function Dashboard() {
                       <td class="num">{compact(row.fresh)}</td>
                       <td class="num">{compact(row.cached)}</td>
                       <td class="num">{duration(row.avgMs / 1000)}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+
+            <h3>Outcomes per agent</h3>
+            <p class="muted">
+              Landed: issues the agent built that were finished in this period. Approval rate: how often a
+              reviewer approved its work instead of asking for changes.
+            </p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent</th>
+                  <th class="num">Landed</th>
+                  <th class="num">Approval rate</th>
+                  <th class="num">Cost per landed issue</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For
+                  each={data().outcomeByAgent}
+                  fallback={
+                    <tr>
+                      <td colSpan={4} class="muted">
+                        Nothing landed or reviewed yet.
+                      </td>
+                    </tr>
+                  }
+                >
+                  {(row) => (
+                    <tr>
+                      <td>
+                        <span class="key" style={{ background: colorOf()(row.agent) }} /> {row.agent}
+                      </td>
+                      <td class="num">{row.landed}</td>
+                      <td class="num">{percent(row.approvalRate)}</td>
+                      <td class="num">{dollars(row.costPerLanded)}</td>
+                    </tr>
+                  )}
+                </For>
+              </tbody>
+            </table>
+
+            <h3>Outcomes per model</h3>
+            <p class="muted">Usable: the run delivered a result, a handoff or a verdict.</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Model</th>
+                  <th class="num">Runs</th>
+                  <th class="num">Failed</th>
+                  <th class="num">Usable</th>
+                  <th class="num">Cost per run</th>
+                </tr>
+              </thead>
+              <tbody>
+                <For each={data().outcomeByModel}>
+                  {(row) => (
+                    <tr>
+                      <td>{row.label}</td>
+                      <td class="mono">{row.model}</td>
+                      <td class="num">{row.runs}</td>
+                      <td class="num">{row.failed}</td>
+                      <td class="num">{percent(row.usableRate)}</td>
+                      <td class="num">{dollars(row.costPerRun)}</td>
                     </tr>
                   )}
                 </For>

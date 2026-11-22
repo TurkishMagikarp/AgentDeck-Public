@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Match, onCleanup, Show, Switch } from 'solid-js'
 import { api } from './api'
 import { fail } from './store'
+import { PushSettings, ReportSettings } from './Notifications'
 import { Modal } from './ui'
 
 type AccessMode = 'subscription' | 'apikey'
@@ -14,6 +15,7 @@ type ProviderAccess = {
   hasKey: boolean
   ready: boolean
   hasSubscriptionToken: boolean
+  managed?: { environmentId: string; hasEnvironmentKey: boolean; runLimitUsd: number }
 }
 
 type LoginState = {
@@ -49,10 +51,23 @@ export function Providers(props: { onClose: () => void }) {
       </p>
       <MailSettings />
 
+      <h3 class="modal-section">Push to your phone</h3>
+      <p class="muted intro">
+        The same messages as the email, instantly and without a daily limit. Turn it on once per device.
+      </p>
+      <PushSettings />
+
+      <h3 class="modal-section">Morning report</h3>
+      <p class="muted intro">
+        Once a day, one line per project with what happened in the last 24 hours. Arrives by push and, if set
+        up, by email.
+      </p>
+      <ReportSettings />
+
       <h3 class="modal-section">MCP connections</h3>
       <p class="muted intro">
         Once a key is stored, you can assign the connection to individual agents. It works with Claude Code,
-        Codex and opencode.
+        Codex, opencode and Claude Managed Agents.
       </p>
       <div class="provider-list">
         <For each={connections()}>
@@ -120,6 +135,7 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
             <input
               type="password"
               autocomplete="off"
+              aria-label="API key"
               placeholder={
                 provider().hasKey ? 'Key is stored. Enter a new key to replace it' : 'Paste API key'
               }
@@ -135,6 +151,11 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
               </button>
             </Show>
           </form>
+          <Show when={provider().managed}>
+            {(managed) => (
+              <ManagedSettings provider={provider().id} managed={managed()} onChange={props.onChange} />
+            )}
+          </Show>
         </Match>
         <Match when={provider().mode === 'subscription'}>
           <SubscriptionLogin provider={provider()} />
@@ -149,6 +170,7 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
               <input
                 type="password"
                 autocomplete="off"
+                aria-label="Subscription token"
                 placeholder={
                   provider().hasSubscriptionToken
                     ? 'Subscription token is stored. Enter a new one to replace it'
@@ -170,6 +192,94 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
         </Match>
       </Switch>
     </section>
+  )
+}
+
+/**
+ * Managed Agents run their tools on this server through a self-hosted environment. Its key can
+ * only be generated in the Claude Console, once AgentDeck has created the environment.
+ */
+function ManagedSettings(props: {
+  provider: string
+  managed: NonNullable<ProviderAccess['managed']>
+  onChange: () => void
+}) {
+  const [environmentKey, setEnvironmentKey] = createSignal('')
+  const [limit, setLimit] = createSignal(String(props.managed.runLimitUsd))
+
+  async function save(change: { environmentKey?: string; runLimitUsd?: number }) {
+    try {
+      await api.put(`/providers/${props.provider}`, { mode: 'apikey', ...change })
+      setEnvironmentKey('')
+      props.onChange()
+    } catch (err) {
+      fail(err)
+    }
+  }
+
+  return (
+    <>
+      <Show
+        when={props.managed.environmentId}
+        fallback={<p class="muted">Once the API key is saved, AgentDeck creates the environment.</p>}
+      >
+        <p class="muted">
+          Environment <code>{props.managed.environmentId}</code>: generate an environment key for it in the
+          Claude Console and enter it here.
+        </p>
+        <form
+          class="key-form"
+          onSubmit={(e) => {
+            e.preventDefault()
+            save({ environmentKey: environmentKey() })
+          }}
+        >
+          <input
+            type="password"
+            autocomplete="off"
+            aria-label="Environment key"
+            placeholder={
+              props.managed.hasEnvironmentKey
+                ? 'Environment key is stored. Enter a new one to replace it'
+                : 'Paste the environment key (sk-ant-oat01-…)'
+            }
+            value={environmentKey()}
+            onInput={(e) => setEnvironmentKey(e.currentTarget.value)}
+          />
+          <button class="primary" type="submit" disabled={!environmentKey().trim()}>
+            Save
+          </button>
+          <Show when={props.managed.hasEnvironmentKey}>
+            <button type="button" class="ghost danger" onClick={() => save({ environmentKey: '' })}>
+              Remove
+            </button>
+          </Show>
+        </form>
+      </Show>
+      <form
+        class="key-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          save({ runLimitUsd: Number(limit()) })
+        }}
+      >
+        <label class="muted" for="run-limit">
+          Maximum per run (USD)
+        </label>
+        <input
+          id="run-limit"
+          type="number"
+          min="0.5"
+          max="1000"
+          step="0.5"
+          value={limit()}
+          onInput={(e) => setLimit(e.currentTarget.value)}
+        />
+        <button type="submit" disabled={Number(limit()) === props.managed.runLimitUsd}>
+          Save
+        </button>
+      </form>
+    </>
   )
 }
 
@@ -224,6 +334,7 @@ function MailSettings() {
         <input
           type="password"
           autocomplete="off"
+          aria-label="AgentMail API key"
           placeholder={mail()?.hasKey ? 'Key is stored. Enter a new key to replace it' : 'AgentMail API key'}
           value={key()}
           onInput={(e) => setKey(e.currentTarget.value)}
@@ -272,6 +383,7 @@ function ConnectionRow(props: { connection: McpConnection; onChange: () => void 
         <input
           type="password"
           autocomplete="off"
+          aria-label={props.connection.keyLabel}
           placeholder={
             props.connection.hasKey ? 'Stored. Enter a new value to replace it' : props.connection.keyLabel
           }

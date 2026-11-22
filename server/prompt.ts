@@ -1,6 +1,9 @@
 // Builds what an agent is told for one run. The next agent gets the handoff note and the
 // latest comments, not the whole history: that is what keeps handovers cheap.
+import { join } from 'node:path'
 import { all } from './db.ts'
+import { lessonsForPrompt } from './lessons.ts'
+import { listShots, shotsDir } from './preview.ts'
 import type { Workdir } from './workspace.ts'
 
 export type RunKind = 'work' | 'review'
@@ -14,6 +17,8 @@ You can read and write the shared board from the shell:
 - \`node "$AGENTDECK_CLI" list [--status todo]\` lists issues.
 - \`node "$AGENTDECK_CLI" show <number>\` prints an issue with its comments.
 - \`node "$AGENTDECK_CLI" comment <number> "text"\` comments on an issue.
+- \`node "$AGENTDECK_CLI" unblock <number> <blocker>\` removes a dependency: issue <number> no longer waits for <blocker>.
+- \`node "$AGENTDECK_CLI" learn "text"\` records a lesson for every later run of this project: a build or test command, a pitfall, a tool you had to install. One sentence, only what is not obvious from the repo.
 - \`node "$AGENTDECK_CLI" create --title "..." --description "..." [--assignee "Agent name"] [--status backlog|todo] [--blocked-by 12,13] [--reviewers "Name, Name"] [--group "..."]\` files a new issue.
 A bug or doubt outside your issue becomes a new issue, it is not fixed on the side.`
 
@@ -96,17 +101,27 @@ export function buildPrompt(input: {
     skills.length &&
       `## Skills\n${skills.map((skill) => `### ${skill.name}\n${skill.content}`).join('\n\n')}`,
     `## Issue ${project.key}-${issue.number}: ${issue.title}\n${issue.description || '(no description)'}`,
+    lessonsForPrompt(project.id),
     issue.handoff && `## Handoff note from the previous worker\n${issue.handoff}`,
     comments.length &&
       `## Latest comments\n${comments.map((comment) => `**${comment.author}:** ${comment.body}`).join('\n\n')}`,
     others.length && `## Team\n${others.join('\n')}`,
     AGENT_CLI,
     input.decides && DECIDE_ALONE,
+    kind === 'review' && screenshots(issue.id),
     kind === 'review'
       ? reviewRules(project, maker?.name ?? 'A teammate', workdir.branch)
       : workRules(project, workdir.branch),
   ]
   return sections.filter(Boolean).join('\n\n')
+}
+
+/** The newest preview screenshots, so a reviewer sees the app without starting it. */
+function screenshots(issueId: number) {
+  const latest = listShots(issueId).slice(0, 2)
+  if (!latest.length) return ''
+  const paths = latest.map((file) => `- ${join(shotsDir(issueId), file)}`).join('\n')
+  return `## Screenshots of this branch\nThe server started the app of this branch and captured it. Open the images and judge the visible result too:\n${paths}`
 }
 
 export const tag = (text: string, name: string) =>

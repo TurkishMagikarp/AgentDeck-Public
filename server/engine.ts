@@ -5,6 +5,7 @@ import { oneShot, startRun, type RunHandle, type RunResult } from './adapters.ts
 import {
   activity,
   addComment,
+  createIssue,
   emit,
   getAgent,
   getIssue,
@@ -14,21 +15,39 @@ import {
   mapIssue,
   patchIssue,
   pickProvider,
+  providerLeft,
   PROVIDERS,
 } from './core.ts'
-import { all, get, run } from './db.ts'
-import { landIssue, watchPullRequests, type Outcome } from './landing.ts'
+import { all, get, run, tx } from './db.ts'
+import { githubTokenOf, landIssue, watchPullRequests, type Outcome } from './landing.ts'
+import { addLesson } from './lessons.ts'
 import { notifyOwner } from './notify.ts'
+import { blockerWeights, byBlockerWeight, cycles, type Weight } from './blockers.ts'
+import { overCap } from './issueCap.ts'
+import { capturePreview } from './preview.ts'
+import { bigIssues, paceOf, type Pace } from './pacing.ts'
 import { buildPrompt, tag, type RunKind } from './prompt.ts'
 import { rtkEnv } from './rtk.ts'
 import { createRunToken, revokeRunToken } from './runTokens.ts'
 import { prepareWorkdir, releaseWorkdir, type Workdir } from './workspace.ts'
+import {
+  classifyFailure,
+  clock,
+  hintFor,
+  when,
+  PROVIDER_FAILURES,
+  restOf,
+  restProvider,
+  retryDelay,
+  type Failure,
+} from './recovery.ts'
 
 type Live = {
   runId: number
   issueId: number
   projectId: number
   agentId: number
+  provider: string
   /** Which parallel copy of the agent this is. Decides the checkout in the agent layout. */
   slot: number
   kind: RunKind
@@ -44,6 +63,8 @@ type Pick = { provider: string; model: string; fallback: boolean }
 
 const live = new Map<number, Live>()
 const retryAfter = new Map<number, number>()
+/** Issues whose next run should try another provider, because this one failed the same way twice. */
+const avoidProvider = new Map<number, string>()
 export const notices = new Map<number, string>()
 
 const AGENT_CLI = join(import.meta.dirname, 'agent-cli.mjs')
@@ -86,6 +107,12 @@ function noPush(p: any): Record<string, string> {
   }
 }
 
+/** A project with its own GitHub token gives it to its agents, so gh never uses the wider login. */
+function ownGithubToken(p: any): Record<string, string> {
+  if (!p.settings.landing.githubTokenFile) return {}
+  return { GH_TOKEN: githubTokenOf(p)! }
+}
+
 // ---------- starting a run ----------
 
 function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
@@ -114,6 +141,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
     issueId: issue.id,
     projectId: p.id,
     agentId: agent.id,
+    provider: pick.provider,
     slot: freeSlot(agent.id),
     kind,
     startedAt: now,
@@ -192,6 +220,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
             AGENTDECK_RUN_TOKEN: token,
             AGENTDECK_CLI: AGENT_CLI,
             ...noPush(p),
+            ...ownGithubToken(p),
             ...rtkEnv(p.key, agent.id),
           },
           onActivity: (output) => {
@@ -218,12 +247,13 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
 
 // ---------- ending a run ----------
 
-function endRun(l: Live, status: string, res: RunResult, note = '') {
+function endRun(l: Live, status: string, res: RunResult, note = '', failure = '', verdict = '') {
   live.delete(l.runId)
   activity.delete(l.runId)
   revokeRunToken(l.runId)
   run(
-    `UPDATE runs SET status=?, ended_at=?, input_tokens=?, output_tokens=?, cached_tokens=?, cost_usd=?, note=?
+    `UPDATE runs SET status=?, ended_at=?, input_tokens=?, output_tokens=?, cached_tokens=?, cost_usd=?, note=?,
+       failure=?, verdict=?
      WHERE id=?`,
     status,
     Date.now(),
@@ -232,16 +262,22 @@ function endRun(l: Live, status: string, res: RunResult, note = '') {
     res.usage.cached ?? 0,
     res.usage.cost,
     note,
+    failure,
+    verdict,
     l.runId,
   )
   invalidate(l.projectId)
   emit(l.projectId, { t: 'run.end', id: l.runId, issueId: l.issueId })
 }
 
+/** Failed runs in a row on this issue. A limit or a broken login is the provider's fault and does not count. */
 function failedStreak(issueId: number) {
+  const providerFaults = PROVIDER_FAILURES.map(() => '?').join(',')
   const recent = all(
-    "SELECT status FROM runs WHERE issue_id=? AND agent_name!='Watchdog' ORDER BY id DESC LIMIT 20",
+    `SELECT status FROM runs WHERE issue_id=? AND agent_name!='Watchdog' AND failure NOT IN (${providerFaults})
+     ORDER BY id DESC LIMIT 20`,
     issueId,
+    ...PROVIDER_FAILURES,
   )
   const firstGood = recent.findIndex((r) => r.status === 'done')
   return firstGood === -1 ? recent.length : firstGood
@@ -256,7 +292,28 @@ async function finish(l: Live, agent: any, res: RunResult) {
   if (l.stop || !res.ok) finishFailed(l, p, issue, agent, res)
   else if (l.kind === 'review') await finishReview(l, p, issue, agent, res)
   else await finishWork(l, p, issue, agent, res)
+
+  // Only an issue that waits for its next run is parked; landing and human decisions go on.
+  const after = getIssue(issue.id)
+  const waitsForRun = after?.status === 'todo' || (after?.status === 'review' && after.review_index >= 0)
+  if (waitsForRun) parkIfOverCap(p, after)
   kick()
+}
+
+/** Parks an issue that used up its cost cap, see issueCap.ts. Returns true when it was parked. */
+function parkIfOverCap(p: any, issue: any) {
+  const reason = overCap(p.settings.issueCap, issue)
+  if (!reason) return false
+  const note = `Cost cap reached: ${reason}. The issue is parked. With "Allow another round", or by moving it back to To Do, it may use the same amount once more.`
+  addComment(issue.id, 'Cost cap', 'watchdog', note)
+  patchIssue(issue.id, {
+    status: 'backlog',
+    capped: 1,
+    review_index: -1,
+    assignee_id: issue.maker_id ?? issue.assignee_id,
+  })
+  notifyOwner(p, issue, note)
+  return true
 }
 
 /** The issue changes only if nobody moved it by hand while the agent was running. */
@@ -358,8 +415,175 @@ function sweepWaitingIssues() {
         issue.status === 'review' ? 'Was waiting for a review by a human.' : 'Was set to "Waits for a human".'
       settleWithoutHuman(p, issue, reason)
     }
-    if (waiting.length) kick()
+    if (waiting.length + pullBlockersFromBacklog(p) + resolveRings(p)) kick()
   }
+}
+
+/**
+ * Issues that wait on each other in a ring never start. First the deputy gets a small issue of its
+ * own to decide which dependency goes (the issues in the ring cannot start, so it is not one of
+ * them). If the ring is still there when that issue is settled, or there is no deputy, the
+ * dependency on the newest issue in the ring is removed. Both sides get a comment.
+ */
+function resolveRings(p: any) {
+  const open = all(
+    "SELECT number, priority, status, blocked_by FROM issues WHERE project_id=? AND status!='done'",
+    p.id,
+  ).map(mapIssue)
+  const rings = cycles(open)
+  if (!rings.length) return 0
+
+  const deputy = deputyOf(p)
+  let changed = 0
+  for (const ring of rings) {
+    const marker = `[ring:${[...ring].sort((a, b) => a - b).join(',')}]`
+    const decision = get(
+      'SELECT id, status FROM issues WHERE project_id=? AND instr(description, ?) > 0 ORDER BY id DESC LIMIT 1',
+      p.id,
+      marker,
+    )
+    if (!decision && deputy) {
+      handRingToDeputy(p, ring, deputy, marker)
+      changed++
+      continue
+    }
+    // Still being decided: wait for it.
+    if (decision && !['done', 'backlog'].includes(decision.status)) continue
+    breakRing(p, ring)
+    changed++
+  }
+  return changed
+}
+
+function ringText(key: string, ring: number[]) {
+  return [...ring, ring[0]].map((number) => `${key}-${number}`).join(' → ')
+}
+
+function handRingToDeputy(p: any, ring: number[], deputy: any, marker: string) {
+  const created = tx(() =>
+    createIssue(p.id, {
+      title: `Resolve ring dependency: ${ringText(p.key, ring)}`,
+      description:
+        `These issues wait on each other in a circle and so never start (A → B means: A waits for B):\n` +
+        `${ringText(p.key, ring)}\n\n` +
+        'Read the issues and remove the dependency that makes the least sense with ' +
+        '`node "$AGENTDECK_CLI" unblock <number> <blocker>`. Then close this issue with `done`. ' +
+        'If the circle remains, AgentDeck resolves it on its own afterwards.\n\n' +
+        marker,
+      status: 'todo',
+      priority: 3,
+      assignee_id: deputy.id,
+      created_by: 'Watchdog',
+    }),
+  )
+  for (const number of ring) {
+    const issue = get('SELECT id FROM issues WHERE project_id=? AND number=?', p.id, number)
+    if (issue) {
+      addComment(
+        issue.id,
+        'Watchdog',
+        'watchdog',
+        `Stuck in a ring dependency (${ringText(p.key, ring)}). ${deputy.name} decides in ${p.key}-${created.number}.`,
+      )
+    }
+  }
+}
+
+/** Removes the dependency on the newest issue of the ring: usually the one added last. */
+function breakRing(p: any, ring: number[]) {
+  // In the ring each issue waits on the next one, the last one on the first.
+  const edges = ring.map((number, index) => ({ waiter: number, blocker: ring[(index + 1) % ring.length] }))
+  const edge = edges.reduce((newest, candidate) => (candidate.blocker > newest.blocker ? candidate : newest))
+  const waiter = mapIssue(get('SELECT * FROM issues WHERE project_id=? AND number=?', p.id, edge.waiter))
+  const blocker = get('SELECT id FROM issues WHERE project_id=? AND number=?', p.id, edge.blocker)
+  if (!waiter) return
+  patchIssue(waiter.id, { blocked_by: waiter.blocked_by.filter((number: number) => number !== edge.blocker) })
+  const note = `Ring dependency resolved (${ringText(p.key, ring)}): ${p.key}-${edge.waiter} no longer waits for ${p.key}-${edge.blocker}.`
+  addComment(
+    waiter.id,
+    'Watchdog',
+    'watchdog',
+    `${note} Check whether something is missing now, and create a new issue for it if needed.`,
+  )
+  if (blocker) addComment(blocker.id, 'Watchdog', 'watchdog', note)
+}
+
+/** How often a blocker is taken out of the backlog again before the issues behind it go on without it. */
+const MAX_BLOCKER_RETURNS = 2
+
+/**
+ * A backlog issue that blocks open work would wait forever: parked issues come back only when
+ * nothing else is open, and the open work waits for them. So in an autonomous project such a
+ * blocker goes back into the queue (a parked one to the deputy, who decides). If it lands in the
+ * backlog again too often, the issues behind it are released from it and go on without it.
+ * An issue over its cost cap stays where it is; that waits for the owner on purpose.
+ */
+function pullBlockersFromBacklog(p: any) {
+  const open = all(
+    `SELECT id, number, blocked_by FROM issues WHERE project_id=?
+     AND status IN ('todo','in_progress','review','blocked')`,
+    p.id,
+  ).map(mapIssue)
+  const waitingOn = new Map<number, any[]>()
+  for (const issue of open) {
+    for (const number of issue.blocked_by) waitingOn.set(number, [...(waitingOn.get(number) ?? []), issue])
+  }
+  if (!waitingOn.size) return 0
+
+  const stuck = all(
+    `SELECT id FROM issues WHERE project_id=? AND status='backlog' AND capped=0
+     AND number IN (${[...waitingOn.keys()].map(() => '?').join(',')})`,
+    p.id,
+    ...waitingOn.keys(),
+  )
+  const deputy = deputyOf(p)
+  for (const { id } of stuck) {
+    const blocker = getIssue(id)
+    const dependents = waitingOn.get(blocker.number)!
+    const keys = dependents.map((issue) => `${p.key}-${issue.number}`).join(', ')
+
+    if (blocker.blocker_returns >= MAX_BLOCKER_RETURNS) {
+      for (const issue of dependents) {
+        patchIssue(issue.id, {
+          blocked_by: issue.blocked_by.filter((number: number) => number !== blocker.number),
+        })
+        addComment(
+          issue.id,
+          'Watchdog',
+          'watchdog',
+          `${p.key}-${blocker.number} could not be finished and no longer holds up this issue. Check whether something is missing without it, and create a new issue for it if needed.`,
+        )
+      }
+      addComment(
+        blocker.id,
+        'Watchdog',
+        'watchdog',
+        `No longer holds up: ${keys}. They no longer wait for this issue.`,
+      )
+      continue
+    }
+
+    const parked = !!get(
+      "SELECT 1 FROM comments WHERE issue_id=? AND kind='watchdog' AND body LIKE 'Parked:%' LIMIT 1",
+      blocker.id,
+    )
+    const decider = parked && deputy ? deputy : null
+    addComment(
+      blocker.id,
+      'Watchdog',
+      'watchdog',
+      `Was in the backlog, but ${dependents.length} issues wait for it (${keys}). Back into the queue` +
+        (decider ? `, ${decider.name} decides.` : '.') +
+        ` Attempt ${blocker.blocker_returns + 1} of ${MAX_BLOCKER_RETURNS}.`,
+    )
+    patchIssue(blocker.id, {
+      status: 'todo',
+      review_index: -1,
+      blocker_returns: blocker.blocker_returns + 1,
+      ...(decider ? { assignee_id: decider.id, escalated: 1 } : {}),
+    })
+  }
+  return stuck.length
 }
 
 // ---------- landing ----------
@@ -415,16 +639,67 @@ export function landByHand(issueId: number) {
     .catch((e) => console.error('landing', e))
 }
 
+/**
+ * The way out for a failed run, by kind of failure. Returns the comment the next agent reads;
+ * the provider and the retry timing are set here as well.
+ */
+function heal(l: Live, p: any, issue: any, failure: Failure) {
+  const label = PROVIDERS[l.provider]?.label ?? l.provider
+
+  if (PROVIDER_FAILURES.includes(failure.kind)) {
+    const wasResting = !!restOf(l.provider)
+    const until = restProvider(l.provider, failure)
+    const hint = hintFor(failure, label, until)
+    // A broken login does not fix itself. One mail per outage, not one per issue that ran into it.
+    if (failure.kind === 'access' && !wasResting) notifyOwner(p, issue, hint)
+    return hint
+  }
+
+  // The same unexplained failure twice in a row on one provider: the next run tries another one.
+  if (failure.kind === 'unknown') {
+    const lastTwo = all(
+      "SELECT provider, note FROM runs WHERE issue_id=? AND status='failed' ORDER BY id DESC LIMIT 2",
+      issue.id,
+    )
+    const sameTwice =
+      lastTwo.length === 2 && lastTwo.every((r) => r.provider === l.provider && r.note === lastTwo[0].note)
+    if (!sameTwice) return ''
+    avoidProvider.set(issue.id, l.provider)
+    return `The same error twice on ${label}. The next run takes another provider, if one is set up.`
+  }
+
+  if (failure.kind === 'toolchain') {
+    addLesson(
+      p.id,
+      `\`${failure.missing}\` was not installed in a run. Check before use and install it if needed.`,
+      'Self-healing',
+    )
+  }
+  return hintFor(failure, label)
+}
+
 function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
-  endRun(l, l.stop ? 'stopped' : 'failed', res, res.error ?? '')
-  if (!l.stop) {
+  const failure = l.stop ? undefined : classifyFailure(l.runId, l.provider, res.error ?? '')
+  endRun(l, l.stop ? 'stopped' : 'failed', res, res.error ?? '', failure?.kind ?? '')
+
+  const hint = failure ? heal(l, p, issue, failure) : ''
+  if (hint) {
+    // Kind "watchdog", so the next agent finds it among the latest comments of its prompt.
+    addComment(
+      issue.id,
+      'Self-healing',
+      'watchdog',
+      `Run of ${agent.name} failed: ${failure!.cause}\n\n${hint}`,
+    )
+  } else if (failure) {
     addComment(issue.id, 'System', 'system', `Run of ${agent.name} failed: ${res.error ?? 'unknown error'}`)
   }
 
   // Back into the queue it came from: a failed review stays a review.
   const queue = l.kind === 'review' ? 'review' : 'todo'
   let to = l.stop?.to === 'todo' ? queue : (l.stop?.to ?? queue)
-  if (to === queue) {
+  const providersFault = failure && PROVIDER_FAILURES.includes(failure.kind)
+  if (to === queue && !providersFault) {
     const watchdog = p.settings.watchdog
     const streak = failedStreak(issue.id)
     const limit = (watchdog.enabled && watchdog.rules.find((r: any) => r.type === 'attempts')?.value) || 5
@@ -437,7 +712,8 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
         `${streak} runs in a row without a result. Issue blocked, please take a look.`,
       )
     } else {
-      retryAfter.set(issue.id, Date.now() + 15_000 * 2 ** streak)
+      const delay = (failure && retryDelay(failure)) ?? 15_000 * 2 ** streak
+      retryAfter.set(issue.id, Date.now() + delay)
     }
   }
   moveIssue(issue.id, { status: to })
@@ -489,7 +765,10 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     }
   }
 
-  endRun(l, 'done', res)
+  if (['review', 'done'].includes(status) && p.settings.preview.command && l.workdir) {
+    await takeScreenshots(l, p, issue)
+  }
+  endRun(l, 'done', res, '', '', answer.startsWith('handoff:') ? 'handoff' : status)
   if (getIssue(issue.id)?.status !== 'in_progress')
     return void patchIssue(issue.id, { handoff: patch.handoff })
 
@@ -503,6 +782,25 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
   if (status === 'blocked') needsHuman(p, issue.id, `${agent.name} is stuck: ${summary}`)
   if (status === 'review' && patch.review_index === undefined) {
     needsHuman(p, issue.id, `${agent.name} is done and asks for your review: ${summary}`)
+  }
+}
+
+/** Screenshots of the branch for owner and reviewer, see preview.ts. A failure only leaves a note. */
+async function takeScreenshots(l: Live, p: any, issue: any) {
+  const text = 'Capturing the preview…'
+  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text, at: Date.now() })
+  l.lastActivity = Date.now()
+  try {
+    const files = await capturePreview({
+      issueId: issue.id,
+      runId: l.runId,
+      cwd: l.workdir!.cwd,
+      settings: p.settings.preview,
+    })
+    addComment(issue.id, 'System', 'system', `Preview captured (${files.length} screenshots).`)
+    emit(p.id, { t: 'shots', issueId: issue.id })
+  } catch (error: any) {
+    addComment(issue.id, 'System', 'system', `Preview not possible: ${error.message}`)
   }
 }
 
@@ -541,15 +839,27 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
   return true
 }
 
+/**
+ * The reviewer's verdict from its status block. A reviewer that forgot the block but started its
+ * summary the way the ADHD format asks ("Approved:", "Changes:") has still said what it means.
+ */
+function reviewVerdict(text: string, summary: string) {
+  const stated = (tag(text, 'status') ?? '').toLowerCase().trim()
+  if (stated) return stated
+  if (/^\s*approved?\s*:/i.test(summary)) return 'approve'
+  if (/^\s*changes\s*:/i.test(summary)) return 'changes'
+  return ''
+}
+
 async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: RunResult) {
   const agents = all('SELECT * FROM agents WHERE project_id=?', p.id).map(mapAgent)
   const maker = agents.find((a) => a.id === issue.maker_id)
   const summary = tag(res.text, 'summary') ?? res.text.replace(/<status>[\s\S]*?<\/status>/gi, '').trim()
-  const verdict = (tag(res.text, 'status') ?? '').toLowerCase()
+  const verdict = reviewVerdict(res.text, summary)
   const backToMaker = { review_index: -1, assignee_id: maker?.id ?? null }
 
   addComment(issue.id, reviewer.name, 'review', summary || '(no reason given)')
-  endRun(l, 'done', res)
+  endRun(l, 'done', res, '', '', ['approve', 'changes'].includes(verdict) ? verdict : 'blocked')
 
   if (verdict === 'approve') {
     const next = nextReviewer(issue, issue.review_index + 1, issue.maker_id, agents)
@@ -609,59 +919,189 @@ function tick() {
 function scheduleProject(p: any) {
   const running = [...live.values()].filter((l) => l.projectId === p.id)
   let slots = p.settings.maxConcurrent - running.length
-  if (slots <= 0) return
 
   // Waiting work: issues to do, and issues queued for a reviewer agent. Only the front of the
   // queue matters; the full issue is loaded when a run actually starts.
   const queue = all(
-    `SELECT id, number, assignee_id, blocked_by, review_index FROM issues
+    `SELECT id, number, priority, assignee_id, blocked_by, review_index FROM issues
      WHERE project_id=? AND (status='todo' OR (status='review' AND review_index>=0))
      ORDER BY priority DESC, rank, id LIMIT 500`,
     p.id,
   ).map(mapIssue)
   if (!queue.length) {
     if (!running.length) openNextGroup(p)
+    setWaiting(p.id, {})
     return setNotice(p.id, '')
   }
 
   const agents = all('SELECT * FROM agents WHERE project_id=? ORDER BY id', p.id).map(mapAgent)
   const startedNow: number[] = []
+
+  // Blockers first, see blockers.ts. The sort is stable, so rank and age still decide ties.
+  const weights = p.settings.blockerBoost
+    ? blockerWeights(
+        all(
+          "SELECT number, priority, status, blocked_by FROM issues WHERE project_id=? AND status!='done'",
+          p.id,
+        ).map(mapIssue),
+      )
+    : new Map<number, Weight>()
+  const priorityOf = (issue: any) => weights.get(issue.number)?.effective ?? issue.priority
+  if (weights.size) queue.sort(byBlockerWeight(weights))
+
+  // Quota pacing, see pacing.ts. The pace of a provider is asked once per pass.
+  const paced = p.settings.quotaPacing
+  const big = paced
+    ? bigIssues(
+        p.id,
+        queue.map((issue) => issue.id),
+      )
+    : new Set<number>()
+  const paces = new Map<string, Pace>()
+  const paceFor = (provider: string) => {
+    if (!paces.has(provider)) paces.set(provider, paceOf(provider).pace)
+    return paces.get(provider)!
+  }
+  if (paced && big.size && agents.some((agent) => paceFor(agent.provider) === 'spend')) {
+    // Same priority: big issues first, while the expiring quota can still pay for them.
+    queue.sort((a, b) => priorityOf(b) - priorityOf(a) || Number(big.has(b.id)) - Number(big.has(a.id)))
+  }
+  const startedOn: string[] = []
+  const runsOn = (provider: string) =>
+    [...live.values()].filter((l) => l.provider === provider).length +
+    startedOn.filter((name) => name === provider).length
+  const saving = new Set<string>()
   const busy = (agent: any) =>
     running.filter((l) => l.agentId === agent.id).length + startedNow.filter((id) => id === agent.id).length
   const isFree = (agent: any) => agent.enabled && busy(agent) < agent.max_instances
 
-  const waitsOnOthers = (issue: any) =>
-    issue.blocked_by.length > 0 &&
-    !!get(
-      `SELECT 1 FROM issues WHERE project_id=? AND status!='done'
-       AND number IN (${issue.blocked_by.map(() => '?').join(',')}) LIMIT 1`,
-      p.id,
-      ...issue.blocked_by,
-    )
+  // Every issue that does not start gets the reason, so the board can say why it waits.
+  const reasons: Record<number, Reason> = {}
+  const wait = (issue: any, kind: Reason['kind'], text: string) => void (reasons[issue.id] = { kind, text })
+  const openNumbers = new Set(
+    all("SELECT number FROM issues WHERE project_id=? AND status!='done'", p.id).map((row) => row.number),
+  )
 
   let exhausted = false
   for (const issue of queue) {
-    if (slots <= 0) break
-    if (waitsOnOthers(issue)) continue
-    if ((retryAfter.get(issue.id) ?? 0) > Date.now()) continue
-
-    const agent = issue.assignee_id ? agents.find((a) => a.id === issue.assignee_id) : agents.find(isFree)
-    if (!agent || !isFree(agent)) continue
-
-    const pick = pickProvider(p, agent)
-    if (!pick) {
-      exhausted = true
+    const blockers = issue.blocked_by.filter((number: number) => openNumbers.has(number))
+    if (blockers.length) {
+      wait(issue, 'blocked', `Waits for ${issueList(p.key, blockers)}`)
       continue
     }
-    start(p, getIssue(issue.id), agent, agents, pick)
+    const retryAt = retryAfter.get(issue.id) ?? 0
+    if (retryAt > Date.now()) {
+      wait(issue, 'retry', `Next attempt from ${when(retryAt)}, the last run failed`)
+      continue
+    }
+
+    const agent = issue.assignee_id ? agents.find((a) => a.id === issue.assignee_id) : agents.find(isFree)
+    if (!agent) {
+      wait(issue, 'agent', issue.assignee_id ? 'The assigned agent no longer exists' : 'No agent free')
+      continue
+    }
+    if (!agent.enabled) {
+      wait(issue, 'agent', `${agent.name} is switched off`)
+      continue
+    }
+    if (!isFree(agent)) {
+      wait(
+        issue,
+        'agent',
+        `${agent.name} already works on ${busy(agent)} of at most ${agent.max_instances} issues`,
+      )
+      continue
+    }
+    if (slots <= 0) {
+      wait(issue, 'full', `Project limit reached: ${p.settings.maxConcurrent} runs at once`)
+      continue
+    }
+
+    const pick = pickProvider(p, agent, avoidProvider.get(issue.id))
+    if (!pick) {
+      exhausted = true
+      wait(issue, 'provider', `No provider available. ${providerProblems(p, agent)}`)
+      continue
+    }
+    // Saving holds back big issues, but never one that others wait for: that would hold them all.
+    const holdsUpOthers = (weights.get(issue.number)?.blocks ?? 0) > 0
+    const waitsAsBig = big.has(issue.id) && !holdsUpOthers
+    if (paced && paceFor(pick.provider) === 'save' && (waitsAsBig || runsOn(pick.provider) >= 1)) {
+      saving.add(pick.provider)
+      const { left, resetsAt } = paceOf(pick.provider)
+      const label = PROVIDERS[pick.provider]?.label ?? pick.provider
+      const until = resetsAt ? `, reset ${when(resetsAt)}` : ''
+      const why = waitsAsBig
+        ? 'big issues wait until the reset'
+        : `only one run at a time, ${runsOn(pick.provider) === 1 ? 'one is' : `${runsOn(pick.provider)} are`} already running`
+      wait(issue, 'saving', `${label} saves quota (${Math.round(left * 100)}% left${until}): ${why}`)
+      continue
+    }
+    const full = getIssue(issue.id)
+    // The cap may have been lowered since the last run, so it is checked before every start too.
+    if (parkIfOverCap(p, full)) continue
+    avoidProvider.delete(issue.id)
+    start(p, full, agent, agents, pick)
     startedNow.push(agent.id)
+    startedOn.push(pick.provider)
     slots--
   }
 
-  setNotice(
-    p.id,
-    exhausted ? 'Usage limit reached: no provider is above its threshold. Agents are paused.' : '',
-  )
+  setWaiting(p.id, reasons)
+  setNotice(p.id, exhausted ? exhaustedNotice(agents) : saving.size ? savingNotice(saving) : '')
+}
+
+export type Reason = { kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'; text: string }
+
+/** Why each waiting issue of a project does not start, as of the last scheduling pass. */
+export const waiting = new Map<number, Record<number, Reason>>()
+
+function setWaiting(projectId: number, reasons: Record<number, Reason>) {
+  const before = JSON.stringify(waiting.get(projectId) ?? {})
+  if (before === JSON.stringify(reasons)) return
+  waiting.set(projectId, reasons)
+  emit(projectId, { t: 'waiting', reasons })
+}
+
+const issueList = (key: string, numbers: number[]) => {
+  const shown = numbers.slice(0, 3).map((number) => `${key}-${number}`)
+  return numbers.length > 3 ? `${shown.join(', ')} and ${numbers.length - 3} more` : shown.join(', ')
+}
+
+/** For each provider the agent may use: why it cannot take the run right now. */
+function providerProblems(p: any, agent: any) {
+  const chain = [agent.provider, ...(p.settings.fallbackEnabled ? p.settings.fallback : [])]
+  const problems = [...new Set(chain)]
+    .filter((provider) => PROVIDERS[provider])
+    .map((provider) => {
+      const state = providerLeft(p, provider)
+      const label = PROVIDERS[provider].label
+      if (state.resting) return `${label}: ${state.resting.reason} until ${when(state.resting.until)}`
+      if (!state.ready) return `${label}: not set up`
+      const reset = state.quotas.find((quota: any) => quota.resets_at)?.resets_at
+      return `${label}: ${Math.round(state.left)}% left, stops at ${state.budget.stopAtPct}%${reset ? `, reset ${when(reset)}` : ''}`
+    })
+  return problems.join(' · ') + (p.settings.fallbackEnabled ? '' : ' · Fallback is switched off')
+}
+
+function savingNotice(providers: Set<string>) {
+  const parts = [...providers].map((provider) => {
+    const { left, resetsAt } = paceOf(provider)
+    const until = resetsAt ? `, reset ${when(resetsAt)}` : ''
+    return `${PROVIDERS[provider]?.label ?? provider} (${Math.round(left * 100)}% left${until})`
+  })
+  return `Saving quota: ${parts.join(', ')}. One run at a time, big issues wait.`
+}
+
+function exhaustedNotice(agents: any[]) {
+  const resting = [...new Set(agents.map((a) => a.provider))]
+    .map((provider) => ({ provider, rest: restOf(provider) }))
+    .filter((r) => r.rest)
+    .map(
+      (r) => `${PROVIDERS[r.provider]?.label ?? r.provider}: ${r.rest!.reason} until ${when(r.rest!.until)}`,
+    )
+  if (resting.length) return `Agents are paused. ${resting.join(', ')}.`
+  return 'Usage limit reached: no provider is above its threshold. Agents are paused.'
 }
 
 /**
@@ -681,7 +1121,11 @@ function openNextGroup(p: any) {
   )?.grp
   if (!next) return
 
-  const waiting = all("SELECT id FROM issues WHERE project_id=? AND status='backlog' AND grp=?", p.id, next)
+  const waiting = all(
+    "SELECT id FROM issues WHERE project_id=? AND status='backlog' AND grp=? AND capped=0",
+    p.id,
+    next,
+  )
   for (const issue of waiting) patchIssue(issue.id, { status: 'todo' })
   console.log(`${p.key}: nothing left to work on, group "${next}" opened (${waiting.length} issues)`)
   kick()

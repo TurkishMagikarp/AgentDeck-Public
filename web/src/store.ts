@@ -1,6 +1,7 @@
-import { createSignal } from 'solid-js'
+import { createMemo, createRoot, createSignal } from 'solid-js'
 import { createStore, produce, reconcile, unwrap } from 'solid-js/store'
 import { api } from './api'
+import { blockerWeights } from '../../server/blockers.ts'
 import type {
   Agent,
   Comment,
@@ -12,6 +13,7 @@ import type {
   Run,
   Settings,
   Skill,
+  WaitReason,
 } from './types'
 
 type Board = { project: Project | null; agents: Agent[]; skills: Skill[]; issues: Issue[]; runs: Run[] }
@@ -24,6 +26,8 @@ export const [board, setBoard] = createStore<Board>(structuredClone(emptyBoard))
 export const [detail, setDetail] = createStore<{ current: IssueDetail | null }>({ current: null })
 export const [liveLine, setLiveLine] = createStore<Record<number, string>>({})
 export const [notice, setNotice] = createSignal('')
+/** Why each waiting issue does not start, by issue id, as the scheduler last saw it. */
+export const [waitReasons, setWaitReasons] = createStore<Record<number, WaitReason>>({})
 /** Models each provider offers, by provider id. */
 export const [models, setModels] = createSignal<Record<string, string[]>>({})
 
@@ -72,6 +76,7 @@ export async function openProject(projectId: number) {
   setGroupFilter('')
   setLiveLine(reconcile({}))
   setNotice('')
+  setWaitReasons(reconcile({}))
   await loadBoard(projectId)
   localStorage.setItem('agentdeck.project', String(projectId))
 
@@ -96,6 +101,7 @@ function handleEvent(projectId: number, e: any) {
       break
     case 'issue':
       upsertIssue(e.issue)
+      refreshDetail(e.issue.id)
       break
     case 'run.start':
       setBoard('runs', (runs) => [...runs.filter((r) => r.id !== e.run.id), e.run])
@@ -117,6 +123,9 @@ function handleEvent(projectId: number, e: any) {
     case 'notice':
       setNotice(e.text)
       break
+    case 'waiting':
+      setWaitReasons(reconcile(e.reasons))
+      break
   }
 }
 
@@ -136,16 +145,47 @@ function appendComment(comment: Comment) {
   setDetail('current', 'comments', (list) => [...list, comment])
 }
 
-export async function openIssue(issueId: number) {
+/** Fetches an issue for its page. Opening goes through the address, see openIssue. */
+export async function loadIssue(issueId: number) {
   setDetail('current', await api.get<IssueDetail>(`/issues/${issueId}`))
+}
+
+/** Opens the page of an issue of the current project, as a click on its card does. */
+export async function openIssue(issueId: number) {
+  const issue = board.issues.find((candidate) => candidate.id === issueId)
+  if (issue && board.project) showIssuePage(board.project.key, issue.number)
+  else await loadIssue(issueId)
 }
 
 export function closeIssue() {
   setDetail('current', null)
 }
 
+/** The address of an issue page. Search results and shared links use it. */
+export const issueLink = (key: string, number: number) => `#${key}-${number}`
+
+/** Opens an issue page and gives it its own history entry, so "back" returns to the board. */
+export function showIssuePage(key: string, number: number) {
+  const link = issueLink(key, number)
+  if (location.hash === link) window.dispatchEvent(new HashChangeEvent('hashchange'))
+  else location.hash = link
+}
+
+/** Takes the issue address out of the bar without a "hashchange", which would reopen the page. */
+function forgetIssueAddress() {
+  if (/^#[A-Z][A-Z0-9]+-\d+$/.test(location.hash)) {
+    history.pushState(null, '', location.pathname + location.search)
+  }
+}
+
+/** Leaves the issue page back to the board. */
+export function leaveIssuePage() {
+  forgetIssueAddress()
+  closeIssue()
+}
+
 function refreshDetail(issueId: number) {
-  if (detail.current?.issue.id === issueId) openIssue(issueId).catch(() => {})
+  if (detail.current?.issue.id === issueId) loadIssue(issueId).catch(() => {})
 }
 
 /** Optimistic update: the card moves immediately, the server confirms via SSE. */
@@ -157,6 +197,9 @@ export function updateIssue(issueId: number, patch: Partial<Issue>) {
   )
   return api.patch(`/issues/${issueId}`, patch).catch(fail)
 }
+
+/** The blocker weights the scheduler uses (blockers.ts), kept current with the board. */
+export const weights = createRoot(() => createMemo(() => blockerWeights(board.issues)))
 
 export function saveSettings(change: (settings: Settings) => void) {
   const project = board.project

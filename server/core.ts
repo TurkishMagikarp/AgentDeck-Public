@@ -2,17 +2,19 @@ import { getAccess } from './auth.ts'
 import type { LandingSettings } from './landing.ts'
 import { gzipSync } from 'node:zlib'
 import { all, get, run } from './db.ts'
+import { restOf } from './recovery.ts'
 
 export const PROVIDERS: Record<
   string,
   {
     label: string
-    cli: 'claude' | 'codex' | 'opencode' | 'api' | 'mock'
+    cli: 'claude' | 'codex' | 'opencode' | 'api' | 'managed' | 'mock'
     defaultModel: string
     baseUrl?: string
   }
 > = {
   anthropic: { label: 'Anthropic (Claude Code)', cli: 'claude', defaultModel: '' },
+  'claude-managed': { label: 'Claude Managed Agents (API)', cli: 'managed', defaultModel: 'claude-opus-5-5' },
   openai: { label: 'OpenAI (Codex)', cli: 'codex', defaultModel: '' },
   opencode: { label: 'Opencode Go', cli: 'opencode', defaultModel: '' },
   deepseek: {
@@ -57,6 +59,16 @@ export type Settings = {
   openGroupsInOrder: boolean
   /** No issue ever waits for a human: the deputy agent decides, and what it cannot settle is parked. */
   autonomous: boolean
+  /** Plan runs around the subscription windows: save when little is left, spend before a reset. */
+  quotaPacing: boolean
+  /** Issues that hold up others start first, by how many they hold up. See blockers.ts. */
+  blockerBoost: boolean
+  /** What one issue may use before it is parked. 0: no limit in that unit. */
+  issueCap: { usd: number; tokens: number }
+  /** Read-only public page at /show/<slug>. Issue titles only with `titles`. */
+  showcase: { enabled: boolean; slug: string; titles: boolean }
+  /** Starts the app of a branch for screenshots when work goes to review. Empty command: off. */
+  preview: { command: string; path: string }
   budgets: Record<string, Budget>
   fallbackEnabled: boolean
   fallback: string[]
@@ -78,16 +90,31 @@ export function defaultSettings(): Settings {
       stopAtPct: 10,
       scope: 'global',
     }
+  // Managed Agents spend prepaid API credits, so they get a cap from the start.
+  budgets['claude-managed'] = { limit: 200, unit: 'usd', window: 'month', stopAtPct: 5, scope: 'global' }
   return {
     maxConcurrent: 3,
     adhd: false,
     workspace: 'issue',
     maxReviewRounds: 3,
-    landing: { mode: 'off', baseBranch: '', push: false, protectedPaths: [] },
+    landing: {
+      mode: 'off',
+      baseBranch: '',
+      push: false,
+      protectedPaths: [],
+      githubTokenFile: '',
+      mergeMethod: 'merge',
+      evidence: { paths: [], markers: [] },
+    },
     notifyOwner: true,
     escalationAgentId: 0,
     openGroupsInOrder: false,
     autonomous: false,
+    quotaPacing: true,
+    blockerBoost: true,
+    issueCap: { usd: 0, tokens: 0 },
+    showcase: { enabled: false, slug: '', titles: false },
+    preview: { command: '', path: '/' },
     budgets,
     fallbackEnabled: true,
     fallback: Object.keys(PROVIDERS),
@@ -110,6 +137,9 @@ export function defaultSettings(): Settings {
   }
 }
 
+const lines = (value: unknown) =>
+  (Array.isArray(value) ? value : []).map((line) => String(line).trim()).filter(Boolean)
+
 export function mergeSettings(raw: any): Settings {
   const d = defaultSettings()
   const s = raw ?? {}
@@ -129,11 +159,34 @@ export function mergeSettings(raw: any): Settings {
       protectedPaths: (Array.isArray(s.landing?.protectedPaths) ? s.landing.protectedPaths : [])
         .map((path: unknown) => String(path).trim())
         .filter(Boolean),
+      mergeMethod: ['squash', 'rebase'].includes(s.landing?.mergeMethod) ? s.landing.mergeMethod : 'merge',
+      evidence: {
+        paths: lines(s.landing?.evidence?.paths),
+        markers: lines(s.landing?.evidence?.markers),
+      },
+      githubTokenFile: String(s.landing?.githubTokenFile ?? '')
+        .trim()
+        .slice(0, 300),
     },
     notifyOwner: s.notifyOwner ?? d.notifyOwner,
     escalationAgentId: Number(s.escalationAgentId) || 0,
     openGroupsInOrder: !!s.openGroupsInOrder,
     autonomous: !!s.autonomous,
+    quotaPacing: s.quotaPacing ?? d.quotaPacing,
+    blockerBoost: s.blockerBoost ?? d.blockerBoost,
+    issueCap: {
+      usd: Math.max(0, Number(s.issueCap?.usd) || 0),
+      tokens: Math.max(0, Math.round(Number(s.issueCap?.tokens) || 0)),
+    },
+    showcase: {
+      enabled: !!s.showcase?.enabled && /^[\w-]{8,40}$/.test(s.showcase?.slug ?? ''),
+      slug: /^[\w-]{8,40}$/.test(s.showcase?.slug ?? '') ? s.showcase.slug : '',
+      titles: !!s.showcase?.titles,
+    },
+    preview: {
+      command: String(s.preview?.command ?? '').slice(0, 500),
+      path: String(s.preview?.path ?? '/').slice(0, 200) || '/',
+    },
     budgets,
     fallbackEnabled: s.fallbackEnabled ?? d.fallbackEnabled,
     fallback,
@@ -280,9 +333,25 @@ const ISSUE_FIELDS = [
   'landing',
   'escalated',
   'pr_number',
+  'cap_factor',
+  'capped',
+  'blocker_returns',
 ]
 const JSON_ISSUE_FIELDS = ['blocked_by', 'reviewers']
-export function patchIssue(id: number, patch: Record<string, any>) {
+/** Fields whose changes the issue page lists in its history. Internal bookkeeping stays out. */
+const HISTORY_FIELDS = [
+  'title',
+  'status',
+  'assignee_id',
+  'priority',
+  'blocked_by',
+  'reviewers',
+  'grp',
+  'model',
+]
+
+/** `actor` is who made the change: "Owner", an agent's name, or "System" for the scheduler. */
+export function patchIssue(id: number, patch: Record<string, any>, actor = 'System') {
   const sets: string[] = []
   const vals: any[] = []
   for (const k of ISSUE_FIELDS) {
@@ -292,10 +361,29 @@ export function patchIssue(id: number, patch: Record<string, any>) {
   }
   if (!sets.length) return getIssue(id)
   const now = Date.now()
+  // Only the tracked fields are read before the write, and only when the patch touches one.
+  const tracked = HISTORY_FIELDS.filter((k) => k in patch)
+  const before = tracked.length ? get(`SELECT ${tracked.join(', ')} FROM issues WHERE id=?`, id) : null
   // The first time an issue is done counts; reopening it clears the date.
   if (patch.status === 'done') sets.push(`done_at=COALESCE(done_at, ${now})`)
   else if ('status' in patch) sets.push('done_at=NULL')
   run(`UPDATE issues SET ${sets.join(', ')}, updated_at=? WHERE id=?`, ...vals, now, id)
+  // As text: a number bound into a TEXT column would come back as "2.0".
+  const asText = (value: unknown) => (value === null || value === undefined ? null : String(value))
+  for (const k of before ? tracked : []) {
+    const next = asText(JSON_ISSUE_FIELDS.includes(k) ? JSON.stringify(patch[k] ?? []) : patch[k])
+    const old = asText(before![k])
+    if ((old ?? '') === (next ?? '')) continue
+    run(
+      'INSERT INTO issue_events (issue_id, at, actor, field, old, new) VALUES (?,?,?,?,?,?)',
+      id,
+      now,
+      actor,
+      k,
+      old,
+      next,
+    )
+  }
   const issue = lightIssue(id)
   if (issue) {
     rememberIssue(issue)
@@ -334,6 +422,7 @@ export function createIssue(
     grp?: string
     model?: string
     routine_id?: number
+    created_by?: string
   },
 ) {
   const p = get('SELECT next_number FROM projects WHERE id=?', pid)
@@ -342,8 +431,8 @@ export function createIssue(
   run('UPDATE projects SET next_number=next_number+1 WHERE id=?', pid)
   const r = run(
     `INSERT INTO issues (project_id, number, title, description, status, priority, assignee_id, rank,
-       blocked_by, reviewers, grp, model, routine_id, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       blocked_by, reviewers, grp, model, routine_id, created_by, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     pid,
     p.next_number,
     f.title,
@@ -357,6 +446,7 @@ export function createIssue(
     f.grp ?? '',
     f.model ?? '',
     f.routine_id ?? null,
+    f.created_by ?? '',
     now,
     now,
   )
@@ -404,6 +494,7 @@ export function providerLeft(project: { id: number; settings: Settings }, provid
     ? Math.max(0, 100 * (1 - Math.max(...quotas.map((q) => q.utilization))))
     : null
   const left = Math.min(budgetLeft ?? 100, quotaLeft ?? 100)
+  const rest = restOf(provider)
   return {
     provider,
     used,
@@ -416,17 +507,24 @@ export function providerLeft(project: { id: number; settings: Settings }, provid
     left,
     mode: access.mode,
     ready: access.ready,
-    available: access.ready && left > b.stopAtPct,
+    /** Set while the provider rests after a limit or a broken login, see recovery.ts. */
+    resting: rest ?? null,
+    available: access.ready && left > b.stopAtPct && !rest,
   }
 }
 
-/** Preferred provider first, then the project's fallback chain. Returns null when everything is below its threshold. */
+/**
+ * Preferred provider first, then the project's fallback chain. Returns null when everything is
+ * below its threshold. `avoid` is skipped when another provider is available.
+ */
 export function pickProvider(
   project: { id: number; settings: Settings },
   agent: { provider: string; model: string },
+  avoid?: string,
 ) {
   const s = project.settings
-  const order = [agent.provider, ...(s.fallbackEnabled ? s.fallback.filter((p) => p !== agent.provider) : [])]
+  const chain = [agent.provider, ...(s.fallbackEnabled ? s.fallback.filter((p) => p !== agent.provider) : [])]
+  const order = avoid ? [...chain.filter((p) => p !== avoid), ...chain.filter((p) => p === avoid)] : chain
   for (const p of order) {
     if (!PROVIDERS[p]) continue
     if (providerLeft(project, p).available)

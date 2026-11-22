@@ -118,6 +118,7 @@ export function projectStats(projectId: number, days: number) {
   )!
 
   return {
+    ...outcomes(projectId, since),
     days: labels,
     totals: {
       doneToday: count('SELECT COUNT(*) AS count FROM issues WHERE project_id=? AND done_at>=?', today),
@@ -139,4 +140,58 @@ export function projectStats(projectId: number, days: number) {
     agentTotals,
     quota,
   }
+}
+
+/**
+ * What the runs achieved, not only what they cost: per agent how much of its work landed and how
+ * often reviewers approved it, per model how often a run ended with a usable result.
+ */
+function outcomes(projectId: number, since: number) {
+  const outcomeByAgent = all(
+    `SELECT a.name AS agent,
+       (SELECT COUNT(*) FROM issues i WHERE i.maker_id = a.id AND i.done_at >= ?) AS landed,
+       (SELECT COUNT(*) FROM runs r JOIN issues i ON i.id = r.issue_id
+          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'approve' AND r.started_at >= ?) AS approved,
+       (SELECT COUNT(*) FROM runs r JOIN issues i ON i.id = r.issue_id
+          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'changes' AND r.started_at >= ?) AS changes,
+       (SELECT COALESCE(SUM(r.cost_usd), 0) FROM runs r JOIN issues i ON i.id = r.issue_id
+          WHERE i.maker_id = a.id AND i.done_at >= ?) AS landedCost
+     FROM agents a WHERE a.project_id = ?`,
+    since,
+    since,
+    since,
+    since,
+    projectId,
+  )
+    .filter((row) => row.landed || row.approved || row.changes)
+    .map((row) => ({
+      agent: row.agent,
+      landed: row.landed,
+      approvalRate: row.approved + row.changes ? row.approved / (row.approved + row.changes) : null,
+      costPerLanded: row.landed ? row.landedCost / row.landed : null,
+    }))
+    .sort((a, b) => b.landed - a.landed)
+
+  // A work run is usable when it handed in a result: done, review or a handoff. Reviews count
+  // when they reached a verdict. Failed runs, stops and "blocked" are not usable.
+  const outcomeByModel = all(
+    `SELECT provider, CASE WHEN model = '' THEN '(Standard)' ELSE model END AS model, COUNT(*) AS runs,
+       SUM(status = 'failed') AS failed,
+       SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'approve', 'changes')) AS usable,
+       COALESCE(SUM(cost_usd), 0) AS cost
+     FROM runs WHERE project_id = ? AND started_at >= ? AND status != 'running' AND agent_name != 'Watchdog'
+     GROUP BY provider, model ORDER BY runs DESC`,
+    projectId,
+    since,
+  ).map((row) => ({
+    provider: row.provider,
+    label: PROVIDERS[row.provider]?.label ?? row.provider,
+    model: row.model,
+    runs: row.runs,
+    failed: row.failed,
+    usableRate: row.runs ? row.usable / row.runs : 0,
+    costPerRun: row.runs ? row.cost / row.runs : 0,
+  }))
+
+  return { outcomeByAgent, outcomeByModel }
 }

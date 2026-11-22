@@ -5,6 +5,7 @@ import { compress } from 'hono/compress'
 import { getCookie, setCookie } from 'hono/cookie'
 import { streamSSE } from 'hono/streaming'
 import { createHash, timingSafeEqual } from 'node:crypto'
+import { existsSync, readFileSync } from 'node:fs'
 import { all, get, recoverAfterRestart, run, tx, DATA_DIR } from './db.ts'
 import {
   activity,
@@ -29,7 +30,9 @@ import {
   subscribe,
   touch,
 } from './core.ts'
-import { kick, landByHand, notices, shutdown, startEngine, stopIssueRun, stopRun } from './engine.ts'
+import { kick, landByHand, notices, shutdown, startEngine, stopIssueRun, stopRun, waiting } from './engine.ts'
+import { wakeProvider } from './recovery.ts'
+import { addLesson, deleteLesson, listLessons } from './lessons.ts'
 import { mailSettings, saveMailSettings, sendMail } from './notify.ts'
 import { applyBlueprint, BLUEPRINT_GUIDE, extractJson } from './blueprint.ts'
 import { importProject } from './importer.ts'
@@ -38,8 +41,31 @@ import { listModels } from './models.ts'
 import { rtkReport } from './rtk.ts'
 import { projectStats } from './stats.ts'
 import { agentApi } from './agentApi.ts'
+import { startHousekeeping } from './housekeeping.ts'
+import { issueChanges } from './diff.ts'
+import { searchIssues } from './search.ts'
+import { gitGraph } from './gitGraph.ts'
+import { capOf, spentOn } from './issueCap.ts'
+import { showcaseData, showcasePage } from './showcase.ts'
+import { listShots, shotsDir } from './preview.ts'
+import { applyTemplate, listTemplates } from './templates.ts'
+import {
+  pushDevices,
+  pushPublicKey,
+  sendPush,
+  subscribe as subscribePush,
+  unsubscribe as unsubscribePush,
+} from './push.ts'
+import { buildReport, reportSettings, saveReportSettings, sendReport, startReports } from './report.ts'
 import { createRoutine, deleteRoutine, listRoutines, startRoutines, updateRoutine } from './routines.ts'
 import { CONNECTIONS, listConnections, setConnectionKey } from './mcp.ts'
+import {
+  ENVIRONMENT_KEY_SECRET,
+  ensureManagedSetup,
+  MANAGED,
+  managedStatus,
+  setManagedRunLimitUsd,
+} from './managedAgent.ts'
 import {
   ACCESS,
   cancelLogin,
@@ -99,7 +125,15 @@ app.post('/api/login', async (c) => {
   return c.json({ ok: true })
 })
 
+// The showcase is public on purpose: it shows what the owner chose to show, and nothing else.
+app.get('/api/public/:slug', (c) => {
+  const data = showcaseData(c.req.param('slug'))
+  return data ? c.json(data) : c.json({ error: 'not found' }, 404)
+})
+app.get('/show/:slug', (c) => c.html(showcasePage(c.req.param('slug'))))
+
 app.use('/api/*', async (c, next) => {
+  if (c.req.path.startsWith('/api/public/')) return next()
   if (!TOKEN) return next()
   const header = c.req.header('authorization') ?? ''
   if (header.startsWith('Bearer ') && sameSecret(header.slice(7), TOKEN)) return next()
@@ -285,7 +319,7 @@ app.delete('/api/skills/:id', (c) => {
 app.get('/api/projects/:id/issues', (c) =>
   c.json(
     all(
-      `SELECT id, number, title, description, status, priority, assignee_id, grp, blocked_by, reviewers
+      `SELECT id, number, title, description, status, priority, assignee_id, grp, blocked_by, reviewers, created_by
        FROM issues WHERE project_id=? ORDER BY number`,
       id(c),
     ).map(mapIssue),
@@ -296,17 +330,74 @@ app.post('/api/projects/:id/issues', async (c) => {
   const pid = id(c)
   const b = await body(c)
   const title = s(b.title, 300).trim() || bad('Title is missing')
-  const issue = tx(() => createIssue(pid, { ...b, title, description: s(b.description) }))
+  const issue = tx(() =>
+    createIssue(pid, { ...b, title, description: s(b.description), created_by: 'Owner' }),
+  )
   kick()
   return c.json(issue, 201)
 })
 
+app.get('/api/issues/:id/spent', (c) => {
+  const issue = getIssue(id(c)) ?? bad('not found', 404)
+  const cap = getProject(issue.project_id).settings.issueCap
+  return c.json({ spent: spentOn(issue.id), cap: capOf(cap, issue.cap_factor), capped: !!issue.capped })
+})
+app.post('/api/issues/:id/raise-cap', (c) => {
+  const issue = getIssue(id(c)) ?? bad('not found', 404)
+  addComment(issue.id, 'System', 'system', 'Another round of the cost cap granted.')
+  patchIssue(issue.id, {
+    cap_factor: issue.cap_factor + 1,
+    capped: 0,
+    ...(issue.capped && issue.status === 'backlog' ? { status: 'todo' } : {}),
+  })
+  kick()
+  return c.json({ ok: true })
+})
+
+app.get('/api/issues/:id/changes', async (c) => {
+  const issue = getIssue(id(c)) ?? bad('not found', 404)
+  return c.json(await issueChanges(getProject(issue.project_id), issue.number))
+})
+app.get('/api/issues/:id/shots', (c) => c.json(listShots(id(c))))
+app.get('/api/issues/:id/shots/:file', async (c) => {
+  const file = c.req.param('file')
+  if (!/^\d+-(desktop|phone)\.png$/.test(file)) bad('invalid file')
+  const path = `${shotsDir(id(c))}/${file}`
+  if (!existsSync(path)) bad('not found', 404)
+  return c.body(readFileSync(path), 200, {
+    'content-type': 'image/png',
+    'cache-control': 'private, max-age=86400',
+  })
+})
+
+const LINK_COLUMNS = 'i.id, i.number, i.title, i.status, i.assignee_id'
+
 app.get('/api/issues/:id', (c) => {
   const issue = getIssue(id(c)) ?? bad('not found', 404)
+  const blockers = issue.blocked_by.length
+    ? all(
+        `SELECT ${LINK_COLUMNS} FROM issues i WHERE i.project_id=? AND i.number IN (${issue.blocked_by.map(() => '?').join(',')})
+         ORDER BY i.number`,
+        issue.project_id,
+        ...issue.blocked_by,
+      )
+    : []
+  // blocked_by is a JSON array; json_each finds the issues that list this one.
+  const dependents = all(
+    `SELECT ${LINK_COLUMNS} FROM issues i, json_each(i.blocked_by) j
+     WHERE i.project_id=? AND j.value=? ORDER BY i.number`,
+    issue.project_id,
+    issue.number,
+  )
   return c.json({
     issue,
     comments: all('SELECT * FROM comments WHERE issue_id=? ORDER BY id', issue.id),
     runs: all('SELECT * FROM runs WHERE issue_id=? ORDER BY id', issue.id),
+    events: all(
+      'SELECT id, at, actor, field, old, new FROM issue_events WHERE issue_id=? ORDER BY id',
+      issue.id,
+    ),
+    links: { blockers, dependents },
   })
 })
 
@@ -346,7 +437,12 @@ app.patch('/api/issues/:id', async (c) => {
       if (!('assignee_id' in patch) && cur.maker_id) patch.assignee_id = cur.maker_id
     }
   }
-  const issue = patchIssue(cur.id, patch)
+  // Moving a capped issue back into the queue grants it another round of the project's cap.
+  if (cur.capped && ['todo', 'review'].includes(patch.status)) {
+    patch.cap_factor = cur.cap_factor + 1
+    patch.capped = 0
+  }
+  const issue = patchIssue(cur.id, patch, c.req.header('remote-user') || 'Owner')
   if (patch.status === 'done') landByHand(cur.id)
   if (
     cur.status === 'in_progress' &&
@@ -381,6 +477,28 @@ app.post('/api/issues/:id/stop', (c) =>
 )
 
 // ---------- tokens RTK kept out of the agents' context ----------
+app.get('/api/projects/:id/lessons', (c) => c.json(listLessons(id(c))))
+app.post('/api/projects/:id/lessons', async (c) => {
+  const b = await body(c)
+  try {
+    addLesson(id(c), s(b.body, 2000), 'Owner')
+  } catch (e: any) {
+    bad(e.message)
+  }
+  return c.json(listLessons(id(c)), 201)
+})
+app.delete('/api/projects/:id/lessons/:lesson', (c) => {
+  deleteLesson(id(c), id(c, 'lesson'))
+  return c.json(listLessons(id(c)))
+})
+
+app.get('/api/search', (c) => c.json(searchIssues(c.req.query('q') ?? '')))
+
+app.get('/api/projects/:id/git', async (c) => {
+  const project = getProject(id(c)) ?? bad('not found', 404)
+  return c.json(await gitGraph(project))
+})
+
 app.get('/api/projects/:id/rtk', async (c) =>
   c.json(await rtkReport(getProject(id(c)) ?? bad('not found', 404))),
 )
@@ -435,6 +553,7 @@ app.get('/api/providers', (c) =>
       canLogin: !!ACCESS[id]?.login,
       ...getAccess(id), // mode, hasKey, ready. The key itself never leaves the server.
       hasSubscriptionToken: id === 'anthropic' && !!getSecret(SUBSCRIPTION_TOKEN),
+      ...(id === MANAGED ? { managed: managedStatus() } : {}),
     })),
   ),
 )
@@ -447,12 +566,25 @@ app.put('/api/providers/:id', async (c) => {
     setSecret(SUBSCRIPTION_TOKEN, b.subscriptionToken.trim().slice(0, 500))
   }
   try {
+    if (provider === MANAGED && typeof b.environmentKey === 'string') {
+      setSecret(ENVIRONMENT_KEY_SECRET, b.environmentKey.trim().slice(0, 500))
+    }
+    if (provider === MANAGED && b.runLimitUsd !== undefined) setManagedRunLimitUsd(Number(b.runLimitUsd))
     await setAccess(provider, b.mode, key)
+    // The environment has to exist before its key can be generated in the Claude Console.
+    if (provider === MANAGED && key) await ensureManagedSetup()
   } catch (e: any) {
     bad(e.message)
   }
   kick()
   return c.json(getAccess(provider))
+})
+
+// Ends the rest after a limit or a broken login early, e.g. once the owner has fixed the cause.
+app.post('/api/providers/:id/wake', (c) => {
+  wakeProvider(knownProvider(c))
+  kick()
+  return c.json({ ok: true })
 })
 
 app.get('/api/providers/:id/status', async (c) => c.json(await loginStatus(knownProvider(c))))
@@ -507,6 +639,41 @@ app.patch('/api/routines/:id', async (c) => {
 app.delete('/api/routines/:id', (c) => c.json({ ok: deleteRoutine(id(c)) }))
 
 // ---------- mail to the owner ----------
+// ---------- push and morning report ----------
+app.get('/api/push', (c) => c.json({ publicKey: pushPublicKey(), devices: pushDevices().length }))
+app.post('/api/push/subscribe', async (c) => {
+  const b = await body(c)
+  try {
+    subscribePush(b.subscription, s(b.device, 120))
+  } catch (e: any) {
+    bad(e.message)
+  }
+  return c.json({ devices: pushDevices().length }, 201)
+})
+app.post('/api/push/unsubscribe', async (c) => {
+  unsubscribePush(s((await body(c)).endpoint, 2000))
+  return c.json({ devices: pushDevices().length })
+})
+app.post('/api/push/test', async (c) =>
+  c.json({ delivered: await sendPush('AgentDeck', 'Push works on this device.') }),
+)
+
+app.get('/api/report', (c) => c.json({ ...reportSettings(), preview: buildReport().text }))
+app.put('/api/report', async (c) => {
+  try {
+    return c.json({ ...saveReportSettings(await body(c)), preview: buildReport().text })
+  } catch (e: any) {
+    return bad(e.message)
+  }
+})
+app.post('/api/report/send', async (c) => {
+  try {
+    return c.json(await sendReport())
+  } catch (e: any) {
+    return bad(e.message)
+  }
+})
+
 app.get('/api/mail', (c) => c.json(mailSettings()))
 
 app.put('/api/mail', async (c) => c.json(saveMailSettings(await body(c))))
@@ -537,6 +704,25 @@ app.put('/api/mcp/:id', async (c) => {
 app.post('/api/import', async (c) => {
   try {
     return c.json(importProject(await body(c)), 201)
+  } catch (e: any) {
+    return bad(e.message)
+  }
+})
+
+app.get('/api/templates', (c) => c.json(listTemplates()))
+app.post('/api/templates/:template', async (c) => {
+  const b = await body(c)
+  const key = s(b.key, 8).toUpperCase()
+  // A blueprint with a known key extends that project; a template must never do that.
+  if (get('SELECT 1 FROM projects WHERE key=?', key)) bad('Project key already exists', 409)
+  try {
+    const result = applyTemplate(c.req.param('template'), {
+      key,
+      name: s(b.name, 120),
+      repo_path: s(b.repo_path, 500),
+    })
+    kick()
+    return c.json(result, 201)
   } catch (e: any) {
     return bad(e.message)
   }
@@ -589,6 +775,7 @@ app.get('/api/events', (c) => {
     })
     for (const [runId, a] of activity) queue.push({ t: 'activity', runId, issueId: a.issueId, text: a.text })
     queue.push({ t: 'notice', text: notices.get(pid) ?? '' })
+    queue.push({ t: 'waiting', reasons: waiting.get(pid) ?? {} })
     while (open) {
       while (queue.length && open) await stream.writeSSE({ data: JSON.stringify(queue.shift()) })
       await new Promise<void>((r) => {
@@ -616,6 +803,8 @@ const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '12
 recoverAfterRestart()
 startEngine()
 startRoutines(kick)
+startHousekeeping()
+startReports()
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, () => {
     shutdown()
