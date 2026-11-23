@@ -121,7 +121,7 @@ export function SearchPalette(props: { onClose: () => void }) {
             aria-expanded={hits().length > 0}
             aria-controls="palette-results"
             aria-activedescendant={hits().length ? `palette-hit-${active()}` : undefined}
-            placeholder="Search issues: TAK-439, title or text from the description"
+            placeholder="Search issues: ABC-439, title or text from the description"
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
             onKeyDown={onKey}
@@ -168,7 +168,7 @@ export function SearchPalette(props: { onClose: () => void }) {
           <div class="palette-empty">
             <p>Nothing found for “{query().trim()}”.</p>
             <p class="muted">
-              Try an issue number like TAK-439, a single word from the title, or fewer words. The search
+              Try an issue number like ABC-439, a single word from the title, or fewer words. The search
               covers all projects, in title and description.
             </p>
           </div>

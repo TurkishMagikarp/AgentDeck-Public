@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { RunHandle, RunOpts, RunResult, Usage } from './adapters.ts'
+import { connectionKeys } from './mcp.ts'
 
 const MAX_STEPS = 80
 const MAX_TOOL_OUTPUT = 12_000
@@ -67,7 +68,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
     return new Promise<string>((done) => {
       const child = spawn(command, {
         cwd: opts.cwd,
-        env: { ...process.env, ...opts.env },
+        env: { ...process.env, ...connectionKeys(), ...opts.env },
         shell: true,
         windowsHide: true,
         signal: abort.signal,

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, onMount, Show, type JSX } from 'solid-js'
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js'
 import { api } from './api'
 import { PRIORITIES } from './Board'
 import { Changes } from './Changes'
@@ -121,12 +121,7 @@ export function IssuePage() {
       </header>
 
       <div class="issue-layout">
-        <input
-          class="title-input issue-title"
-          aria-label="Title"
-          value={issue().title}
-          onChange={(e) => updateIssue(issue().id, { title: e.currentTarget.value })}
-        />
+        <IssueTitle title={issue().title} onSave={(title) => updateIssue(issue().id, { title })} />
 
         <div class="issue-main">
           <Show when={!activeRun() && waitReasons[issue().id]}>
@@ -157,6 +152,9 @@ export function IssuePage() {
           </Show>
 
           <Description />
+          <Show when={board.project?.settings.checklists.enabled || issue().checklist?.length}>
+            <Checklist />
+          </Show>
           <Dependencies />
 
           <Show when={issue().handoff}>
@@ -213,6 +211,90 @@ export function IssuePage() {
           <textarea
             class="description"
             aria-label="Description"
+            value={draft()}
+            onInput={(e) => setDraft(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && save()}
+            ref={(element) => queueMicrotask(() => element.focus())}
+          />
+          <div class="inline-row end">
+            <button class="ghost" onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            <button class="primary" onClick={save}>
+              Save
+            </button>
+          </div>
+        </Show>
+      </section>
+    )
+  }
+
+  /** The acceptance checklist, with what the maker last reported per item. Editable, one item per line. */
+  function Checklist() {
+    const [editing, setEditing] = createSignal(false)
+    const [draft, setDraft] = createSignal('')
+    const items = () => issue().checklist ?? []
+    const start = () => {
+      setDraft(items().join('\n'))
+      setEditing(true)
+    }
+    const save = () => {
+      updateIssue(issue().id, { checklist: draft().split('\n') })
+      setEditing(false)
+    }
+    /** The maker's line for item n ("2. ok: proof"), if it reported one. */
+    const reported = (n: number) =>
+      (issue().checklist_report ?? '')
+        .split('\n')
+        .map((line) => line.match(/^\s*(\d+)[.)]?\s*\[?([a-zäöü/]+)\]?\s*[:—–-]?\s*(.*)$/i))
+        .find((found) => found && Number(found[1]) === n)
+    const met = (n: number) =>
+      /^(ok|done|erledigt|erfüllt|ja|yes|n\/a|entfällt)$/i.test(reported(n)?.[2] ?? '')
+
+    return (
+      <section class="issue-section">
+        <div class="issue-section-head">
+          <h3>Acceptance checklist</h3>
+          <Show when={!editing()}>
+            <button class="ghost" onClick={start}>
+              Edit
+            </button>
+          </Show>
+        </div>
+        <Show
+          when={editing()}
+          fallback={
+            <Show
+              when={items().length}
+              fallback={
+                <p class="muted">
+                  None yet. It is created at the next start from "Done when" and the templates.
+                </p>
+              }
+            >
+              <ol class="checklist">
+                <For each={items()}>
+                  {(item, index) => (
+                    <li classList={{ met: met(index() + 1) }}>
+                      <span class="checklist-mark" aria-label={met(index() + 1) ? 'met' : 'open'}>
+                        {met(index() + 1) ? '✓' : '○'}
+                      </span>
+                      <span>
+                        {item}
+                        <Show when={reported(index() + 1)?.[3]}>
+                          {(proof) => <span class="muted checklist-proof">{proof()}</span>}
+                        </Show>
+                      </span>
+                    </li>
+                  )}
+                </For>
+              </ol>
+            </Show>
+          }
+        >
+          <textarea
+            class="description"
+            aria-label="Checklist, one item per line"
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && save()}
@@ -572,4 +654,45 @@ export function IssuePage() {
       </div>
     )
   }
+}
+
+/** The title wraps like a heading instead of running out of the window. Enter saves it. */
+function IssueTitle(props: { title: string; onSave: (title: string) => void }) {
+  let field!: HTMLTextAreaElement
+  const fitHeight = () => {
+    field.style.height = 'auto'
+    field.style.height = `${field.scrollHeight}px`
+  }
+  createEffect(
+    on(
+      () => props.title,
+      () => queueMicrotask(fitHeight),
+    ),
+  )
+  onMount(() => window.addEventListener('resize', fitHeight))
+  onCleanup(() => window.removeEventListener('resize', fitHeight))
+
+  function save() {
+    const title = field.value.replace(/\s+/g, ' ').trim()
+    if (!title) field.value = props.title
+    else if (title !== props.title) props.onSave(title)
+    fitHeight()
+  }
+
+  return (
+    <textarea
+      ref={field}
+      class="title-input issue-title"
+      aria-label="Titel"
+      rows={1}
+      value={props.title}
+      onInput={fitHeight}
+      onChange={save}
+      onKeyDown={(e) => {
+        if (e.key !== 'Enter') return
+        e.preventDefault()
+        e.currentTarget.blur()
+      }}
+    />
+  )
 }

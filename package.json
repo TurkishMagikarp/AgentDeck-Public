@@ -12,7 +12,8 @@
     "build": "vite build",
     "server": "node server/main.ts",
     "dev:mock": "node --env-file=.env.dev server/main.ts",
-    "start": "vite build && node server/main.ts"
+    "start": "vite build && node server/main.ts",
+    "test": "node --test --test-force-exit \"test/*.test.ts\""
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",

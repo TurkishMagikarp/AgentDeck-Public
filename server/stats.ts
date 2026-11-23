@@ -173,13 +173,15 @@ function outcomes(projectId: number, since: number) {
     .sort((a, b) => b.landed - a.landed)
 
   // A work run is usable when it handed in a result: done, review or a handoff. Reviews count
-  // when they reached a verdict. Failed runs, stops and "blocked" are not usable.
+  // when they reached a verdict. Failed runs, stops and "blocked" are not usable. Finished runs
+  // without a verdict are from before verdicts were recorded; they say nothing either way.
   const outcomeByModel = all(
     `SELECT provider, CASE WHEN model = '' THEN '(Standard)' ELSE model END AS model, COUNT(*) AS runs,
        SUM(status = 'failed') AS failed,
-       SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'approve', 'changes')) AS usable,
+       SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'partial', 'approve', 'changes')) AS usable,
        COALESCE(SUM(cost_usd), 0) AS cost
      FROM runs WHERE project_id = ? AND started_at >= ? AND status != 'running' AND agent_name != 'Watchdog'
+       AND NOT (status = 'done' AND verdict = '')
      GROUP BY provider, model ORDER BY runs DESC`,
     projectId,
     since,

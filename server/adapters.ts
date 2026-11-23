@@ -34,6 +34,13 @@ export type RunOpts = {
   onActivity?: (line: string) => void
 }
 
+/**
+ * Codex sends its whole context again with every step, and long runs take 30 to 90 steps. Left
+ * alone it compacts only near its window of about 475k tokens; compacting earlier keeps each step
+ * small. Measured runs peaked at 90k to 136k tokens per step.
+ */
+const CODEX_COMPACT_TOKENS = Number(process.env.AGENTDECK_CODEX_COMPACT_TOKENS) || 100_000
+
 const short = (s: string, n = 160) => (s.length > n ? s.slice(0, n) + '…' : s).replace(/\s+/g, ' ')
 
 function command(cli: string, o: RunOpts): [string, string[]] {
@@ -64,6 +71,8 @@ function command(cli: string, o: RunOpts): [string, string[]] {
         ...(m ? ['-m', m] : []),
         // Codex has no "max"; its highest level is xhigh.
         ...(effort ? ['-c', `model_reasoning_effort='${effort === 'max' ? 'xhigh' : effort}'`] : []),
+        '-c',
+        `model_auto_compact_token_limit=${CODEX_COMPACT_TOKENS}`,
         '-',
       ],
     ]
@@ -84,7 +93,7 @@ type State = {
 
 const lastQuotaReading = new Map<string, { at: number; utilization: number }>()
 
-function saveQuota(provider: string, window: string, utilization: number, resetsAt: number | null) {
+export function saveQuota(provider: string, window: string, utilization: number, resetsAt: number | null) {
   const now = Date.now()
   run(
     'INSERT OR REPLACE INTO quota (provider, window, utilization, resets_at, updated_at) VALUES (?,?,?,?,?)',
@@ -295,11 +304,33 @@ function mockAnswer(o: RunOpts) {
     // A reviewer that forgets its status block, as real ones sometimes do.
     if (o.prompt.includes('[mock:nostatus]'))
       return '<summary>Approved: checked, just without a status block (Mock).</summary>'
-    return o.prompt.includes('[mock:changes]')
+    // "[mock:changes:QA]": only the reviewer of that name asks for changes.
+    const onlyReviewer = o.prompt.match(/\[mock:changes:([^\]]+)\]/)?.[1]
+    const asksForChanges = onlyReviewer
+      ? o.prompt.includes(`You are "${onlyReviewer}"`)
+      : o.prompt.includes('[mock:changes]')
+    return asksForChanges
       ? '<summary>Changes: test missing (mock).</summary>\n<status>changes</status>'
       : '<summary>Approved: checked (mock).</summary>\n<status>approve</status>'
   }
-  return '<summary>Mock run: task done (simulated).</summary>\n<handoff>Nothing open. Changed: no files (mock).</handoff>\n<status>review</status>'
+  if (o.prompt.includes('[mock:waitfor]')) {
+    const other = o.prompt.match(/\[mock:waitfor\]\s*([A-Z][A-Z0-9]*-\d+)/)?.[1] ?? ''
+    return `<summary>Blocked: waits for ${other} (mock).</summary>\n<handoff>Waiting.</handoff>\n<status>blocked</status>`
+  }
+  return `${mockChecklist(o.prompt)}<summary>Mock run: task done (simulated).</summary>\n<handoff>Nothing open. Changed: no files (mock).</handoff>\n<status>review</status>`
+}
+
+/** The report on the acceptance checklist: all items met, or the first open with "[mock:partial]". */
+function mockChecklist(prompt: string) {
+  const list = prompt.match(/## Acceptance checklist\n[^\n]*\n((?:\d+\. [^\n]*\n?)+)/)?.[1]
+  if (!list) return ''
+  const count = list.trim().split('\n').length
+  const lines = Array.from({ length: count }, (_, index) =>
+    index === 0 && prompt.includes('[mock:partial]')
+      ? '1. open: still missing'
+      : `${index + 1}. ok: checked (mock)`,
+  )
+  return `<checklist>\n${lines.join('\n')}\n</checklist>\n`
 }
 
 function mockRun(o: RunOpts): RunHandle {

@@ -18,13 +18,16 @@ import {
   providerLeft,
   PROVIDERS,
 } from './core.ts'
+import { checklistFor, parseReport } from './checklist.ts'
+import { issueChanges } from './diff.ts'
 import { all, get, run, tx } from './db.ts'
-import { githubTokenOf, landIssue, watchPullRequests, type Outcome } from './landing.ts'
+import { baseBranchOf, githubTokenOf, landIssue, watchPullRequests, type Outcome } from './landing.ts'
 import { addLesson } from './lessons.ts'
 import { notifyOwner } from './notify.ts'
 import { blockerWeights, byBlockerWeight, cycles, type Weight } from './blockers.ts'
 import { overCap } from './issueCap.ts'
 import { capturePreview } from './preview.ts'
+import { precheck } from './precheck.ts'
 import { bigIssues, paceOf, type Pace } from './pacing.ts'
 import { buildPrompt, tag, type RunKind } from './prompt.ts'
 import { rtkEnv } from './rtk.ts'
@@ -57,9 +60,17 @@ type Live = {
   lastActivity: number
   warned: Set<string>
   stop?: { to: string }
+  /** The agent has ended and the server checks its work (precheck.ts); the watchdog leaves it alone. */
+  checking?: boolean
 }
 
 type Pick = { provider: string; model: string; fallback: boolean }
+
+/**
+ * What the server found when a maker handed in: a partial delivery (checklist items open), a
+ * failed server check, or a pass. `report` is the maker's checklist block for the reviewers.
+ */
+type Gate = { result: 'partial' | 'failed' | 'passed'; note: string; report: string }
 
 const live = new Map<number, Live>()
 const retryAfter = new Map<number, number>()
@@ -154,6 +165,18 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
 
   const taken: Record<string, any> = { status: 'in_progress', assignee_id: agent.id }
   if (kind === 'work') taken.maker_id = agent.id
+  if (kind === 'work' && p.settings.checklists.enabled && !issue.checklist?.length) {
+    const { items, template } = checklistFor(issue, agent.name, p.settings.checklists.templates)
+    if (items.length) {
+      taken.checklist = items
+      addComment(
+        issue.id,
+        'System',
+        'system',
+        `Acceptance checklist created (${items.length === 1 ? '1 item' : `${items.length} items`}${template ? `, template "${template}"` : ''}).`,
+      )
+    }
+  }
   patchIssue(issue.id, taken)
   if (pick.fallback) {
     const preferred = PROVIDERS[agent.provider]?.label ?? agent.provider
@@ -198,6 +221,9 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
     .then(async (workdir) => {
       l.workdir = workdir
       if (l.stop) return finish(l, agent, failed('stopped'))
+      // A reviewer that gets the diff does not spend its context searching for the change.
+      const changes =
+        kind === 'review' ? await issueChanges(p, issue.number).catch(() => undefined) : undefined
       try {
         l.handle = startRun({
           provider: pick.provider,
@@ -212,6 +238,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
             workdir,
             kind,
             decides: kind === 'work' && issue.escalated > 0 && deputyOf(p)?.id === agent.id,
+            changes,
           }),
           autonomous: true,
           mcp: agent.mcp_ids,
@@ -286,12 +313,14 @@ function failedStreak(issueId: number) {
 async function finish(l: Live, agent: any, res: RunResult) {
   const p = getProject(l.projectId)
   const issue = getIssue(l.issueId)
+  // Checked in the maker's checkout before it is let go, while the branch is still checked out there.
+  const gate = p && issue && l.kind === 'work' && !l.stop && res.ok ? await gateWork(l, p, issue, res) : null
   if (p && l.workdir) await releaseWorkdir(p, l.workdir)
   if (!p || !issue) return void endRun(l, 'failed', res, 'Issue deleted')
 
   if (l.stop || !res.ok) finishFailed(l, p, issue, agent, res)
   else if (l.kind === 'review') await finishReview(l, p, issue, agent, res)
-  else await finishWork(l, p, issue, agent, res)
+  else await finishWork(l, p, issue, agent, res, gate)
 
   // Only an issue that waits for its next run is parked; landing and human decisions go on.
   const after = getIssue(issue.id)
@@ -321,8 +350,11 @@ function moveIssue(issueId: number, patch: Record<string, any>) {
   if (getIssue(issueId)?.status === 'in_progress') patchIssue(issueId, patch)
 }
 
-/** How often the deputy may take the same issue before it is parked. */
-const MAX_DEPUTY_DECISIONS = 3
+/**
+ * How often the deputy may take the same issue before it is parked. A maker that blocks again
+ * right after a decision mostly blocks for the same reason, and every round costs two runs.
+ */
+const MAX_DEPUTY_DECISIONS = 2
 
 /** The agent that decides in the owner's place. An autonomous project always has one. */
 function deputyOf(p: any) {
@@ -343,6 +375,7 @@ function handToDeputy(issue: any, deputy: any, reason: string) {
     status: 'todo',
     assignee_id: deputy.id,
     review_index: -1,
+    review_interim: 0,
     escalated: issue.escalated + 1,
   })
 }
@@ -580,7 +613,9 @@ function pullBlockersFromBacklog(p: any) {
       status: 'todo',
       review_index: -1,
       blocker_returns: blocker.blocker_returns + 1,
-      ...(decider ? { assignee_id: decider.id, escalated: 1 } : {}),
+      // The deputy decides once more. If the maker blocks again after that, the issue is parked
+      // at once instead of starting a new round of decisions.
+      ...(decider ? { assignee_id: decider.id, escalated: MAX_DEPUTY_DECISIONS } : {}),
     })
   }
   return stuck.length
@@ -598,6 +633,8 @@ function applyLanding(p: any, issueId: number, outcome: Outcome) {
     status: outcome.status,
     review_index: -1,
     review_rounds: 0,
+    review_from: 0,
+    review_interim: 0,
     assignee_id: issue.maker_id ?? issue.assignee_id,
   }
   let needsOwner = !!outcome.needsOwner
@@ -729,7 +766,135 @@ function nextReviewer(issue: any, from: number, makerId: number, agents: any[]) 
   return -1
 }
 
-async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResult) {
+/** Failed server checks in a row before the deputy (or a human) is asked. */
+const MAX_PRECHECK_FAILS = 3
+/** Partial deliveries in a row before the deputy looks at why the issue does not get finished. */
+const MAX_PARTIALS = 4
+
+/**
+ * Before a reviewer sees finished work: is the checklist complete, do the named proof files
+ * exist, does the base branch merge in and does the project's check pass? See precheck.ts.
+ * Null when there is nothing to check (blocked, handed over, or neither feature is on).
+ */
+async function gateWork(l: Live, p: any, issue: any, res: RunResult): Promise<Gate | null> {
+  const answer = (tag(res.text, 'status') ?? 'review').toLowerCase()
+  if (answer === 'blocked' || answer.startsWith('handoff:')) return null
+  const items: string[] = p.settings.checklists.enabled ? (issue.checklist ?? []) : []
+  if (!items.length && !p.settings.precheck.enabled) return null
+
+  const block = tag(res.text, 'checklist')
+  const report = items.length ? parseReport(block, items.length) : null
+  if (items.length && !report) {
+    return {
+      result: 'failed',
+      note: 'Your handoff has no <checklist> block. Report every item of the acceptance checklist as "ok" with proof or as "open", and hand in again.',
+      report: '',
+    }
+  }
+  if (report?.open.length) {
+    return {
+      result: 'partial',
+      note: `Partial handoff, open: item ${report.open.join(', ')}.`,
+      report: block ?? '',
+    }
+  }
+  if (!p.settings.precheck.enabled || !l.workdir) return { result: 'passed', note: '', report: block ?? '' }
+
+  l.checking = true
+  const text = 'Precheck running: proof, merge, project check…'
+  l.lastActivity = Date.now()
+  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text, at: l.lastActivity })
+  const outcome = await precheck({
+    cwd: l.workdir.cwd,
+    branch: l.workdir.branch,
+    base: await baseBranchOf(p),
+    command: p.settings.precheck.commandAt === 'landing' ? '' : p.settings.precheck.command,
+    timeoutMin: p.settings.precheck.timeoutMin,
+    report,
+  }).catch((error) => ({
+    ok: true,
+    note: `Precheck not possible, the reviewers see the work anyway: ${error.message}`,
+  }))
+  return { result: outcome.ok ? 'passed' : 'failed', note: outcome.note, report: block ?? '' }
+}
+
+/** Partial deliveries in a row on this issue. */
+function partialStreak(issueId: number) {
+  const recent = all(
+    "SELECT verdict FROM runs WHERE issue_id=? AND kind='work' AND status='done' ORDER BY id DESC LIMIT 10",
+    issueId,
+  )
+  const firstOther = recent.findIndex((r) => r.verdict !== 'partial')
+  return firstOther === -1 ? recent.length : firstOther
+}
+
+/** Open issues of the project that a text names as KEY-n, other than this one and its dependents. */
+function namedOpenIssues(p: any, issue: any, text: string) {
+  const numbers = [...text.matchAll(new RegExp(`\\b${p.key}-(\\d+)\\b`, 'g'))]
+    .map((match) => Number(match[1]))
+    .filter((number) => number !== issue.number)
+  if (!numbers.length) return []
+  return all(
+    `SELECT number, blocked_by FROM issues WHERE project_id=? AND status!='done'
+     AND number IN (${numbers.map(() => '?').join(',')})`,
+    p.id,
+    ...numbers,
+  )
+    .map(mapIssue)
+    .filter((other) => !other.blocked_by.includes(issue.number))
+    .map((other) => other.number as number)
+}
+
+/** The server check failed: back to the maker with what failed, without spending a review. */
+function sendBackFromPrecheck(p: any, issue: any, agent: any, gate: Gate, patch: Record<string, any>) {
+  addComment(issue.id, 'Precheck', 'watchdog', gate.note)
+  const fails = issue.precheck_fails + 1
+  if (fails >= MAX_PRECHECK_FAILS) {
+    patchIssue(issue.id, { ...patch, status: 'blocked', precheck_fails: 0 })
+    return needsHuman(
+      p,
+      issue.id,
+      `${agent.name} failed the precheck ${fails} times in a row. Last: ${gate.note}`,
+    )
+  }
+  patchIssue(issue.id, { ...patch, status: 'todo', precheck_fails: fails, assignee_id: agent.id })
+}
+
+/** Checklist items are still open: an interim look by the first reviewer, or straight on. */
+function handInPartial(
+  p: any,
+  issue: any,
+  agent: any,
+  agents: any[],
+  gate: Gate,
+  patch: Record<string, any>,
+) {
+  const streak = partialStreak(issue.id)
+  if (streak >= MAX_PARTIALS) {
+    patchIssue(issue.id, { ...patch, status: 'blocked' })
+    return needsHuman(
+      p,
+      issue.id,
+      `${agent.name} handed in ${streak} partial results in a row without finishing the checklist. ${gate.note}`,
+    )
+  }
+  const first = nextReviewer(issue, 0, agent.id, agents)
+  if (first < 0) {
+    addComment(issue.id, 'System', 'system', `${gate.note} Carry on with the open items.`)
+    return patchIssue(issue.id, { ...patch, status: 'todo' })
+  }
+  const reviewer = agents.find((a) => a.id === issue.reviewers[first])
+  addComment(issue.id, 'System', 'system', `${gate.note} Interim review by ${reviewer.name}.`)
+  patchIssue(issue.id, {
+    ...patch,
+    status: 'review',
+    review_index: first,
+    review_interim: 1,
+    assignee_id: reviewer.id,
+  })
+}
+
+async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResult, gate: Gate | null = null) {
   const agents = all('SELECT * FROM agents WHERE project_id=?', p.id).map(mapAgent)
   const summary =
     tag(res.text, 'summary') ?? res.text.replace(/<(handoff|status)>[\s\S]*?<\/\1>/gi, '').trim()
@@ -749,13 +914,43 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     }
   }
 
+  // "Blocked, waits for ABC-12": the issue waits for it and goes on by itself, nobody has to decide.
+  if (status === 'blocked') {
+    const waitsFor = namedOpenIssues(p, issue, `${summary}\n${patch.handoff}`)
+    if (waitsFor.length) {
+      status = 'todo'
+      patch.blocked_by = [...new Set([...issue.blocked_by, ...waitsFor])]
+      addComment(
+        issue.id,
+        'System',
+        'system',
+        `Now waits for ${issueList(p.key, waitsFor)} and carries on by itself once that is done.`,
+      )
+    }
+  }
+
+  if (gate) patch.checklist_report = gate.report
+  if (gate && gate.result !== 'passed') {
+    endRun(l, 'done', res, '', '', gate.result === 'partial' ? 'partial' : 'precheck')
+    if (getIssue(issue.id)?.status !== 'in_progress')
+      return void patchIssue(issue.id, { handoff: patch.handoff })
+    return gate.result === 'partial'
+      ? handInPartial(p, issue, agent, agents, gate, patch)
+      : sendBackFromPrecheck(p, issue, agent, gate, patch)
+  }
+  if (gate?.note) addComment(issue.id, 'Precheck', 'system', gate.note)
+  if (gate) patch.precheck_fails = 0
+
   const isFinished = status === 'done' || status === 'review'
 
   if (isFinished && (await watchdogRejects(l, p, issue, summary))) {
     status = p.settings.watchdog.llm.onFail
     delete patch.assignee_id
   } else if (isFinished) {
-    const first = nextReviewer(issue, 0, agent.id, agents)
+    // After a change request the review goes on where it stopped, if the project wants that.
+    const from = p.settings.resumeReview ? issue.review_from : 0
+    const resumed = nextReviewer(issue, from, agent.id, agents)
+    const first = resumed >= 0 || from === 0 ? resumed : nextReviewer(issue, 0, agent.id, agents)
     if (first >= 0) {
       const reviewer = agents.find((a) => a.id === issue.reviewers[first])
       status = 'review'
@@ -774,7 +969,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
 
   // "done" without reviewers is final, so the branch lands now. The issue stays in progress until then.
   if (status === 'done') {
-    patchIssue(issue.id, { handoff: patch.handoff })
+    patchIssue(issue.id, patch)
     return landAndClose(p, issue)
   }
 
@@ -861,6 +1056,16 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
   addComment(issue.id, reviewer.name, 'review', summary || '(no reason given)')
   endRun(l, 'done', res, '', '', ['approve', 'changes'].includes(verdict) ? verdict : 'blocked')
 
+  if (issue.review_interim && verdict === 'approve') {
+    addComment(
+      issue.id,
+      'System',
+      'system',
+      `${reviewer.name} approved the interim state. Carry on with the open items.`,
+    )
+    return moveIssue(issue.id, { status: 'todo', review_interim: 0, ...backToMaker })
+  }
+
   if (verdict === 'approve') {
     const next = nextReviewer(issue, issue.review_index + 1, issue.maker_id, agents)
     if (next >= 0) {
@@ -881,14 +1086,20 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
         'watchdog',
         `${rounds} rounds of changes without approval. Please decide how to go on.`,
       )
-      moveIssue(issue.id, { status: 'blocked', review_rounds: 0, ...backToMaker })
+      moveIssue(issue.id, { status: 'blocked', review_rounds: 0, review_interim: 0, ...backToMaker })
       return needsHuman(
         p,
         issue.id,
         `${rounds} rounds of changes without approval. Last objection: ${summary}`,
       )
     }
-    return moveIssue(issue.id, { status: 'todo', review_rounds: rounds, ...backToMaker })
+    return moveIssue(issue.id, {
+      status: 'todo',
+      review_rounds: rounds,
+      review_from: p.settings.resumeReview && !issue.review_interim ? issue.review_index : 0,
+      review_interim: 0,
+      ...backToMaker,
+    })
   }
 
   // "blocked", or no verdict at all: a human decides, and the issue stays with this reviewer.
@@ -970,7 +1181,6 @@ function scheduleProject(p: any) {
   const runsOn = (provider: string) =>
     [...live.values()].filter((l) => l.provider === provider).length +
     startedOn.filter((name) => name === provider).length
-  const saving = new Set<string>()
   const busy = (agent: any) =>
     running.filter((l) => l.agentId === agent.id).length + startedNow.filter((id) => id === agent.id).length
   const isFree = (agent: any) => agent.enabled && busy(agent) < agent.max_instances
@@ -1017,24 +1227,11 @@ function scheduleProject(p: any) {
       continue
     }
 
-    const pick = pickProvider(p, agent, avoidProvider.get(issue.id))
+    const kind = issue.review_index >= 0 ? 'review' : 'work'
+    const pick = pickProvider(p, agent, avoidProvider.get(issue.id), kind)
     if (!pick) {
       exhausted = true
-      wait(issue, 'provider', `No provider available. ${providerProblems(p, agent)}`)
-      continue
-    }
-    // Saving holds back big issues, but never one that others wait for: that would hold them all.
-    const holdsUpOthers = (weights.get(issue.number)?.blocks ?? 0) > 0
-    const waitsAsBig = big.has(issue.id) && !holdsUpOthers
-    if (paced && paceFor(pick.provider) === 'save' && (waitsAsBig || runsOn(pick.provider) >= 1)) {
-      saving.add(pick.provider)
-      const { left, resetsAt } = paceOf(pick.provider)
-      const label = PROVIDERS[pick.provider]?.label ?? pick.provider
-      const until = resetsAt ? `, reset ${when(resetsAt)}` : ''
-      const why = waitsAsBig
-        ? 'big issues wait until the reset'
-        : `only one run at a time, ${runsOn(pick.provider) === 1 ? 'one is' : `${runsOn(pick.provider)} are`} already running`
-      wait(issue, 'saving', `${label} saves quota (${Math.round(left * 100)}% left${until}): ${why}`)
+      wait(issue, 'provider', `No provider available. ${providerProblems(p, agent, kind)}`)
       continue
     }
     const full = getIssue(issue.id)
@@ -1048,10 +1245,10 @@ function scheduleProject(p: any) {
   }
 
   setWaiting(p.id, reasons)
-  setNotice(p.id, exhausted ? exhaustedNotice(agents) : saving.size ? savingNotice(saving) : '')
+  setNotice(p.id, exhausted ? exhaustedNotice(agents) : '')
 }
 
-export type Reason = { kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'; text: string }
+export type Reason = { kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider'; text: string }
 
 /** Why each waiting issue of a project does not start, as of the last scheduling pass. */
 export const waiting = new Map<number, Record<number, Reason>>()
@@ -1069,8 +1266,10 @@ const issueList = (key: string, numbers: number[]) => {
 }
 
 /** For each provider the agent may use: why it cannot take the run right now. */
-function providerProblems(p: any, agent: any) {
-  const chain = [agent.provider, ...(p.settings.fallbackEnabled ? p.settings.fallback : [])]
+function providerProblems(p: any, agent: any, kind: 'work' | 'review') {
+  const s = p.settings
+  const mayFall = s.fallbackEnabled && (kind === 'work' || s.fallbackReviews)
+  const chain = [agent.provider, ...(mayFall ? s.fallback : [])]
   const problems = [...new Set(chain)]
     .filter((provider) => PROVIDERS[provider])
     .map((provider) => {
@@ -1079,18 +1278,16 @@ function providerProblems(p: any, agent: any) {
       if (state.resting) return `${label}: ${state.resting.reason} until ${when(state.resting.until)}`
       if (!state.ready) return `${label}: not set up`
       const reset = state.quotas.find((quota: any) => quota.resets_at)?.resets_at
-      return `${label}: ${Math.round(state.left)}% left, stops at ${state.budget.stopAtPct}%${reset ? `, reset ${when(reset)}` : ''}`
+      const stop = provider === agent.provider ? state.budget.stopAtPct : s.fallbackReservePct
+      const stopText = provider === agent.provider ? `stops at ${stop}%` : `reserve ${stop}%`
+      return `${label}: ${Math.round(state.left)}% left, ${stopText}${reset ? `, reset ${when(reset)}` : ''}`
     })
-  return problems.join(' · ') + (p.settings.fallbackEnabled ? '' : ' · Fallback is switched off')
-}
-
-function savingNotice(providers: Set<string>) {
-  const parts = [...providers].map((provider) => {
-    const { left, resetsAt } = paceOf(provider)
-    const until = resetsAt ? `, reset ${when(resetsAt)}` : ''
-    return `${PROVIDERS[provider]?.label ?? provider} (${Math.round(left * 100)}% left${until})`
-  })
-  return `Saving quota: ${parts.join(', ')}. One run at a time, big issues wait.`
+  const note = !s.fallbackEnabled
+    ? ' · Fallback is switched off'
+    : kind === 'review' && !s.fallbackReviews
+      ? ' · Reviews do not fall back'
+      : ''
+  return problems.join(' · ') + note
 }
 
 function exhaustedNotice(agents: any[]) {
@@ -1137,7 +1334,7 @@ function watchdog() {
   const now = Date.now()
   for (const l of [...live.values()]) {
     const settings = getProject(l.projectId)?.settings.watchdog
-    if (!settings?.enabled || l.stop) continue
+    if (!settings?.enabled || l.stop || l.checking) continue
 
     for (const rule of settings.rules) {
       const minutes =

@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
-import { apiKey } from './auth.ts'
+import { apiKey, runEnv } from './auth.ts'
 import { PROVIDERS } from './core.ts'
 import { DATA_DIR, all } from './db.ts'
 
@@ -35,12 +35,23 @@ function codexModels() {
   return []
 }
 
+/** Without credentials opencode lists only its free models, so it gets the same key as a run would. */
+function opencodeEnv(): NodeJS.ProcessEnv {
+  try {
+    return runEnv('opencode', 'opencode')
+  } catch {
+    // API key mode without a stored key: list what the CLI's own logins allow
+    return process.env
+  }
+}
+
 async function opencodeModels() {
   try {
     const isWindows = process.platform === 'win32'
     const { stdout } = await execFileAsync(isWindows ? 'opencode.cmd' : 'opencode', ['models'], {
       timeout: 30_000,
       shell: isWindows,
+      env: opencodeEnv(),
     })
     return stdout
       .split('\n')

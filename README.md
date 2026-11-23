@@ -160,6 +160,27 @@ for the MCP connections, which you then assign to individual agents.
 
 API keys are stored encrypted in the database.
 
+## Faster runs: check after approval
+
+What measurements on a real project with six agents showed, and what AgentDeck does about it:
+
+- **Check command only before landing** (project settings, precheck): reviewers see finished work
+  at once. The check command runs once after the last approval on the merged state, and only green
+  is pushed. Red takes the merge back and returns to the maker with the output. Makers and reviewers
+  are told in their prompt not to run the full test suite themselves. Before, the same tests ran at
+  the maker, at the QA reviewer and before the review.
+- **Ticket format**: agents get in their prompt what an issue looks like (Goal, Task, Files, Done
+  when, Out of scope, Notes). The agent API rejects an issue without Task, Files and Done when.
+  That way smaller models are enough for makers; the strong ones stay with planning and review.
+- **One reviewer instead of a chain**: two reviewers in a row cost one whole extra run per issue.
+  Only those who must judge should review; what a test can decide, the test decides.
+- **Dependencies as blockers**: the scheduler only sees `blocked_by`. A sentence like "waits for X
+  to be built" in the description lets the issue start too early. And work that sits only in a group
+  opened later does not start, even if everything else waits for it.
+
+The lever with the biggest effect was none of the model or test tricks, but the question why only
+one run was going when ten were allowed.
+
 ## Claude Code skill
 
 ```
@@ -182,7 +203,10 @@ comments (see `server/importer.ts`). The imported project starts paused.
 | `server/core.ts`         | Settings, board cache, events, usage, routing                 |
 | `server/adapters.ts`     | Starting the agent CLIs and reading their output              |
 | `server/engine.ts`       | Scheduler, hand-over between agents, watchdog                 |
-| `server/landing.ts`      | Merging finished work or opening pull requests                |
+| `server/landing.ts`      | Merge or pull request, check command before the push          |
+| `server/checklist.ts`    | Acceptance checklist per issue: "Done when" plus templates    |
+| `server/precheck.ts`     | Precheck before review: proof files, merge, check command     |
+| `server/ticket.ts`       | Ticket format agents follow when they create issues           |
 | `server/auth.ts`         | Subscription or API key per provider, login from the UI       |
 | `server/apiAgent.ts`     | Built-in agent for providers with a plain chat API (Deepseek) |
 | `server/managedAgent.ts` | Claude Managed Agents with the tools running on this server   |

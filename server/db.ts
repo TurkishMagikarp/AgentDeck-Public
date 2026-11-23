@@ -186,6 +186,15 @@ addColumn('issues', 'escalated', 'INTEGER NOT NULL DEFAULT 0')
 addColumn('issues', 'done_at', 'INTEGER')
 // Who filed the issue: 'Owner' from the board, an agent's name, 'Routine'. Empty for older issues.
 addColumn('issues', 'created_by', "TEXT NOT NULL DEFAULT ''")
+// Acceptance checklist (checklist.ts): JSON list of items, and the maker's last report on it.
+addColumn('issues', 'checklist', "TEXT NOT NULL DEFAULT '[]'")
+addColumn('issues', 'checklist_report', "TEXT NOT NULL DEFAULT ''")
+// Where the next review starts: the reviewer who asked for the last changes.
+addColumn('issues', 'review_from', 'INTEGER NOT NULL DEFAULT 0')
+// 1 while a partial delivery is with its first reviewer for an interim check.
+addColumn('issues', 'review_interim', 'INTEGER NOT NULL DEFAULT 0')
+// Failed server checks in a row before a review (precheck.ts).
+addColumn('issues', 'precheck_fails', 'INTEGER NOT NULL DEFAULT 0')
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS quota_history (

@@ -3,6 +3,8 @@ import type { LandingSettings } from './landing.ts'
 import { gzipSync } from 'node:zlib'
 import { all, get, run } from './db.ts'
 import { restOf } from './recovery.ts'
+import { resetsOf } from './resets.ts'
+import { limitingWindows, modelLimitReached } from './pacing.ts'
 
 export const PROVIDERS: Record<
   string,
@@ -46,10 +48,21 @@ export type Settings = {
   maxConcurrent: number
   /** ADHD mode: agents answer with one result line plus at most three bullets. */
   adhd: boolean
+  /** Caveman mode: agents write all prose terse to save output tokens; code and blocks stay exact. */
+  caveman: boolean
   /** 'issue': a fresh worktree per issue. 'agent': each agent keeps one checkout and switches branches. */
   workspace: 'issue' | 'agent'
   /** After this many change requests between maker and reviewers a human has to decide. */
   maxReviewRounds: number
+  /** Acceptance checklist on every issue, see checklist.ts. `templates` uses the format described there. */
+  checklists: { enabled: boolean; templates: string }
+  /**
+   * Server check of finished work before any reviewer sees it, see precheck.ts. `commandAt`
+   * "landing" runs the check command only after the last approval, right before the merge.
+   */
+  precheck: { enabled: boolean; command: string; timeoutMin: number; commandAt: 'review' | 'landing' }
+  /** After a change request the next review starts at the reviewer who asked for it, not at the first one. */
+  resumeReview: boolean
   landing: LandingSettings
   /** Mail the owner when an issue waits for a human. */
   notifyOwner: boolean
@@ -73,6 +86,10 @@ export type Settings = {
   fallbackEnabled: boolean
   fallback: string[]
   fallbackModels: Record<string, string>
+  /** Reviews may move to another provider too. Off: a review waits for its reviewer's provider. */
+  fallbackReviews: boolean
+  /** A provider takes other agents' runs only while it has more than this percentage left. */
+  fallbackReservePct: number
   watchdog: {
     enabled: boolean
     rules: Rule[]
@@ -95,8 +112,12 @@ export function defaultSettings(): Settings {
   return {
     maxConcurrent: 3,
     adhd: false,
+    caveman: false,
     workspace: 'issue',
     maxReviewRounds: 3,
+    checklists: { enabled: false, templates: '' },
+    precheck: { enabled: false, command: '', timeoutMin: 20, commandAt: 'review' },
+    resumeReview: true,
     landing: {
       mode: 'off',
       baseBranch: '',
@@ -119,6 +140,8 @@ export function defaultSettings(): Settings {
     fallbackEnabled: true,
     fallback: Object.keys(PROVIDERS),
     fallbackModels: {},
+    fallbackReviews: false,
+    fallbackReservePct: 50,
     watchdog: {
       enabled: true,
       rules: [
@@ -150,8 +173,20 @@ export function mergeSettings(raw: any): Settings {
   return {
     maxConcurrent: Math.max(1, Number(s.maxConcurrent ?? d.maxConcurrent) || 1),
     adhd: !!s.adhd,
+    caveman: !!s.caveman,
     workspace: s.workspace === 'agent' ? 'agent' : 'issue',
     maxReviewRounds: Math.max(1, Number(s.maxReviewRounds ?? d.maxReviewRounds) || 3),
+    checklists: {
+      enabled: !!s.checklists?.enabled,
+      templates: String(s.checklists?.templates ?? '').slice(0, 20_000),
+    },
+    precheck: {
+      enabled: !!s.precheck?.enabled,
+      command: String(s.precheck?.command ?? '').slice(0, 500),
+      timeoutMin: Math.max(1, Math.min(60, Number(s.precheck?.timeoutMin) || d.precheck.timeoutMin)),
+      commandAt: s.precheck?.commandAt === 'landing' ? 'landing' : 'review',
+    },
+    resumeReview: s.resumeReview ?? d.resumeReview,
     landing: {
       mode: ['merge', 'pr'].includes(s.landing?.mode) ? s.landing.mode : 'off',
       baseBranch: String(s.landing?.baseBranch ?? '').slice(0, 120),
@@ -191,6 +226,8 @@ export function mergeSettings(raw: any): Settings {
     fallbackEnabled: s.fallbackEnabled ?? d.fallbackEnabled,
     fallback,
     fallbackModels: { ...(s.fallbackModels ?? {}) },
+    fallbackReviews: !!s.fallbackReviews,
+    fallbackReservePct: Math.max(0, Math.min(95, Number(s.fallbackReservePct ?? d.fallbackReservePct) || 0)),
     watchdog: {
       enabled: s.watchdog?.enabled ?? d.watchdog.enabled,
       rules: Array.isArray(s.watchdog?.rules) ? s.watchdog.rules : d.watchdog.rules,
@@ -214,6 +251,7 @@ export const mapIssue = (r: any) =>
     ...r,
     blocked_by: JSON.parse(r.blocked_by || '[]') as number[],
     reviewers: JSON.parse(r.reviewers || '[]') as number[],
+    ...('checklist' in r ? { checklist: JSON.parse(r.checklist || '[]') as string[] } : {}),
   }
 
 const ISSUE_LIGHT =
@@ -336,8 +374,13 @@ const ISSUE_FIELDS = [
   'cap_factor',
   'capped',
   'blocker_returns',
+  'checklist',
+  'checklist_report',
+  'review_from',
+  'review_interim',
+  'precheck_fails',
 ]
-const JSON_ISSUE_FIELDS = ['blocked_by', 'reviewers']
+const JSON_ISSUE_FIELDS = ['blocked_by', 'reviewers', 'checklist']
 /** Fields whose changes the issue page lists in its history. Internal bookkeeping stays out. */
 const HISTORY_FIELDS = [
   'title',
@@ -423,6 +466,7 @@ export function createIssue(
     model?: string
     routine_id?: number
     created_by?: string
+    checklist?: string[]
   },
 ) {
   const p = get('SELECT next_number FROM projects WHERE id=?', pid)
@@ -431,8 +475,8 @@ export function createIssue(
   run('UPDATE projects SET next_number=next_number+1 WHERE id=?', pid)
   const r = run(
     `INSERT INTO issues (project_id, number, title, description, status, priority, assignee_id, rank,
-       blocked_by, reviewers, grp, model, routine_id, created_by, created_at, updated_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       blocked_by, reviewers, grp, model, routine_id, created_by, checklist, created_at, updated_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     pid,
     p.next_number,
     f.title,
@@ -447,6 +491,7 @@ export function createIssue(
     f.model ?? '',
     f.routine_id ?? null,
     f.created_by ?? '',
+    JSON.stringify(f.checklist ?? []),
     now,
     now,
   )
@@ -490,8 +535,9 @@ export function providerLeft(project: { id: number; settings: Settings }, provid
           (q) => !q.resets_at || q.resets_at > now,
         )
       : []
-  const quotaLeft = quotas.length
-    ? Math.max(0, 100 * (1 - Math.max(...quotas.map((q) => q.utilization))))
+  const limiting = access.mode === 'subscription' ? limitingWindows(provider, now) : []
+  const quotaLeft = limiting.length
+    ? Math.max(0, 100 * (1 - Math.max(...limiting.map((q) => q.utilization))))
     : null
   const left = Math.min(budgetLeft ?? 100, quotaLeft ?? 100)
   const rest = restOf(provider)
@@ -509,30 +555,36 @@ export function providerLeft(project: { id: number; settings: Settings }, provid
     ready: access.ready,
     /** Set while the provider rests after a limit or a broken login, see recovery.ts. */
     resting: rest ?? null,
+    /** Limit resets the provider grants, null when it never reported any. */
+    resets: resetsOf(provider),
     available: access.ready && left > b.stopAtPct && !rest,
   }
 }
 
 /**
  * Preferred provider first, then the project's fallback chain. Returns null when everything is
- * below its threshold. `avoid` is skipped when another provider is available.
+ * below its threshold. `avoid` is skipped when another provider is available. A review only falls
+ * back when the project allows it, and a fallback provider keeps its reserve for its own agents.
  */
 export function pickProvider(
   project: { id: number; settings: Settings },
   agent: { provider: string; model: string },
   avoid?: string,
+  kind: 'work' | 'review' = 'work',
 ) {
   const s = project.settings
-  const chain = [agent.provider, ...(s.fallbackEnabled ? s.fallback.filter((p) => p !== agent.provider) : [])]
+  const mayFall = s.fallbackEnabled && (kind === 'work' || s.fallbackReviews)
+  const chain = [agent.provider, ...(mayFall ? s.fallback.filter((p) => p !== agent.provider) : [])]
   const order = avoid ? [...chain.filter((p) => p !== avoid), ...chain.filter((p) => p === avoid)] : chain
   for (const p of order) {
     if (!PROVIDERS[p]) continue
-    if (providerLeft(project, p).available)
-      return {
-        provider: p,
-        model: p === agent.provider ? agent.model : s.fallbackModels[p] || PROVIDERS[p].defaultModel,
-        fallback: p !== agent.provider,
-      }
+    const state = providerLeft(project, p)
+    const fallback = p !== agent.provider
+    if (!state.available || (fallback && state.left <= s.fallbackReservePct)) continue
+    const model = fallback ? s.fallbackModels[p] || PROVIDERS[p].defaultModel : agent.model
+    // A used-up model limit (Fable has its own) only stops this model, not the whole provider.
+    if (modelLimitReached(p, model)) continue
+    return { provider: p, model, fallback }
   }
   return null
 }

@@ -32,6 +32,7 @@ import {
 } from './core.ts'
 import { kick, landByHand, notices, shutdown, startEngine, stopIssueRun, stopRun, waiting } from './engine.ts'
 import { wakeProvider } from './recovery.ts'
+import { checklistFor, itemsFromText } from './checklist.ts'
 import { addLesson, deleteLesson, listLessons } from './lessons.ts'
 import { mailSettings, saveMailSettings, sendMail } from './notify.ts'
 import { applyBlueprint, BLUEPRINT_GUIDE, extractJson } from './blueprint.ts'
@@ -41,6 +42,9 @@ import { listModels } from './models.ts'
 import { rtkReport } from './rtk.ts'
 import { projectStats } from './stats.ts'
 import { agentApi } from './agentApi.ts'
+import { startClaudeUsage } from './claudeUsage.ts'
+import { startCodexUsage } from './codexUsage.ts'
+import { setResetsEnabled } from './resets.ts'
 import { startHousekeeping } from './housekeeping.ts'
 import { issueChanges } from './diff.ts'
 import { searchIssues } from './search.ts'
@@ -331,10 +335,60 @@ app.post('/api/projects/:id/issues', async (c) => {
   const b = await body(c)
   const title = s(b.title, 300).trim() || bad('Title is missing')
   const issue = tx(() =>
-    createIssue(pid, { ...b, title, description: s(b.description), created_by: 'Owner' }),
+    createIssue(pid, {
+      ...b,
+      title,
+      description: s(b.description),
+      checklist: checklistInput(b.checklist),
+      created_by: 'Owner',
+    }),
   )
   kick()
   return c.json(issue, 201)
+})
+
+/** A checklist from the board: a list of items or text with one item per line. */
+const checklistInput = (value: unknown) => itemsFromText(Array.isArray(value) ? value.join('\n') : value)
+
+/**
+ * Gives open issues without a checklist the one they would get at their next start, see
+ * checklist.ts. Without `apply` it only lists what it would do. Issues in progress or in review
+ * are left alone, so no running review changes its measure halfway.
+ */
+app.post('/api/projects/:id/checklists/fill', async (c) => {
+  const p = getProject(id(c)) ?? bad('not found', 404)
+  const b = await body(c)
+  const agents = all('SELECT id, name FROM agents WHERE project_id=?', p.id)
+  const open = all(
+    `SELECT * FROM issues WHERE project_id=? AND status IN ('backlog','todo','blocked') AND checklist='[]'
+     ORDER BY number`,
+    p.id,
+  ).map(mapIssue)
+  const planned = open
+    .map((issue) => {
+      const agent = agents.find((a) => a.id === (issue.maker_id ?? issue.assignee_id))
+      return {
+        issue,
+        agent: agent?.name ?? '',
+        ...checklistFor(issue, agent?.name ?? '', p.settings.checklists.templates),
+      }
+    })
+    .filter((plan) => plan.items.length)
+  if (b.apply) {
+    tx(() => {
+      for (const plan of planned) patchIssue(plan.issue.id, { checklist: plan.items }, 'Owner')
+    })
+  }
+  return c.json(
+    planned.map((plan) => ({
+      key: `${p.key}-${plan.issue.number}`,
+      title: plan.issue.title,
+      status: plan.issue.status,
+      agent: plan.agent,
+      template: plan.template,
+      items: plan.items,
+    })),
+  )
 })
 
 app.get('/api/issues/:id/spent', (c) => {
@@ -415,6 +469,7 @@ app.patch('/api/issues/:id', async (c) => {
       .map(Number)
       .filter((n: number) => n && n !== cur.number)
   if ('grp' in b) patch.grp = s(b.grp, 80).trim()
+  if ('checklist' in b) patch.checklist = checklistInput(b.checklist)
   if ('model' in b) {
     patch.model = s(b.model, 80).trim()
     if (!MODEL_RE.test(patch.model)) bad('invalid model name')
@@ -578,6 +633,14 @@ app.put('/api/providers/:id', async (c) => {
   }
   kick()
   return c.json(getAccess(provider))
+})
+
+app.put('/api/providers/:id/resets', async (c) => {
+  const provider = knownProvider(c)
+  const b = await body(c)
+  setResetsEnabled(provider, b.enabled === true)
+  kick()
+  return c.json({ ok: true })
 })
 
 // Ends the rest after a limit or a broken login early, e.g. once the owner has fixed the cause.
@@ -804,6 +867,8 @@ recoverAfterRestart()
 startEngine()
 startRoutines(kick)
 startHousekeeping()
+startClaudeUsage()
+startCodexUsage()
 startReports()
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, () => {

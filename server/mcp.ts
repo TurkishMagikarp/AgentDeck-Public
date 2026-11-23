@@ -88,6 +88,20 @@ export function apiKeyOfConnection(id: string): string | null {
   }
 }
 
+/**
+ * Every stored key under its usual name. Agents get all of them, whatever connections they list
+ * and whichever adapter runs them: project scripts that call a service directly (asset
+ * generators, import tools) expect the key there.
+ */
+export function connectionKeys() {
+  const env: Record<string, string> = {}
+  for (const [id, connection] of Object.entries(CONNECTIONS)) {
+    const key = apiKeyOfConnection(id)
+    if (key) env[connection.envVar] = key
+  }
+  return env
+}
+
 /** npx and uvx are .cmd shims on Windows and cannot be started directly by the CLIs. */
 function launcher(command: string, args: string[]): [string, string[]] {
   return isWindows ? ['cmd', ['/c', command, ...args]] : [command, args]
@@ -103,15 +117,11 @@ export type McpSetup = { args: string[]; env: Record<string, string>; cleanup: (
  * Keys travel in environment variables or a private temp file, never on the command line.
  */
 export function prepareMcp(cli: string, ids: string[], runId: string): McpSetup {
-  const setup: McpSetup = { args: [], env: {}, cleanup: () => {} }
+  const setup: McpSetup = { args: [], env: connectionKeys(), cleanup: () => {} }
   const active = ids
     .map((id) => ({ id, connection: CONNECTIONS[id], key: apiKeyOfConnection(id) }))
     .filter((entry) => entry.connection && entry.key) as { id: string; connection: Connection; key: string }[]
   if (!active.length) return setup
-
-  // Besides the MCP server the agent gets the key itself, under its usual name: project scripts
-  // that call the service directly (asset generators, import tools) expect it there.
-  for (const { connection, key } of active) setup.env[connection.envVar] = key
 
   if (cli === 'claude') {
     const servers: Record<string, unknown> = {}

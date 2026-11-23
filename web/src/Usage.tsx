@@ -19,6 +19,7 @@ type ProviderUsage = {
   available: boolean
   /** Set while the provider rests after a limit or a broken login. */
   resting: { until: number; reason: string } | null
+  resets: { available: number; enabled: boolean } | null
   ready: boolean
   mode: 'subscription' | 'apikey'
 }
@@ -91,10 +92,9 @@ export function Usage() {
           />
         </div>
         <p class="muted">
-          When less than 30 % of a subscription window is left and the reset is more than three hours away,
-          only one agent runs at a time and large issues wait. When the window resets within an hour with more
-          than 30 % left, large issues go first. An issue is large when its previous runs used more than twice
-          as much as a typical run in the project.
+          There is no saving: agents run at full speed until the provider's stop threshold is reached. When a
+          subscription window resets within an hour with more than 30 % left, large issues go first. An issue
+          is large when its previous runs used more than twice as much as a typical run in the project.
         </p>
       </section>
 
@@ -148,6 +148,13 @@ export function Usage() {
   )
 }
 
+/** "seven_day" and "seven_day_fable" as Claude reports them, in words. */
+function windowLabel(window: string) {
+  const model = window.match(/^(?:seven_day|five_hour)_(.+)$/)?.[1]
+  const base = window.startsWith('five_hour') ? '5 hours' : window.startsWith('seven_day') ? 'Week' : window
+  return model ? `${base} ${model[0].toUpperCase()}${model.slice(1)}` : base
+}
+
 const restEnd = (at: number) =>
   new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 
@@ -196,10 +203,30 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
           </p>
         )}
       </Show>
-      <Show when={usage().quotaLeft !== null}>
+      <Show when={usage().quotas.length}>
         <p class="muted">
-          Subscription quota used, as reported by the CLI: {Math.round(100 - usage().quotaLeft!)}%
+          Subscription usage:{' '}
+          {usage()
+            .quotas.map((q) => `${windowLabel(q.window)} ${Math.round(q.utilization * 100)}%`)
+            .join(' · ')}
         </p>
+      </Show>
+
+      <Show when={usage().resets}>
+        {(resets) => (
+          <div class="resets">
+            <span class="muted">
+              Limit resets available: <strong>{resets().available}</strong>
+            </span>
+            <Toggle
+              label="Redeem automatically"
+              checked={resets().enabled}
+              onChange={(on) =>
+                api.put(`/providers/${usage().provider}/resets`, { enabled: on }).then(props.onWake)
+              }
+            />
+          </div>
+        )}
       </Show>
 
       <div class="budget">
@@ -368,6 +395,24 @@ function FallbackOrder() {
           )}
         </For>
       </ol>
+      <div class="budget">
+        <label>
+          Reserve for own agents, % left
+          <input
+            type="number"
+            min="0"
+            max="95"
+            value={settings().fallbackReservePct}
+            onChange={(e) => saveSettings((s) => void (s.fallbackReservePct = Number(e.currentTarget.value)))}
+            title="A fallback provider takes over other agents' runs only while it has more than this left"
+          />
+        </label>
+        <Toggle
+          label="Let reviews fall back too"
+          checked={settings().fallbackReviews}
+          onChange={(on) => saveSettings((s) => void (s.fallbackReviews = on))}
+        />
+      </div>
     </section>
   )
 }

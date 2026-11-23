@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { apiKeyOfConnection } from './mcp.ts'
+import { runCommand } from './precheck.ts'
 import { DATA_DIR, all, get, run } from './db.ts'
 
 const execFileAsync = promisify(execFile)
@@ -41,7 +42,22 @@ export type Outcome = {
   needsOwner?: boolean
 }
 
-type Project = { id: number; key: string; repo_path: string; settings: { landing: LandingSettings } }
+type Project = {
+  id: number
+  key: string
+  repo_path: string
+  settings: {
+    landing: LandingSettings
+    precheck?: { enabled: boolean; command: string; timeoutMin: number; commandAt: 'review' | 'landing' }
+  }
+}
+
+/** The check command that runs on the merged state before it is pushed, or null. */
+function landingCheck(project: Project) {
+  const check = project.settings.precheck
+  return check?.enabled && check.command && check.commandAt === 'landing' ? check : null
+}
+
 type Issue = { id: number; number: number; title: string }
 
 const IDENTITY = ['-c', 'user.name=AgentDeck', '-c', 'user.email=agentdeck@localhost']
@@ -113,6 +129,13 @@ function inTurn<T>(repo: string, work: () => Promise<T>): Promise<T> {
   return next
 }
 
+/** The branch approved work lands on: the setting, or what the repository has checked out. */
+export async function baseBranchOf(project: Project) {
+  return (
+    project.settings.landing.baseBranch || (await git(repoOf(project), 'symbolic-ref', '--short', 'HEAD'))
+  )
+}
+
 const touchesProtected = (files: string[], settings: LandingSettings) =>
   files.filter((file) => settings.protectedPaths.some((path) => path && file.startsWith(path)))
 
@@ -150,7 +173,7 @@ export function landIssue(project: Project, issue: Issue): Promise<Outcome> {
     if (!(await succeeds(git(repo, 'rev-parse', '--verify', `refs/heads/${branch}`)))) {
       return { status: 'done', note: '' } // the issue produced no branch, e.g. a report
     }
-    const base = settings.baseBranch || (await git(repo, 'symbolic-ref', '--short', 'HEAD'))
+    const base = await baseBranchOf(project)
     if ((await git(repo, 'rev-list', '--count', `${base}..${branch}`)) === '0') {
       return { status: 'done', note: '' }
     }
@@ -192,12 +215,24 @@ async function mergeLocally(
 
   if (settings.push) await succeeds(git(repo, 'pull', '--ff-only', 'origin', base))
 
+  const before = await git(repo, 'rev-parse', 'HEAD')
   const message = `Merge ${project.key}-${issue.number}: ${issue.title}`
   if (!(await succeeds(git(repo, ...IDENTITY, 'merge', '--no-ff', '-m', message, branch)))) {
     await succeeds(git(repo, 'merge', '--abort'))
     return {
       status: 'todo',
       note: `The branch does not merge cleanly into ${base}. Please merge ${base} into the branch, resolve the conflicts and hand it in again.`,
+    }
+  }
+
+  // Reviewed first, tested last: the check runs once, on exactly what would be pushed. A red
+  // check takes the merge back, so the base branch never holds a state that failed it.
+  const check = landingCheck(project)
+  if (check) {
+    const failed = await runCommand(repo, check.command, check.timeoutMin)
+    if (failed) {
+      await git(repo, 'reset', '--hard', before)
+      return { status: 'todo', note: failed.note }
     }
   }
 
@@ -209,7 +244,8 @@ async function mergeLocally(
       needsOwner: true,
     }
   }
-  return { status: 'done', note: `Landed in ${base} (${commit}).` }
+  const tested = check ? `, \`${check.command}\` green` : ''
+  return { status: 'done', note: `Landed in ${base} (${commit}${tested}).` }
 }
 
 function pullRequestBody(project: Project, issue: Issue) {

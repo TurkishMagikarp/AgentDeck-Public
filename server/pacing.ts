@@ -1,33 +1,57 @@
 // Spends a subscription quota with foresight. The CLIs report how full their windows are and when
 // they reset (table quota). From that each provider gets a pace:
-//   save:   little left and the reset is far away. Big issues wait, one run at a time.
 //   spend:  the window resets soon with plenty left. Big issues go first, the rest would expire.
 //   normal: everything else.
+// There is no saving: a provider runs at full speed until it reaches the owner's stop threshold.
 // Whether an issue is big is guessed from what its earlier runs used, compared to the project.
 import { getAccess } from './auth.ts'
 import { all, get } from './db.ts'
 
-export type Pace = 'save' | 'spend' | 'normal'
+export type Pace = 'spend' | 'normal'
 
 const HOUR = 3_600_000
-/** Below this share left, and with the reset further away than SAVE_IF_RESET_AFTER, the provider saves. */
-const SAVE_BELOW = 0.3
-const SAVE_IF_RESET_AFTER = 3 * HOUR
 /** With more than this share left and the reset closer than SPEND_IF_RESET_WITHIN, the provider spends. */
 const SPEND_ABOVE = 0.3
 const SPEND_IF_RESET_WITHIN = HOUR
 
-/** Rows of the provider's windows that have not reset yet. */
-function windows(provider: string, now: number) {
-  return all('SELECT utilization, resets_at FROM quota WHERE provider=?', provider).filter(
-    (row) => !row.resets_at || row.resets_at > now,
+/** A reading older than this no longer stops runs: only a run can bring a fresh one. */
+const STALE_AFTER = 6 * HOUR
+/**
+ * Windows that do not stop every run. Extra usage on top of the plan, and the weekly limits of a
+ * single model (Claude reports Fable apart from the normal weekly limit): a run that hits one of
+ * those fails with a limit error, and recovery.ts rests the provider until it resets.
+ */
+const NOT_LIMITING = /overage|opus|sonnet|fable|haiku/i
+
+/** True while the weekly limit of this model alone (e.g. Fable) is used up. */
+export function modelLimitReached(provider: string, model: string, now = Date.now()) {
+  const family = model.toLowerCase().match(/fable|opus|sonnet|haiku/)?.[0]
+  if (!family) return false
+  return all('SELECT window, utilization, resets_at FROM quota WHERE provider=?', provider).some(
+    (row) =>
+      row.window.toLowerCase().includes(family) &&
+      row.utilization >= 0.98 &&
+      (!row.resets_at || row.resets_at > now),
+  )
+}
+
+/** The provider's windows that limit every run, have not reset yet and were read recently. */
+export function limitingWindows(provider: string, now = Date.now()) {
+  return all(
+    'SELECT window, utilization, resets_at, updated_at FROM quota WHERE provider=?',
+    provider,
+  ).filter(
+    (row) =>
+      !NOT_LIMITING.test(row.window) &&
+      (!row.resets_at || row.resets_at > now) &&
+      now - row.updated_at < STALE_AFTER,
   )
 }
 
 export function paceOf(provider: string, now = Date.now()): { pace: Pace; left: number; resetsAt?: number } {
   // Like the availability in core.ts: the subscription windows say nothing about an API key.
   if (getAccess(provider).mode !== 'subscription') return { pace: 'normal', left: 1 }
-  const rows = windows(provider, now)
+  const rows = limitingWindows(provider, now)
   if (!rows.length) return { pace: 'normal', left: 1 }
   // The fullest window decides, as it is the one that will stop the runs first.
   const fullest = rows.reduce((a, b) => (b.utilization > a.utilization ? b : a))
@@ -35,7 +59,6 @@ export function paceOf(provider: string, now = Date.now()): { pace: Pace; left: 
   const resetsAt = fullest.resets_at ?? undefined
   const resetIn = resetsAt ? resetsAt - now : Infinity
 
-  if (left < SAVE_BELOW && resetIn > SAVE_IF_RESET_AFTER) return { pace: 'save', left, resetsAt }
   if (left > SPEND_ABOVE && resetIn < SPEND_IF_RESET_WITHIN) return { pace: 'spend', left, resetsAt }
   return { pace: 'normal', left, resetsAt }
 }

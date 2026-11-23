@@ -320,6 +320,13 @@ main {
   height: 100vh;
 }
 
+/* The old board fades only when the new one takes a moment, so quick switches do not flicker. */
+main.switching {
+  opacity: 0.45;
+  pointer-events: none;
+  transition: opacity 0.15s 0.12s;
+}
+
 .topbar {
   display: flex;
   align-items: center;
@@ -587,6 +594,13 @@ main {
   padding-left: 0;
 }
 
+textarea.title-input {
+  resize: none;
+  overflow: hidden;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .budget label {
   display: grid;
   gap: 3px;
@@ -820,6 +834,13 @@ main {
   opacity: 0.6;
 }
 
+.resets {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0 8px;
+}
 .budget {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2524,6 +2545,36 @@ kbd {
 
 .issue-main .description {
   min-height: 240px;
+}
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.checklist li {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 8px;
+  line-height: 1.5;
+}
+
+.checklist-mark {
+  color: var(--muted);
+  text-align: center;
+}
+
+.checklist li.met .checklist-mark {
+  color: var(--good);
+}
+
+.checklist-proof {
+  display: block;
+  font-size: 0.9em;
+  overflow-wrap: anywhere;
 }
 
 .inline-row.end {

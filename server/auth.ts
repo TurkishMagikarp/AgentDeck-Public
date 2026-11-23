@@ -192,7 +192,7 @@ export function loginStatus(provider: string) {
   })
 }
 
-function readStatus(provider: string, output: string, exitCode: number | null) {
+export function readStatus(provider: string, output: string, exitCode: number | null) {
   if (provider === 'anthropic') {
     if (getSecret(SUBSCRIPTION_TOKEN)) return { loggedIn: true, detail: 'via stored subscription token' }
     try {
@@ -206,8 +206,8 @@ function readStatus(provider: string, output: string, exitCode: number | null) {
     const loggedIn = exitCode === 0 && /logged in/i.test(output) && !/not logged in/i.test(output)
     return { loggedIn, detail: loggedIn ? output.trim().split('\n')[0] : '' }
   }
-  // opencode prints one line per stored credential; account names stay on the server.
-  const stored = output.split('\n').filter((line) => /\bstored\b/.test(line)).length
+  // opencode ends its list with "N credentials"; account names stay on the server.
+  const stored = Number(output.match(/(\d+)\s+credentials?\b/i)?.[1] ?? 0)
   return { loggedIn: stored > 0, detail: stored ? `${stored} credentials stored` : '' }
 }
 

@@ -22,8 +22,12 @@ export type WaitReason = {
 export type Settings = {
   maxConcurrent: number
   adhd: boolean
+  caveman: boolean
   workspace: 'issue' | 'agent'
   maxReviewRounds: number
+  checklists: { enabled: boolean; templates: string }
+  precheck: { enabled: boolean; command: string; timeoutMin: number; commandAt: 'review' | 'landing' }
+  resumeReview: boolean
   landing: {
     mode: 'off' | 'merge' | 'pr'
     baseBranch: string
@@ -46,6 +50,8 @@ export type Settings = {
   fallbackEnabled: boolean
   fallback: string[]
   fallbackModels: Record<string, string>
+  fallbackReviews: boolean
+  fallbackReservePct: number
   watchdog: {
     enabled: boolean
     rules: WatchdogRule[]
@@ -106,6 +112,10 @@ export type Issue = {
   model?: string
   description?: string
   handoff?: string
+  /** What "done" means for this issue, one checkable item each. */
+  checklist?: string[]
+  /** The maker's last report on the checklist, as it wrote it. */
+  checklist_report?: string
   maker_id?: number | null
   created_by?: string
   created_at?: number

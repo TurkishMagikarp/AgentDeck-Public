@@ -21,10 +21,12 @@ import {
   loadProjects,
   notice,
   openProject,
+  openingProject,
   projects,
   saveSettings,
   loadIssue,
   closeIssue,
+  switchingProject,
 } from './store'
 import { Providers } from './Providers'
 import { Toggle } from './ui'
@@ -133,7 +135,7 @@ export function App() {
             {(project) => (
               <li>
                 <button
-                  classList={{ active: project.id === board.project?.id }}
+                  classList={{ active: project.id === (openingProject() ?? board.project?.id) }}
                   onClick={() => selectProject(project.id)}
                 >
                   <span class="project-key">{project.key}</span>
@@ -156,7 +158,7 @@ export function App() {
         </button>
       </nav>
 
-      <main>
+      <main classList={{ switching: switchingProject() }} aria-busy={switchingProject()}>
         <Show when={board.project} fallback={<Welcome onCreate={() => setCreating(true)} />}>
           {(project) => (
             <>
@@ -170,7 +172,7 @@ export function App() {
                   >
                     <For each={projects()}>
                       {(other) => (
-                        <option value={other.id} selected={other.id === project().id}>
+                        <option value={other.id} selected={other.id === (openingProject() ?? project().id)}>
                           {other.name}
                         </option>
                       )}
@@ -219,6 +221,12 @@ export function App() {
                   title="Agents reply with one result line and at most three bullet points"
                   checked={project().settings.adhd}
                   onChange={(on) => saveSettings((s) => void (s.adhd = on))}
+                />
+                <Toggle
+                  label="Caveman"
+                  title="Agents write tersely like a caveman and save output tokens. Code, commands and status stay exact."
+                  checked={project().settings.caveman}
+                  onChange={(on) => saveSettings((s) => void (s.caveman = on))}
                 />
                 <button classList={{ primary: project().paused }} onClick={togglePause}>
                   <Icon name={project().paused ? 'play' : 'pause'} size={14} />

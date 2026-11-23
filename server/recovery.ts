@@ -2,6 +2,7 @@
 // A rate limit is not the issue's fault, so it does not count as a failed attempt and the provider
 // rests until its limit resets. A missing tool or an overfull context gets a hint for the next run.
 import { all } from './db.ts'
+import { limitingWindows } from './pacing.ts'
 
 export type FailureKind = 'limit' | 'access' | 'network' | 'toolchain' | 'context' | 'unknown'
 
@@ -60,7 +61,9 @@ function resetTime(message: string, now = Date.now()): number | undefined {
 
 /** The provider's own quota window, as the CLI reported it, when it is used up. */
 function quotaReset(provider: string, now = Date.now()) {
-  const full = all('SELECT resets_at FROM quota WHERE provider=? AND utilization>=0.98', provider)
+  // A single model's limit (Fable) must not rest the whole provider until it resets.
+  const full = limitingWindows(provider, now)
+    .filter((row) => row.utilization >= 0.98)
     .map((row) => row.resets_at as number)
     .filter((at) => at && at > now)
   return full.length ? Math.min(...full) : undefined

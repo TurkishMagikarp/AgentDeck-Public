@@ -65,33 +65,73 @@ export async function loadMeta() {
     .catch(() => {})
 }
 
+/** The project the user picked last. Its board may still be on the way. */
+export const [openingProject, setOpeningProject] = createSignal<number | null>(null)
+
+/** The last board seen of each project, so switching back shows it at once while the fresh one loads. */
+const lastBoards = new Map<number, Board>()
+
 async function loadBoard(projectId: number) {
   const data = await api.get<Board>(`/projects/${projectId}/board`)
+  // A later click may have picked another project while this one was loading.
+  if (openingProject() !== projectId) return
   setBoard(reconcile(data, { key: 'id' }))
 }
 
+/** Resolves once the event stream is connected, or after a second if the proxy holds it back. */
+function connected(source: EventSource) {
+  return new Promise<void>((resolve) => {
+    source.addEventListener('open', () => resolve(), { once: true })
+    setTimeout(resolve, 1000)
+  })
+}
+
 export async function openProject(projectId: number) {
+  if (board.project) lastBoards.set(board.project.id, structuredClone(unwrap(board)))
+  setOpeningProject(projectId)
   events?.close()
   closeIssue()
   setGroupFilter('')
   setLiveLine(reconcile({}))
   setNotice('')
   setWaitReasons(reconcile({}))
+  const lastBoard = lastBoards.get(projectId)
+  if (lastBoard) setBoard(reconcile(lastBoard, { key: 'id' }))
+
+  // Listen first and load after, so no change can slip between the board and the first event.
+  // Events that arrive before the board wait for it.
+  const source = new EventSource(`/api/events?project=${projectId}`)
+  events = source
+  let waiting: any[] | null = []
+  source.onmessage = (msg) => {
+    const event = JSON.parse(msg.data)
+    if (waiting) waiting.push(event)
+    else handleEvent(projectId, event)
+  }
+  await connected(source)
+  if (events !== source) return
+
   await loadBoard(projectId)
+  if (events !== source) return
+  for (const event of waiting) handleEvent(projectId, event)
+  waiting = null
   localStorage.setItem('agentdeck.project', String(projectId))
 
-  events = new EventSource(`/api/events?project=${projectId}`)
-  events.onmessage = (msg) => handleEvent(projectId, JSON.parse(msg.data))
   // EventSource reconnects on its own; after a gap we may have missed events.
-  events.onopen = () => loadBoard(projectId).catch(() => {})
+  source.addEventListener('open', () => loadBoard(projectId).catch(() => {}))
 }
 
 export function closeProject() {
+  if (board.project) lastBoards.delete(board.project.id)
   events?.close()
   events = null
+  setOpeningProject(null)
   setBoard(reconcile(structuredClone(emptyBoard)))
   localStorage.removeItem('agentdeck.project')
 }
+
+/** True while the board on screen is not yet the one of the project the user picked. */
+export const switchingProject = () => openingProject() !== null && openingProject() !== board.project?.id
 
 function handleEvent(projectId: number, e: any) {
   switch (e.t) {

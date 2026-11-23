@@ -35,6 +35,15 @@ const WORKSPACES = [
   ['agent', 'One checkout per agent'],
 ] as const
 
+const TEMPLATE_EXAMPLE = `## UI
+Agents: Frontend
+Title: page, view
+- Screenshot before and after in the repo
+- Keyboard use checked
+
+## All
+- Only files changed that the issue asks for`
+
 export function ProjectSettings() {
   const project = () => board.project!
 
@@ -102,6 +111,91 @@ export function ProjectSettings() {
         >
           <input value={project().repo_path} onChange={(e) => save({ repo_path: e.currentTarget.value })} />
         </Field>
+        <section class="section">
+          <div class="section-head">
+            <h3>Acceptance</h3>
+          </div>
+          <p class="muted">
+            Every issue gets a checklist: its "Done when" plus the matching template. The agent reports every
+            item with proof, and the reviewers judge only by that. If something is still missing, only the
+            first reviewer checks the interim state.
+          </p>
+          <div class="row">
+            <Toggle
+              label="Acceptance checklists"
+              checked={project().settings.checklists.enabled}
+              onChange={(on) => saveSettings((s) => void (s.checklists.enabled = on))}
+            />
+            <Toggle
+              label="After changes, resume with the same reviewer"
+              checked={project().settings.resumeReview}
+              onChange={(on) => saveSettings((s) => void (s.resumeReview = on))}
+            />
+          </div>
+          <Show when={project().settings.checklists.enabled}>
+            <Field
+              label="Templates"
+              hint="'## Name' starts a template. 'Agents:' and 'Title:' (comma-separated) say what it applies to; the first match is used. A template without either applies to every issue. Items start with '- '."
+            >
+              <textarea
+                rows="12"
+                class="mono"
+                placeholder={TEMPLATE_EXAMPLE}
+                value={project().settings.checklists.templates}
+                onChange={(e) => {
+                  const templates = e.currentTarget.value
+                  saveSettings((s) => void (s.checklists.templates = templates))
+                }}
+              />
+            </Field>
+          </Show>
+          <Toggle
+            label="Precheck before every review"
+            checked={project().settings.precheck.enabled}
+            onChange={(on) => saveSettings((s) => void (s.precheck.enabled = on))}
+          />
+          <Show when={project().settings.precheck.enabled}>
+            <p class="muted">
+              Before a reviewer sees the work: proof files present, everything committed, base branch merged
+              in without conflicts, check command green. Otherwise the issue goes back without a review run.
+            </p>
+            <div class="row">
+              <Field label="Check command" hint="Runs in the agent's checkout. Empty = only proof and merge.">
+                <input
+                  class="mono"
+                  placeholder="npm test"
+                  value={project().settings.precheck.command}
+                  onChange={(e) => {
+                    const command = e.currentTarget.value.trim()
+                    saveSettings((s) => void (s.precheck.command = command))
+                  }}
+                />
+              </Field>
+              <Field label="Time limit (minutes)">
+                <input
+                  type="number"
+                  min="1"
+                  max="60"
+                  value={project().settings.precheck.timeoutMin}
+                  onChange={(e) => {
+                    const minutes = Number(e.currentTarget.value) || 20
+                    saveSettings((s) => void (s.precheck.timeoutMin = minutes))
+                  }}
+                />
+              </Field>
+            </div>
+            <Toggle
+              label="Run the check command only before landing"
+              checked={project().settings.precheck.commandAt === 'landing'}
+              onChange={(on) => saveSettings((s) => void (s.precheck.commandAt = on ? 'landing' : 'review'))}
+            />
+            <p class="muted">
+              On: the reviewers see the work at once. The check command runs once after the last approval on
+              the merged state, and only green is pushed. Red goes back to the maker with the output. Agents
+              then do not run the full test suite themselves. Only with landing "Merge".
+            </p>
+          </Show>
+        </section>
         <section class="section">
           <div class="section-head">
             <h3>Landing</h3>
