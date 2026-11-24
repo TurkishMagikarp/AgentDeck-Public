@@ -86,6 +86,11 @@ import {
 
 const TOKEN = process.env.AGENTDECK_TOKEN ?? ''
 const TRUST_PROXY = process.env.AGENTDECK_TRUST_PROXY === '1' // nginx + Authelia in front set Remote-User
+const HOST = process.env.HOST ?? '127.0.0.1'
+if (!TOKEN && !['127.0.0.1', '::1', 'localhost'].includes(HOST)) {
+  console.error('Set AGENTDECK_TOKEN before listening on a non-loopback address.')
+  process.exit(1)
+}
 const app = new Hono()
 
 class HttpError extends Error {
@@ -860,15 +865,17 @@ app.use('/*', compress(), serveStatic({ root: './dist' }))
 app.get('*', serveStatic({ path: './dist/index.html' }))
 
 const port = Number(process.env.PORT ?? 8790)
-const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '127.0.0.1' }, () =>
-  console.log(`AgentDeck http://localhost:${port}  data=${DATA_DIR}`),
+const server = serve({ fetch: app.fetch, port, hostname: HOST }, ({ port: boundPort }) =>
+  console.log(`AgentDeck http://localhost:${boundPort}  data=${DATA_DIR}`),
 )
 recoverAfterRestart()
 startEngine()
 startRoutines(kick)
 startHousekeeping()
-startClaudeUsage()
-startCodexUsage()
+if (process.env.AGENTDECK_DEMO !== '1') {
+  startClaudeUsage()
+  startCodexUsage()
+}
 startReports()
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, () => {

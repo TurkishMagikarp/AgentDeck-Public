@@ -40,8 +40,9 @@ const issue = { id: 1, number: 1, title: 'Feature' }
 describe('check command at landing', () => {
   test('a green check lands the branch and says so', async () => {
     const repo = repoWithIssueBranch()
-    const outcome = await landIssue(projectFor(repo, 'test -f feature.txt', 'landing'), issue)
-    assert.equal(outcome.status, 'done')
+    const check = 'node -e "process.exitCode = Number(!require(\'node:fs\').existsSync(\'feature.txt\'))"'
+    const outcome = await landIssue(projectFor(repo, check, 'landing'), issue)
+    assert.equal(outcome.status, 'done', outcome.note)
     assert.match(outcome.note, /green/)
     assert.equal(git(repo, 'show', 'HEAD:feature.txt'), 'feature')
   })

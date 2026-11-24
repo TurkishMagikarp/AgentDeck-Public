@@ -1,12 +1,40 @@
 # AgentDeck
 
-A self-hosted board for teams of AI coding agents. You create a project, give it agents that run
-through Claude Code, Codex or opencode, and file issues. The agents pick them up, work in their own
-git checkout, hand work to reviewers and land the result, while you watch every run live.
+**A self-hosted issue board for AI coding agents.** Assign work to Claude Code, Codex CLI, or
+OpenCode. Watch runs live, inspect diffs, and choose whether finished work stays in review,
+merges locally, or opens as a pull request.
 
-AgentDeck is small on purpose: one Node process, one SQLite file, no external services.
+[Try the demo](#try-the-demo) · [Self-host](#quick-start) · [Star on GitHub](https://github.com/TurkishMagikarp/Agentdeck-Public-)
 
-## Features
+![AgentDeck board showing the sample Observatory project with four issues across backlog, to do, review, and done](docs/board.png)
+
+The board runs on Node.js and SQLite. The demo needs no API key or agent CLI; real runs use your
+chosen providers.
+
+## Try the demo
+
+With [Node.js 24+](https://nodejs.org/) and Git installed:
+
+```sh
+git clone https://github.com/TurkishMagikarp/Agentdeck-Public-.git agentdeck
+cd agentdeck
+npm ci
+npm run demo
+```
+
+Open <http://127.0.0.1:8791>, then click **Resume**. The simulated builder picks up
+**Write the first stargazing guide**, and the simulated reviewer approves it. Open the issue to see
+the run log and handoff. The demo starts with a fresh temporary database and leaves your real
+projects untouched. Press `Ctrl+C` when finished.
+
+## What it does
+
+- **Orchestrates work:** Give each project its own team, work queue, dependencies, and routines.
+- **Keeps runs visible:** Follow live logs, inspect diffs, and see why an issue is waiting.
+- **Controls what lands:** Work in Git worktrees, request reviews, and run checks before merging.
+
+<details>
+<summary>Full feature list</summary>
 
 - **Projects instead of organisations.** Each project has its own repository, agents, board and
   settings.
@@ -67,22 +95,32 @@ AgentDeck is small on purpose: one Node process, one SQLite file, no external se
 - **Skill for Claude Code.** Describe a project in one sentence and let Claude set it up in
   AgentDeck.
 
+</details>
+
 ## Quick start
 
-Requires Node.js 24 or newer.
+For real work, use Node.js 24+, Git, and the CLI or credentials for your chosen provider.
 
-```
-npm install
-npm start            # builds the UI and serves it on http://localhost:8790
-npm run dev:mock     # same on port 8799, with a mock agent instead of real CLIs
+```sh
+npm ci
+npm start
 ```
 
-While working on the UI, run `npm run server` and `npm run dev` in a second terminal.
+Open <http://127.0.0.1:8790>, set up **Providers and access**, and create a project. Point it at a
+trusted Git checkout or leave the repository path empty to use a managed workspace.
+
+> **Trust boundary:** Anyone who can operate the board can configure commands that run on the
+> host or in the container. Agents share the server's execution environment (or the same
+> container with Docker). Use trusted operators and repositories, and use narrowly scoped
+> credentials. Do not expose the demo or a tokenless board to a network.
 
 ## Running with Docker
 
-```
-echo "AGENTDECK_TOKEN=$(openssl rand -hex 32)" > .env
+```sh
+# In a fresh checkout; do not overwrite an existing .env.
+cp -n .env.example .env
+# Generate a token, then paste it as AGENTDECK_TOKEN in .env.
+openssl rand -hex 32
 docker compose up -d --build
 
 # log in to each CLI once; the logins are kept in the "home" volume
@@ -91,14 +129,15 @@ docker compose exec agentdeck codex login
 docker compose exec agentdeck opencode auth login
 ```
 
+Open <http://127.0.0.1:8790> and sign in with the token.
+
 Repositories the agents should work on go to `/srv/agentdeck/repos` on the host and appear as
 `/repos/<name>` in the container. That path is what you enter in the project.
 
 The image contains Git, Node, Python 3 with venv, uv, a C compiler and a virtual display with
-software OpenGL for agents that render or screenshot what they build. Agents may install more with
-`sudo apt-get install` inside the container; those packages last until the container is rebuilt, so
-anything needed permanently belongs in the Dockerfile. Python versions and packages installed with
-uv live in the `home` volume and survive.
+software OpenGL for agents that render or screenshot what they build. Add any extra system packages
+you need to the Dockerfile and rebuild. Python versions and packages installed with uv live in the
+`home` volume and survive.
 
 ### Behind a reverse proxy
 
@@ -107,20 +146,18 @@ The compose file binds the port to 127.0.0.1. Put a reverse proxy with authentic
 
 ```
 location / {
-    # ... your authentication ...
+    # Apply your reverse proxy's authentication to every path, including /api/events.
     proxy_pass http://127.0.0.1:8790;
-    proxy_set_header Remote-User $user;
-}
-location /api/events {
-    proxy_pass http://127.0.0.1:8790;
-    proxy_set_header Remote-User $user;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Remote-User "";
     proxy_buffering off;
     proxy_read_timeout 1h;
 }
 ```
 
-`AGENTDECK_TRUST_PROXY=1` lets requests with a `Remote-User` header in without a token. It is only
-safe while the port is reachable through the proxy alone and the proxy sets that header itself.
+Keep `AGENTDECK_TRUST_PROXY` off unless your proxy authenticates the user and overwrites the
+`Remote-User` header on every request. Enabling it accepts the proxy's identity instead of the
+application token. Never enable it if clients can reach AgentDeck directly.
 
 ### Showcase behind Authelia
 
@@ -144,7 +181,7 @@ costs and settings never leave the login. "New link" invalidates the old one at 
 | ----------------------------- | --------------- | ------------------------------------------------------------- |
 | `PORT`, `HOST`                | 8790, 127.0.0.1 | Server address                                                |
 | `AGENTDECK_DATA`              | `./data`        | Database, worktrees, working folders                          |
-| `AGENTDECK_TOKEN`             | empty           | If set, the API requires `Authorization: Bearer …`            |
+| `AGENTDECK_TOKEN`             | empty           | Required off loopback; sign in via the UI or send `Authorization: Bearer …` |
 | `AGENTDECK_SECRET`            | empty           | Key for stored API keys; falls back to `data/secret.key`      |
 | `AGENTDECK_TRUST_PROXY`       | off             | `1`: trust the `Remote-User` header from a reverse proxy      |
 | `AGENTDECK_CACHE_MB`          | 256             | SQLite page cache in RAM                                      |
@@ -244,6 +281,11 @@ node scripts/loadtest.mjs http://localhost:8796 5000 40
 Creates 5000 issues, measures reads and writes, and lets 40 mock agents work through 600 issues
 while 100 clients follow the live events. The "read board" times include unpacking and parsing in
 the test client; the server itself answers from RAM.
+
+## Development
+
+Run `npm run server` and `npm run dev` in separate terminals for UI development. Before submitting
+changes, run `npx tsc --noEmit -p .`, `npm test`, and `npm run build`.
 
 ## License
 

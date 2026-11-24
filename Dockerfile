@@ -11,7 +11,7 @@ FROM node:24-trixie-slim
 # environments and install further Python versions without root (uv python install 3.13).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git gh tzdata ca-certificates curl ripgrep jq unzip xz-utils less procps openssh-client sudo \
+      git gh tzdata ca-certificates curl ripgrep jq unzip xz-utils less procps openssh-client \
       build-essential python3 python3-venv python3-pip \
  # A virtual display with software OpenGL, for agents that render or screenshot what they build
  # (game engines, browsers).
@@ -27,9 +27,7 @@ RUN apt-get update \
  && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
  && npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 
-# The container is the sandbox: agents may install system packages with "sudo apt-get install".
-RUN echo "node ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/node \
- && mkdir -p /data /repos \
+RUN mkdir -p /data /repos \
  && chown node:node /data /repos
 
 WORKDIR /app

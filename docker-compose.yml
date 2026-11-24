@@ -2,12 +2,12 @@ services:
   agentdeck:
     build: .
     restart: unless-stopped
-    # Only reachable from the host; nginx + Authelia sit in front.
+    # Only reachable from the host; use the application token to sign in.
     ports:
       - "127.0.0.1:8790:8790"
     environment:
       AGENTDECK_TOKEN: ${AGENTDECK_TOKEN:?set AGENTDECK_TOKEN in .env}
-      AGENTDECK_TRUST_PROXY: "1"
+      AGENTDECK_TRUST_PROXY: ${AGENTDECK_TRUST_PROXY:-0}
       AGENTDECK_CACHE_MB: "1024"
     volumes:
       - data:/data
