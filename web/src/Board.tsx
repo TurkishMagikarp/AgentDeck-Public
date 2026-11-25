@@ -25,7 +25,7 @@ const COLUMNS: { status: Status; label: string; canAdd?: boolean }[] = [
   { status: 'in_progress', label: 'In progress' },
   { status: 'review', label: 'Review' },
   { status: 'blocked', label: 'Waits for a human' },
-  { status: 'done', label: 'Fertig' },
+  { status: 'done', label: 'Done' },
 ]
 
 export const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent']

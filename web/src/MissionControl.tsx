@@ -7,7 +7,7 @@ import { Modal, timeAgo } from './ui'
 
 /** Order and colour of the status segments in a project's progress bar. */
 const SEGMENTS = [
-  ['done', 'Fertig', 'var(--good)'],
+  ['done', 'Done', 'var(--good)'],
   ['review', 'Review', 'var(--series-5)'],
   ['in_progress', 'In progress', 'var(--live)'],
   ['blocked', 'Waits for a human', 'var(--bad)'],
@@ -371,7 +371,7 @@ export function MissionControl(props: {
                         Retry
                       </button>
                       <button title="Mark as done" onClick={() => resolve(item.issueId, 'done')}>
-                        <Icon name="check" size={13} /> Fertig
+                        <Icon name="check" size={13} /> Done
                       </button>
                     </span>
                   </li>
