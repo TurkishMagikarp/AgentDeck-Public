@@ -8,7 +8,7 @@
 //   ## Map
 //   Agents: World builder
 //   Title: map, route
-//   - Every map view captured again, no single-colour image.
+//   - Every map view captured again, no single-color image.
 //
 //   ## All
 //   - Only files changed that the issue asks for.

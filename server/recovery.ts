@@ -1,7 +1,7 @@
 // Self-healing: a failed run is sorted into a kind of failure, and each kind gets its own way out.
 // A rate limit is not the issue's fault, so it does not count as a failed attempt and the provider
 // rests until its limit resets. A missing tool or an overfull context gets a hint for the next run.
-import { all } from './db.ts'
+import { all, get } from './db.ts'
 import { limitingWindows } from './pacing.ts'
 
 export type FailureKind = 'limit' | 'access' | 'network' | 'toolchain' | 'context' | 'unknown'
@@ -25,7 +25,7 @@ export const PROVIDER_FAILURES: FailureKind[] = ['limit', 'access']
 const LIMIT_RE =
   /usage limit|rate[ _-]?limit|too many requests|\b429\b|quota exceeded|limit reached|hit your limit|overloaded_error|\b529\b|insufficient[_ ]credit|credit balance is too low/i
 const ACCESS_RE =
-  /not logged in|please run \/login|invalid (x-)?api[ _-]?key|authentication_error|oauth token (has )?expired|failed to start/i
+  /not logged in|please run \/login|invalid (x-)?api[ _-]?key|authentication_error|failed to authenticate|oauth (?:token|session) (?:has )?expired|failed to start/i
 const NETWORK_RE =
   /econnreset|etimedout|econnrefused|eai_again|enotfound|socket hang up|network error|fetch failed|\b50[234]\b|bad gateway|service unavailable|gateway time-?out|stream (was )?(closed|ended|disconnected)/i
 const CONTEXT_RE =
@@ -114,12 +114,19 @@ export function restOf(provider: string): Rest | undefined {
 /** A fixed provider (new login, new key) may be asked again at once. */
 export function wakeProvider(provider: string) {
   resting.delete(provider)
+  onWake()
+}
+
+let onWake = () => {}
+/** The scheduler sleeps between events; a provider that may work again is one. */
+export function whenProviderWakes(fn: () => void) {
+  onWake = fn
 }
 
 export const clock = (at: number) =>
   new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 
-/** "02:30 PM" today, "Mon 02:16 AM" on another day: a bare time three days ahead reads like tonight. */
+/** "14:30" today, "Mo 02:16" on another day: a bare time three days ahead reads like tonight. */
 export function when(at: number) {
   const day = (time: number) => new Date(time).toLocaleDateString('en-US')
   if (day(at) === day(Date.now())) return clock(at)
@@ -152,4 +159,32 @@ export function retryDelay(failure: Failure): number | undefined {
   if (failure.kind === 'network') return MINUTE
   if (failure.kind === 'toolchain' || failure.kind === 'context') return 15_000
   return undefined
+}
+
+// ---------- parked issues that rest ----------
+
+/** Rest of a parked issue: 30 minutes the first time, doubled with every park, at most a day. */
+const PARK_REST = 30 * MINUTE
+const MAX_PARK_REST = 24 * 60 * MINUTE
+/** Verdicts of a finished run that moved the issue on. "blocked", "partial" and "todo" did not. */
+const PROGRESS_VERDICTS = ['review', 'done', 'approve', 'changes', 'handoff', 'precheck']
+
+/**
+ * Only the parks since the issue last moved on count. Without that an issue parked often for
+ * a fault that is long fixed (a broken login, a checkout git refused) rests for hours the next
+ * time it is parked for something else.
+ */
+export function parkedRest(issueId: number) {
+  const marks = PROGRESS_VERDICTS.map(() => '?').join(',')
+  const progress = get(
+    `SELECT MAX(ended_at) AS at FROM runs WHERE issue_id=? AND status='done' AND verdict IN (${marks})`,
+    issueId,
+    ...PROGRESS_VERDICTS,
+  )?.at
+  const parks = get(
+    "SELECT COUNT(*) AS n FROM comments WHERE issue_id=? AND kind='watchdog' AND body LIKE 'Parked:%' AND created_at>?",
+    issueId,
+    progress ?? 0,
+  )!.n
+  return Math.min(MAX_PARK_REST, PARK_REST * 2 ** Math.min(parks, 10))
 }

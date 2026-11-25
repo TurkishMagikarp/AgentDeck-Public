@@ -1,11 +1,11 @@
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { compress } from 'hono/compress'
-import { getCookie, setCookie } from 'hono/cookie'
+import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import { streamSSE } from 'hono/streaming'
 import { createHash, timingSafeEqual } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { all, get, recoverAfterRestart, run, tx, DATA_DIR } from './db.ts'
 import {
   activity,
@@ -25,15 +25,29 @@ import {
   MODEL_RE,
   patchIssue,
   providerLeft,
+  modelFor,
   PROVIDERS,
   STATUSES,
   subscribe,
+  tierOf,
   touch,
 } from './core.ts'
-import { kick, landByHand, notices, shutdown, startEngine, stopIssueRun, stopRun, waiting } from './engine.ts'
+import {
+  approveLanding,
+  kick,
+  landByHand,
+  notices,
+  pickArenaWinner,
+  shutdown,
+  startEngine,
+  stopIssueRun,
+  stopRun,
+  waiting,
+} from './engine.ts'
 import { wakeProvider } from './recovery.ts'
 import { checklistFor, itemsFromText } from './checklist.ts'
 import { addLesson, deleteLesson, listLessons } from './lessons.ts'
+import { createWebhook, deleteWebhook, testWebhook } from './webhooks.ts'
 import { mailSettings, saveMailSettings, sendMail } from './notify.ts'
 import { applyBlueprint, BLUEPRINT_GUIDE, extractJson } from './blueprint.ts'
 import { importProject } from './importer.ts'
@@ -42,16 +56,47 @@ import { listModels } from './models.ts'
 import { rtkReport } from './rtk.ts'
 import { projectStats } from './stats.ts'
 import { agentApi } from './agentApi.ts'
-import { startClaudeUsage } from './claudeUsage.ts'
+import { arenaOf, startArena } from './arena.ts'
+import { handleDeckMcp, type Api } from './deckMcp.ts'
+import { webhookApp, webhookSecret } from './githubWebhook.ts'
+import { takeGithubIssue } from './intake.ts'
+import { metricsText } from './metrics.ts'
+import { readClaudeUsage, startClaudeUsage } from './claudeUsage.ts'
 import { startCodexUsage } from './codexUsage.ts'
 import { setResetsEnabled } from './resets.ts'
+import { journal } from './journal.ts'
+import { RUN_EVENT_KINDS, runEvents, type RunEventKind } from './runEvents.ts'
 import { startHousekeeping } from './housekeeping.ts'
 import { issueChanges } from './diff.ts'
 import { searchIssues } from './search.ts'
 import { gitGraph } from './gitGraph.ts'
 import { capOf, spentOn } from './issueCap.ts'
-import { showcaseData, showcasePage } from './showcase.ts'
+import { forecastView } from './forecast.ts'
+import { showcaseData, showcasePage, showcaseTag } from './showcase.ts'
+import { Lru } from './lru.ts'
+import { limitBody, newNonce, securityHeaders, showcaseCsp } from './httpSecurity.ts'
+import { clientKey, FailureLimiter } from './rateLimit.ts'
+import { allows, hasOddNumber, isRole, requiredRole, ROLE_LABELS, type Role } from './roles.ts'
+import {
+  createUser,
+  deleteUser,
+  listUsers,
+  noteUse,
+  sessionHash,
+  setUserRole,
+  userByName,
+  userBySession,
+  userByToken,
+  type User,
+} from './users.ts'
+import { audit, listAudit, settingsChanges } from './audit.ts'
+import { isCrossSiteWrite } from './origin.ts'
+import { buildOverview, killSwitch, saveGuardSettings, sinceSummary, startSpendGuard } from './overview.ts'
+import { changedShellSettings, confirmedBy, confirmMode } from './reauth.ts'
+
 import { listShots, shotsDir } from './preview.ts'
+import { ensureEgress, ensureProject, installPackages, lockDownServerFiles, SANDBOX, startEgress } from './sandbox.ts'
+import { egressStatus } from './egress.ts'
 import { applyTemplate, listTemplates } from './templates.ts'
 import {
   pushDevices,
@@ -86,18 +131,53 @@ import {
 
 const TOKEN = process.env.AGENTDECK_TOKEN ?? ''
 const TRUST_PROXY = process.env.AGENTDECK_TRUST_PROXY === '1' // nginx + Authelia in front set Remote-User
-const HOST = process.env.HOST ?? '127.0.0.1'
-if (!TOKEN && !['127.0.0.1', '::1', 'localhost'].includes(HOST)) {
-  console.error('Set AGENTDECK_TOKEN before listening on a non-loopback address.')
+// nginx sends this secret with every request, so a local process (an agent) cannot fake Remote-User.
+const PROXY_SECRET = process.env.AGENTDECK_PROXY_SECRET ?? ''
+const ALLOW_OPEN = process.env.AGENTDECK_ALLOW_OPEN === '1' || process.env.AGENTDECK_MOCK === '1'
+if (TRUST_PROXY && PROXY_SECRET.length < 16) {
+  console.error(
+    'AGENTDECK_TRUST_PROXY=1 needs AGENTDECK_PROXY_SECRET (at least 16 characters), which nginx sends along as X-AgentDeck-Proxy.',
+  )
   process.exit(1)
 }
+if (!TOKEN && !TRUST_PROXY && !ALLOW_OPEN) {
+  console.error(
+    'AGENTDECK_TOKEN is missing. Without a token the API would be open. For local tests set AGENTDECK_ALLOW_OPEN=1.',
+  )
+  process.exit(1)
+}
+const fromProxy = (c: { req: { header: (n: string) => string | undefined } }) =>
+  TRUST_PROXY &&
+  !!c.req.header('remote-user') &&
+  sameSecret(c.req.header('x-agentdeck-proxy') ?? '', PROXY_SECRET)
 const app = new Hono()
+// Before every route, the agent API included.
+app.use('*', securityHeaders)
+// GitHub's webhook has its own, larger limit (githubWebhook.ts).
+app.use('/api/*', (c, next) => (c.req.path.startsWith('/api/github/') ? next() : limitBody(c, next)))
+
+/**
+ * In the sandbox every project gets its Linux user before anything runs in it, so the board can
+ * read its repo from the start. Projects already set up are skipped without a call.
+ */
+function sandboxProjects() {
+  if (!SANDBOX) return
+  for (const project of all('SELECT key, repo_path, settings FROM projects')) {
+    ensureProject(project).catch((error) => console.error(error.message))
+    // After the user exists (ensureEgress waits for it): the firewall rules name its uid.
+    const settings = mergeSettings(JSON.parse(project.settings || '{}'))
+    ensureEgress({ key: project.key, repo_path: project.repo_path, settings })
+  }
+}
 
 class HttpError extends Error {
   status: number
-  constructor(status: number, msg: string) {
+  /** More fields for the JSON answer, e.g. `confirm` so the UI asks for the token. */
+  extra: Record<string, unknown>
+  constructor(status: number, msg: string, extra: Record<string, unknown> = {}) {
     super(msg)
     this.status = status
+    this.extra = extra
   }
 }
 const bad = (msg: string, status = 400): never => {
@@ -105,11 +185,18 @@ const bad = (msg: string, status = 400): never => {
 }
 app.onError((e, c) => {
   if (!(e instanceof HttpError)) console.error(e)
-  return c.json({ error: e.message }, (e as any).status ?? 500)
+  return c.json({ error: e.message, ...((e as any).extra ?? {}) }, (e as any).status ?? 500)
 })
 
 // Agents authenticate with the token of their run, so their routes sit in front of the board login.
 app.route('/api/agent', agentApi)
+// GitHub authenticates with the webhook signature, so its route sits in front of the login too.
+app.route(
+  '/api/github',
+  webhookApp(webhookSecret(), undefined, (payload) => {
+    if (takeGithubIssue(payload).length) kick()
+  }),
+)
 
 const sameSecret = (given: string, wanted: string) => {
   const a = Buffer.from(given)
@@ -121,10 +208,43 @@ const sameSecret = (given: string, wanted: string) => {
 const SESSION_COOKIE = 'agentdeck_session'
 const SESSION_VALUE = createHash('sha256').update(`agentdeck-session:${TOKEN}`).digest('hex')
 
+// Failed attempts with the raw board token, per client and overall.
+const tokenGuesses = new FailureLimiter()
+const guesser = (c: Context) =>
+  clientKey(c, TRUST_PROXY && sameSecret(c.req.header('x-agentdeck-proxy') ?? '', PROXY_SECRET))
+const tooMany = (c: Context, wait: number) => {
+  c.header('retry-after', String(wait))
+  return c.json({ error: `Too many failed attempts. Please try again in ${wait} s.` }, 429)
+}
+
+type Who = { name: string; role: Role }
+// Set by the login check for every API request that passed it.
+const whoOf = new WeakMap<Request, Who>()
+// A proxy user without an entry in the users table gets this role. Admin by default: before
+// roles existed, everyone the proxy let in could do everything.
+const PROXY_ROLE: Role = isRole(process.env.AGENTDECK_PROXY_ROLE) ? process.env.AGENTDECK_PROXY_ROLE : 'admin'
+
+/** Who made a change, for the audit log. */
+const actor = (c: Context) =>
+  whoOf.get(c.req.raw)?.name ?? ((fromProxy(c) && String(c.req.header('remote-user')).slice(0, 60)) || 'Owner')
+
+
 app.post('/api/login', async (c) => {
+  const client = guesser(c)
+  const wait = tokenGuesses.retryAfter(client)
+  if (wait) return tooMany(c, wait)
   const given = String((await c.req.json().catch(() => ({}))).token ?? '')
-  if (!TOKEN || !sameSecret(given, TOKEN)) return c.json({ error: 'Wrong token' }, 401)
-  setCookie(c, SESSION_COOKIE, SESSION_VALUE, {
+  const owner = !!TOKEN && sameSecret(given, TOKEN)
+  const user = owner ? undefined : userByToken(given)
+  if (!owner && !user) {
+    tokenGuesses.fail(client)
+    audit(actor(c), 'login.failed', client)
+    return c.json({ error: 'Wrong token' }, 401)
+  }
+  audit(user?.name ?? 'Owner', 'login', client)
+
+  // The cookie holds a hash of the token; for a user it is the hash the users table keeps.
+  setCookie(c, SESSION_COOKIE, owner ? SESSION_VALUE : sessionHash(given), {
     httpOnly: true,
     sameSite: 'Strict',
     secure: c.req.header('x-forwarded-proto') === 'https',
@@ -135,28 +255,224 @@ app.post('/api/login', async (c) => {
 })
 
 // The showcase is public on purpose: it shows what the owner chose to show, and nothing else.
+// The page asks every 10 s; mostly nothing changed, and then the answer is a 304 without a query.
 app.get('/api/public/:slug', (c) => {
-  const data = showcaseData(c.req.param('slug'))
-  return data ? c.json(data) : c.json({ error: 'not found' }, 404)
+  const slug = c.req.param('slug')
+  const tag = showcaseTag(slug)
+  // no-cache: the browser keeps the answer but asks each time, sending the tag along.
+  if (tag && c.req.header('if-none-match') === tag) return c.body(null, 304, { etag: tag, 'cache-control': 'no-cache' })
+  const data = showcaseData(slug)
+  if (!data) return c.json({ error: 'not found' }, 404)
+  if (tag) c.header('etag', tag)
+  c.header('cache-control', 'no-cache')
+  return c.json(data)
 })
-app.get('/show/:slug', (c) => c.html(showcasePage(c.req.param('slug'))))
+app.get('/show/:slug', (c) => {
+  const slug = c.req.param('slug')
+  if (!/^[\w-]{8,40}$/.test(slug)) return c.notFound()
+  const nonce = newNonce()
+  return c.html(showcasePage(slug, nonce), 200, { 'content-security-policy': showcaseCsp(nonce) })
+})
+
+/**
+ * Who is asking: the owner with the board token (cookie or Bearer), a user with their own token,
+ * or the proxy's user. Null when nobody; a Response when the client is guessing too fast.
+ */
+function identify(c: Context): Who | Response | null {
+  if (!TOKEN && !TRUST_PROXY) return { name: 'Owner', role: 'admin' }
+  // Without a board token there is no cookie and no Bearer login for it: an empty token would
+  // match "Bearer " and a cookie anyone can compute, and so skip the proxy login.
+  const cookie = getCookie(c, SESSION_COOKIE) ?? ''
+  if (TOKEN && sameSecret(cookie, SESSION_VALUE)) return { name: 'Owner', role: 'admin' }
+  const sessionUser = userBySession(cookie)
+  if (sessionUser) return sessionUser
+  if (fromProxy(c)) {
+    const name = String(c.req.header('remote-user')).slice(0, 60)
+    return { name, role: userByName(name)?.role ?? PROXY_ROLE }
+  }
+  const header = c.req.header('authorization') ?? ''
+  if (header.startsWith('Bearer ') && header.length > 7) {
+    const client = guesser(c)
+    const wait = tokenGuesses.retryAfter(client)
+    if (wait) return tooMany(c, wait)
+    const given = header.slice(7)
+    if (TOKEN && sameSecret(given, TOKEN)) return { name: 'Owner', role: 'admin' }
+    const user = userByToken(given)
+    if (user) return user
+    tokenGuesses.fail(client)
+  }
+  return null
+}
+
+// A page on another site must not be able to write through the owner's logged-in browser.
+app.use('/api/*', async (c, next) => {
+  if (c.req.path.startsWith('/api/github/')) return next()
+  if (isCrossSiteWrite(c.req.method, (name) => c.req.header(name))) return c.json({ error: 'Cross-site request' }, 403)
+  return next()
+})
 
 app.use('/api/*', async (c, next) => {
   if (c.req.path.startsWith('/api/public/')) return next()
-  if (!TOKEN) return next()
-  const header = c.req.header('authorization') ?? ''
-  if (header.startsWith('Bearer ') && sameSecret(header.slice(7), TOKEN)) return next()
-  if (sameSecret(getCookie(c, SESSION_COOKIE) ?? '', SESSION_VALUE)) return next()
-  if (TRUST_PROXY && c.req.header('remote-user')) return next()
-  return c.json({ error: 'unauthorized' }, 401)
+  if (hasOddNumber(c.req.path)) return c.json({ error: 'invalid id' }, 400)
+  const who = identify(c)
+  if (who instanceof Response) return who
+  if (!who) return c.json({ error: 'unauthorized' }, 401)
+  if ('id' in who) noteUse(who as User)
+  const reads = c.req.method === 'GET' || c.req.method === 'HEAD'
+  // Parsed once here only where the rule depends on it; Hono keeps it for the route.
+  const body = !reads && /^\/api\/projects\/\d+$/.test(c.req.path) ? await c.req.json().catch(() => null) : undefined
+  const needs = requiredRole(c.req.method, c.req.path, body)
+  if (!allows(who.role, needs)) {
+    return c.json({ error: `You lack the permission for that (${ROLE_LABELS[needs]} needed, you have ${ROLE_LABELS[who.role]}).` }, 403)
+  }
+  whoOf.set(c.req.raw, who)
+  return next()
 })
 // The event stream must not be buffered, and the board ships its own cached gzip.
 const skipsCompression = (path: string) => path === '/api/events' || path.endsWith('/board')
 app.use('/api/*', (c, next) => (skipsCompression(c.req.path) ? next() : compress()(c, next)))
 
-const id = (c: any, name = 'id') => Number(c.req.param(name)) || bad('invalid id')
+app.post('/api/logout', (c) => {
+  deleteCookie(c, SESSION_COOKIE, { path: '/' })
+  audit(actor(c), 'logout', guesser(c))
+  return c.json({ ok: true })
+})
+
+const CONFIRM = confirmMode(TOKEN, TRUST_PROXY)
+
+/**
+ * Settings the server runs as shell commands change only with the board token in the same
+ * request (reauth.ts). Throws 403 with `confirm: true`, so the UI asks for the token and retries.
+ */
+function confirmShellChange(c: Context, b: any, target: string, changed: string[]) {
+  if (!changed.length || CONFIRM === 'open') return
+  // A user confirms with their own token: it proves the same as the board token does for the owner.
+  const who = whoOf.get(c.req.raw)
+  if (who && 'id' in who && allows(who.role, 'admin')) {
+    const bearer = c.req.header('authorization') ?? ''
+    const given = typeof b?.confirmToken === 'string' ? b.confirmToken : bearer.startsWith('Bearer ') ? bearer.slice(7) : ''
+    if ((userByToken(given) as User | undefined)?.id === (who as User).id) return
+  }
+  if (CONFIRM === 'refused') {
+    audit(actor(c), 'confirm.refused', target, { fields: changed })
+    bad(
+      'Behind the proxy, commands can only be changed when AGENTDECK_TOKEN is set on the server too.',
+      403,
+    )
+  }
+  const client = guesser(c)
+  const wait = tokenGuesses.retryAfter(client)
+  if (wait) {
+    c.header('retry-after', String(wait))
+    bad(`Too many failed attempts. Please try again in ${wait} s.`, 429)
+  }
+  if (confirmedBy(TOKEN, b?.confirmToken, c.req.header('authorization'))) return
+  const given = typeof b?.confirmToken === 'string' && b.confirmToken !== ''
+  // Asking without a token is the normal first step of the dialog; only a wrong token is a guess.
+  if (given) {
+    tokenGuesses.fail(client)
+    audit(actor(c), 'confirm.failed', target, { fields: changed })
+  }
+  throw new HttpError(
+    403,
+    given
+      ? 'The token is wrong.'
+      : 'This change affects commands the server runs. Please confirm with the access token.',
+    { confirm: true, fields: changed },
+  )
+}
+
+/** Shell settings a blueprint would change: on a new project, or merged into an existing one. */
+function blueprintShellChanges(pj: any) {
+  if (!pj || typeof pj !== 'object' || !pj.settings || typeof pj.settings !== 'object') return []
+  const existing = get('SELECT settings FROM projects WHERE key=?', s(pj.key, 8).toUpperCase())
+  if (!existing) return changedShellSettings(null, pj.settings)
+  const stored = JSON.parse(existing.settings || '{}')
+  return changedShellSettings(mergeSettings(stored), { ...stored, ...pj.settings })
+}
+
+app.get('/api/audit', (c) => c.json(listAudit(c.req.query('limit'), c.req.query('before'))))
+
+// ---------- users & roles ----------
+app.get('/api/me', (c) => {
+  const who = whoOf.get(c.req.raw)!
+  return c.json({ name: who.name, role: who.role })
+})
+app.get('/api/users', (c) => c.json(listUsers()))
+app.post('/api/users', async (c) => {
+  const b = await body(c)
+  let created
+  try {
+    created = createUser(s(b.name, 60), b.role)
+  } catch (e: any) {
+    return bad(e.message)
+  }
+  audit(actor(c), 'user.create', created.user.name, { role: created.user.role })
+  // The token leaves the server this once; only its hashes stay.
+  return c.json(created, 201)
+})
+app.patch('/api/users/:id', async (c) => {
+  const b = await body(c)
+  try {
+    if (!setUserRole(id(c), b.role)) bad('not found', 404)
+  } catch (e: any) {
+    if (e instanceof HttpError) throw e
+    bad(e.message)
+  }
+  audit(actor(c), 'user.role', String(id(c)), { role: b.role })
+  return c.json({ ok: true })
+})
+app.delete('/api/users/:id', (c) => {
+  if (!deleteUser(id(c))) bad('not found', 404)
+  audit(actor(c), 'user.delete', String(id(c)))
+  return c.json({ ok: true })
+})
+
+// Plain digits only: Number() would also read "0x1" or "1e0", which the role rules do not match.
+const id = (c: any, name = 'id') => {
+  const raw = String(c.req.param(name) ?? '')
+  return /^[1-9]\d{0,15}$/.test(raw) ? Number(raw) : bad('invalid id')
+}
 const body = async (c: any) => (await c.req.json().catch(() => null)) ?? bad('JSON expected')
 const s = (v: any, max = 20000) => String(v ?? '').slice(0, max)
+
+// Screenshots are written once and read often (board, issue page, every reviewer): kept in RAM.
+const shots = new Lru<{ data: Uint8Array<ArrayBuffer>; etag: string }>({
+  maxEntries: 400,
+  maxSize: 64 * 1024 * 1024,
+  sizeOf: (shot) => shot.data.length,
+})
+function readShot(path: string) {
+  let stat
+  try {
+    stat = statSync(path)
+  } catch {
+    return undefined
+  }
+  const etag = `"${stat.size.toString(36)}-${Math.round(stat.mtimeMs).toString(36)}"`
+  const cached = shots.get(path)
+  if (cached?.etag === etag) return cached
+  const shot = { data: readFileSync(path) as Uint8Array<ArrayBuffer>, etag }
+  shots.set(path, shot)
+  return shot
+}
+
+// ---------- AgentDeck as an MCP server ----------
+// Marks a call that came in through the MCP endpoint, so an issue filed there says so.
+const VIA_HEADER = 'x-agentdeck-via'
+const LOGIN_HEADERS = ['authorization', 'cookie', 'remote-user', 'x-agentdeck-proxy', 'x-real-ip']
+
+/** The MCP tools call the board's own routes with the login of whoever called the endpoint. */
+app.all('/api/mcp-server', (c) => {
+  const headers: Record<string, string> = { 'content-type': 'application/json', [VIA_HEADER]: 'mcp' }
+  for (const name of LOGIN_HEADERS) {
+    const value = c.req.header(name)
+    if (value) headers[name] = value
+  }
+  const api: Api = async (method, path, payload) =>
+    app.request(path, { method, headers, body: payload === undefined ? undefined : JSON.stringify(payload) })
+  return handleDeckMcp(c.req.raw, api)
+})
 
 // ---------- meta & projects ----------
 app.get('/api/meta', (c) =>
@@ -166,6 +482,32 @@ app.get('/api/meta', (c) =>
     blueprintGuide: BLUEPRINT_GUIDE,
   }),
 )
+
+// ---------- mission control ----------
+app.get('/api/metrics', (c) => c.text(metricsText(), 200, { 'content-type': 'text/plain; version=0.0.4; charset=utf-8' }))
+app.get('/api/overview', (c) => c.json(buildOverview()))
+app.get('/api/overview/since', (c) => c.json(sinceSummary(Number(c.req.query('t')))))
+app.put('/api/spend-guard', async (c) => {
+  const input = await body(c)
+  try {
+    const saved = saveGuardSettings(input)
+    audit(actor(c), 'spend-guard.set', '', { capUsd: saved.capUsd })
+    return c.json(saved)
+  } catch (e: any) {
+    bad(e.message)
+  }
+})
+app.post('/api/kill-switch', async (c) => {
+  const action = (await body(c)).action
+  if (action !== 'stop' && action !== 'resume') bad('action: stop or resume')
+  try {
+    const result = killSwitch(action, actor(c))
+    audit(actor(c), `kill-switch.${action}`, '', result)
+    return c.json(result)
+  } catch (e: any) {
+    bad(e.message, 409)
+  }
+})
 
 app.get('/api/projects', (c) =>
   c.json(
@@ -178,14 +520,17 @@ app.get('/api/projects', (c) =>
 
 app.post('/api/projects', async (c) => {
   const b = await body(c)
-  if (get('SELECT 1 FROM projects WHERE key=?', s(b.key, 8).toUpperCase()))
-    bad('Project key already exists', 409)
+  const key = s(b.key, 8).toUpperCase()
+  if (get('SELECT 1 FROM projects WHERE key=?', key)) bad('Project key already exists', 409)
+  confirmShellChange(c, b, key, blueprintShellChanges(b))
   let r: any
   try {
     r = applyBlueprint({ project: b })
   } catch (e: any) {
     bad(e.message)
   }
+  audit(actor(c), 'project.create', key)
+  sandboxProjects()
   return c.json(getProject(r.projectId), 201)
 })
 
@@ -200,25 +545,52 @@ app.patch('/api/projects/:id', async (c) => {
   const pid = id(c)
   const b = await body(c)
   const p = getProject(pid) ?? bad('not found', 404)
+  confirmShellChange(c, b, p.key, changedShellSettings(p.settings, b.settings ?? p.settings))
+  const next = {
+    name: s(b.name ?? p.name, 120),
+    description: s(b.description ?? p.description, 4000),
+    repo_path: s(b.repo_path ?? p.repo_path, 500),
+    paused: !!(b.paused ?? p.paused),
+    settings: mergeSettings(b.settings ?? p.settings),
+  }
   run(
     'UPDATE projects SET name=?, description=?, repo_path=?, paused=?, settings=? WHERE id=?',
-    s(b.name ?? p.name, 120),
-    s(b.description ?? p.description, 4000),
-    s(b.repo_path ?? p.repo_path, 500),
-    (b.paused ?? p.paused) ? 1 : 0,
-    JSON.stringify(mergeSettings(b.settings ?? p.settings)),
+    next.name,
+    next.description,
+    next.repo_path,
+    next.paused ? 1 : 0,
+    JSON.stringify(next.settings),
     pid,
   )
+  const before = {
+    name: p.name,
+    description: p.description,
+    repo_path: p.repo_path,
+    paused: p.paused,
+    settings: p.settings,
+  }
+  const changes = settingsChanges(before, next)
+  if (Object.keys(changes).length) audit(actor(c), 'project.update', p.key, changes)
   touch(pid)
+  sandboxProjects()
   kick()
   return c.json(getProject(pid))
 })
 
+/** Whether the allowlist is enforced, and what it refused lately (settings page). */
+app.get('/api/projects/:id/egress', (c) => {
+  const project = getProject(id(c)) ?? bad('not found', 404)
+  return c.json({ sandbox: SANDBOX, ...egressStatus(project.key) })
+})
+
 app.delete('/api/projects/:id', (c) => {
   const pid = id(c)
+  const p = getProject(pid) ?? bad('not found', 404)
   for (const r of all("SELECT id FROM runs WHERE project_id=? AND status='running'", pid))
     stopRun(r.id, 'Project deleted', 'backlog', 'System')
+  for (const hook of getProject(pid)?.settings.webhooks ?? []) deleteWebhook(hook.id)
   run('DELETE FROM projects WHERE id=?', pid)
+  audit(actor(c), 'project.delete', p.key, { name: p.name })
   forgetBoards(pid)
   touch(pid)
   return c.json({ ok: true })
@@ -237,11 +609,24 @@ function saveAgentExtras(agentId: number, b: any) {
   }
 }
 
+/** The agent fields a request touched, for the audit log (names only, the instructions stay out). */
+const AGENT_FIELDS = [
+  ...['name', 'role', 'provider', 'model', 'provider_override', 'instructions'],
+  ...['skill_ids', 'max_instances', 'enabled', 'mcp_ids', 'effort'],
+]
+const agentAudit = (b: any) => ({ fields: AGENT_FIELDS.filter((field) => field in b) })
+const projectKey = (pid: number) => get('SELECT key FROM projects WHERE id=?', pid)?.key ?? String(pid)
+
 function agentFields(b: any, cur: any = {}) {
-  const provider = b.provider ?? cur.provider
-  if (!PROVIDERS[provider]) bad('unknown provider')
+  const provider = b.provider ?? cur.provider ?? 'anthropic'
+  if (!Object.hasOwn(PROVIDERS, provider)) bad('unknown provider')
   const model = s(b.model ?? cur.model ?? '', 80)
   if (!MODEL_RE.test(model)) bad('invalid model name')
+  if (b.provider_override !== undefined && typeof b.provider_override !== 'boolean')
+    bad('invalid provider override')
+  // Older API clients set a direct override by changing the existing agent's provider or model.
+  const override = b.provider_override ?? (cur.provider_override ||
+    (cur.id != null && (provider !== cur.provider || model !== cur.model)))
   const name = s(b.name ?? cur.name, 80).trim() || bad('Name is missing')
   return [
     name,
@@ -252,6 +637,7 @@ function agentFields(b: any, cur: any = {}) {
     JSON.stringify((b.skill_ids ?? cur.skill_ids ?? []).map(Number).filter(Boolean)),
     Math.max(1, Math.min(20, Number(b.max_instances ?? cur.max_instances ?? 1) || 1)),
     (b.enabled ?? cur.enabled ?? true) ? 1 : 0,
+    override ? 1 : 0,
   ]
 }
 app.post('/api/projects/:id/agents', async (c) => {
@@ -259,11 +645,12 @@ app.post('/api/projects/:id/agents', async (c) => {
   getProject(pid) ?? bad('not found', 404)
   const b = await body(c)
   const r = run(
-    'INSERT INTO agents (name, role, provider, model, instructions, skill_ids, max_instances, enabled, project_id) VALUES (?,?,?,?,?,?,?,?,?)',
+    'INSERT INTO agents (name, role, provider, model, instructions, skill_ids, max_instances, enabled, provider_override, project_id) VALUES (?,?,?,?,?,?,?,?,?,?)',
     ...agentFields(b),
     pid,
   )
   saveAgentExtras(Number(r.lastInsertRowid), b)
+  audit(actor(c), 'agent.create', `${projectKey(pid)}/${s(b.name, 80)}`, agentAudit(b))
   touch(pid)
   kick()
   return c.json(mapAgent(get('SELECT * FROM agents WHERE id=?', r.lastInsertRowid)), 201)
@@ -272,20 +659,55 @@ app.patch('/api/agents/:id', async (c) => {
   const cur = mapAgent(get('SELECT * FROM agents WHERE id=?', id(c))) ?? bad('not found', 404)
   const b = await body(c)
   run(
-    'UPDATE agents SET name=?, role=?, provider=?, model=?, instructions=?, skill_ids=?, max_instances=?, enabled=? WHERE id=?',
+    'UPDATE agents SET name=?, role=?, provider=?, model=?, instructions=?, skill_ids=?, max_instances=?, enabled=?, provider_override=? WHERE id=?',
     ...agentFields(b, cur),
     cur.id,
   )
   saveAgentExtras(cur.id, b)
+  audit(actor(c), 'agent.update', `${projectKey(cur.project_id)}/${cur.name}`, agentAudit(b))
   touch(cur.project_id)
   kick()
   return c.json(mapAgent(get('SELECT * FROM agents WHERE id=?', cur.id)))
+})
+/**
+ * Moves agents to another provider in one go. Each keeps its tier (strong, medium, light), so the
+ * team stays the same shape. `dryRun` only returns the plan; running runs finish on the old one.
+ */
+app.post('/api/projects/:id/switch-provider', async (c) => {
+  const project = getProject(id(c)) ?? bad('not found', 404)
+  const b = await body(c)
+  const provider = String(b.provider ?? '')
+  if (!PROVIDERS[provider]) bad('Unknown provider')
+  const only = Array.isArray(b.agent_ids) ? b.agent_ids.map(Number) : null
+  const tiers = project.settings.modelTiers
+  const plan = all('SELECT * FROM agents WHERE project_id=?', project.id)
+    .map(mapAgent)
+    .filter((agent) => !only || only.includes(agent.id))
+    .map((agent) => {
+      const tier = tierOf(tiers, agent.provider, agent.model)
+      return {
+        agent_id: agent.id,
+        name: agent.name,
+        tier,
+        from: { provider: agent.provider, model: agent.model },
+        to: { provider, model: agent.provider === provider ? agent.model : modelFor(tiers, tier, provider) },
+      }
+    })
+  if (!b.dryRun) {
+    for (const step of plan)
+      run('UPDATE agents SET provider=?, model=?, provider_override=1 WHERE id=?', step.to.provider, step.to.model, step.agent_id)
+    audit(actor(c), 'agent.switch-provider', project.key, { provider, agents: plan.map((step) => step.name) })
+    touch(project.id)
+    kick()
+  }
+  return c.json({ plan })
 })
 app.delete('/api/agents/:id', (c) => {
   const cur = get('SELECT * FROM agents WHERE id=?', id(c)) ?? bad('not found', 404)
   for (const r of all("SELECT id FROM runs WHERE agent_id=? AND status='running'", cur.id))
     stopRun(r.id, 'Agent deleted', 'todo', 'System')
   run('DELETE FROM agents WHERE id=?', cur.id)
+  audit(actor(c), 'agent.delete', `${projectKey(cur.project_id)}/${cur.name}`)
   touch(cur.project_id)
   return c.json({ ok: true })
 })
@@ -301,6 +723,7 @@ app.post('/api/projects/:id/skills', async (c) => {
     s(b.description, 400),
     s(b.content),
   )
+  audit(actor(c), 'skill.create', `${projectKey(pid)}/${s(b.name, 80)}`)
   touch(pid)
   return c.json(get('SELECT * FROM skills WHERE id=?', r.lastInsertRowid), 201)
 })
@@ -314,12 +737,14 @@ app.patch('/api/skills/:id', async (c) => {
     s(b.content ?? cur.content),
     cur.id,
   )
+  audit(actor(c), 'skill.update', `${projectKey(cur.project_id)}/${cur.name}`)
   touch(cur.project_id)
   return c.json(get('SELECT * FROM skills WHERE id=?', cur.id))
 })
 app.delete('/api/skills/:id', (c) => {
   const cur = get('SELECT * FROM skills WHERE id=?', id(c)) ?? bad('not found', 404)
   run('DELETE FROM skills WHERE id=?', cur.id)
+  audit(actor(c), 'skill.delete', `${projectKey(cur.project_id)}/${cur.name}`)
   touch(cur.project_id)
   return c.json({ ok: true })
 })
@@ -345,7 +770,7 @@ app.post('/api/projects/:id/issues', async (c) => {
       title,
       description: s(b.description),
       checklist: checklistInput(b.checklist),
-      created_by: 'Owner',
+      created_by: c.req.header(VIA_HEADER) === 'mcp' ? 'Owner (MCP)' : 'Owner',
     }),
   )
   kick()
@@ -401,6 +826,8 @@ app.get('/api/issues/:id/spent', (c) => {
   const cap = getProject(issue.project_id).settings.issueCap
   return c.json({ spent: spentOn(issue.id), cap: capOf(cap, issue.cap_factor), capped: !!issue.capped })
 })
+/** Expected cost from similar finished issues (forecast.ts). */
+app.get('/api/issues/:id/forecast', (c) => c.json(forecastView(id(c)) ?? bad('not found', 404)))
 app.post('/api/issues/:id/raise-cap', (c) => {
   const issue = getIssue(id(c)) ?? bad('not found', 404)
   addComment(issue.id, 'System', 'system', 'Another round of the cost cap granted.')
@@ -413,6 +840,15 @@ app.post('/api/issues/:id/raise-cap', (c) => {
   return c.json({ ok: true })
 })
 
+app.post('/api/issues/:id/approve-landing', async (c) => {
+  const issue = getIssue(id(c)) ?? bad('not found', 404)
+  const sha = s((await body(c)).sha, 64)
+  if (!/^[0-9a-f]{40,64}$/.test(sha)) bad('invalid state')
+  await approveLanding(issue.id, sha, actor(c)).catch((e) => bad(e.message, 409))
+  kick()
+  return c.json({ ok: true })
+})
+
 app.get('/api/issues/:id/changes', async (c) => {
   const issue = getIssue(id(c)) ?? bad('not found', 404)
   return c.json(await issueChanges(getProject(issue.project_id), issue.number))
@@ -421,12 +857,10 @@ app.get('/api/issues/:id/shots', (c) => c.json(listShots(id(c))))
 app.get('/api/issues/:id/shots/:file', async (c) => {
   const file = c.req.param('file')
   if (!/^\d+-(desktop|phone)\.png$/.test(file)) bad('invalid file')
-  const path = `${shotsDir(id(c))}/${file}`
-  if (!existsSync(path)) bad('not found', 404)
-  return c.body(readFileSync(path), 200, {
-    'content-type': 'image/png',
-    'cache-control': 'private, max-age=86400',
-  })
+  const shot = readShot(`${shotsDir(id(c))}/${file}`) ?? bad('not found', 404)
+  const headers = { etag: shot.etag, 'cache-control': 'private, max-age=86400' }
+  if (c.req.header('if-none-match') === shot.etag) return c.body(null, 304, headers)
+  return c.body(shot.data, 200, { ...headers, 'content-type': 'image/png' })
 })
 
 const LINK_COLUMNS = 'i.id, i.number, i.title, i.status, i.assignee_id'
@@ -457,7 +891,33 @@ app.get('/api/issues/:id', (c) => {
       issue.id,
     ),
     links: { blockers, dependents },
+    arena: arenaOf(issue) ?? null,
   })
+})
+
+// ---------- arena: several agents on one issue, a jury picks ----------
+app.get('/api/issues/:id/arena', (c) => c.json(arenaOf(getIssue(id(c)) ?? bad('not found', 404)) ?? null))
+app.post('/api/issues/:id/arena', async (c) => {
+  const b = await body(c)
+  try {
+    const entries = startArena(id(c), b.agents, actor(c))
+    kick()
+    return c.json(
+      { entries: entries.map((entry) => ({ id: entry.id, number: entry.number, agent: entry.agent })) },
+      201,
+    )
+  } catch (e: any) {
+    bad(e.message, 409)
+  }
+})
+app.post('/api/issues/:id/arena/pick', async (c) => {
+  const b = await body(c)
+  try {
+    pickArenaWinner(id(c), Number(b.entry), '', actor(c))
+    return c.json({ ok: true })
+  } catch (e: any) {
+    bad(e.message, 409)
+  }
 })
 
 app.patch('/api/issues/:id', async (c) => {
@@ -499,10 +959,20 @@ app.patch('/api/issues/:id', async (c) => {
   }
   // Moving a capped issue back into the queue grants it another round of the project's cap.
   if (cur.capped && ['todo', 'review'].includes(patch.status)) {
+    // Another round costs money: the same decision as raise-cap, so the same role.
+    if (!allows(whoOf.get(c.req.raw)?.role ?? 'viewer', 'admin')) bad('Only an admin may raise the cost limit.', 403)
     patch.cap_factor = cur.cap_factor + 1
     patch.capped = 0
   }
-  const issue = patchIssue(cur.id, patch, c.req.header('remote-user') || 'Owner')
+  // Moving an issue held at an approval gate anywhere else ends the wait for the approval. Moved
+  // to done, it is landed again and held again unless the owner approved it.
+  if (cur.landing === 'approval' && patch.status && patch.status !== 'blocked') {
+    patch.landing = ''
+    patch.gate_sha = ''
+  }
+  // Moving a parked issue back into the queue by hand ends its rest.
+  if (cur.parked_until && ['todo', 'review'].includes(patch.status)) patch.parked_until = 0
+  const issue = patchIssue(cur.id, patch, actor(c))
   if (patch.status === 'done') landByHand(cur.id)
   if (
     cur.status === 'in_progress' &&
@@ -527,7 +997,12 @@ app.post('/api/issues/:id/comments', async (c) => {
   const b = await body(c)
   const text = s(b.body).trim() || bad('Comment is empty')
   return c.json(
-    addComment(cur.id, s(b.author || c.req.header('remote-user') || 'You', 60), 'comment', text),
+    addComment(
+      cur.id,
+      s((actor(c) !== 'Owner' && actor(c)) || b.author || 'Du', 60),
+      'comment',
+      text,
+    ),
     201,
   )
 })
@@ -537,6 +1012,10 @@ app.post('/api/issues/:id/stop', (c) =>
 )
 
 // ---------- tokens RTK kept out of the agents' context ----------
+app.get('/api/projects/:id/journal', (c) =>
+  c.json(journal(id(c), Number(c.req.query('before')) || undefined)),
+)
+
 app.get('/api/projects/:id/lessons', (c) => c.json(listLessons(id(c))))
 app.post('/api/projects/:id/lessons', async (c) => {
   const b = await body(c)
@@ -550,6 +1029,47 @@ app.post('/api/projects/:id/lessons', async (c) => {
 app.delete('/api/projects/:id/lessons/:lesson', (c) => {
   deleteLesson(id(c), id(c, 'lesson'))
   return c.json(listLessons(id(c)))
+})
+
+// ---------- webhooks: URL and secret stay on the server, the settings only keep the host ----------
+function saveWebhooks(pid: number, change: (hooks: any[]) => any[]) {
+  const project = getProject(pid) ?? bad('not found', 404)
+  const settings = { ...project.settings, webhooks: change(project.settings.webhooks) }
+  run('UPDATE projects SET settings=? WHERE id=?', JSON.stringify(mergeSettings(settings)), pid)
+  touch(pid)
+}
+const webhookOf = (c: any) =>
+  getProject(id(c))?.settings.webhooks.find((hook: any) => hook.id === c.req.param('hook')) ??
+  bad('Webhook not found', 404)
+
+app.post('/api/projects/:id/webhooks', async (c) => {
+  const pid = id(c)
+  const project = getProject(pid) ?? bad('not found', 404)
+  if (project.settings.webhooks.length >= 10) bad('At most 10 webhooks per project')
+  const b = await body(c)
+  let created: ReturnType<typeof createWebhook>
+  try {
+    created = createWebhook(pid, { url: s(b.url, 2048), kind: b.kind, events: b.events })
+  } catch (e: any) {
+    return bad(e.message)
+  }
+  saveWebhooks(pid, (hooks) => [...hooks, created.webhook])
+  // The secret is in this answer only; it is never shown again.
+  return c.json(created, 201)
+})
+app.delete('/api/projects/:id/webhooks/:hook', (c) => {
+  const hook = webhookOf(c)
+  deleteWebhook(hook.id)
+  saveWebhooks(id(c), (hooks) => hooks.filter((other) => other.id !== hook.id))
+  return c.json({ ok: true })
+})
+app.post('/api/projects/:id/webhooks/:hook/test', async (c) => {
+  const hook = webhookOf(c)
+  try {
+    return c.json({ status: await testWebhook(id(c), hook) })
+  } catch (e: any) {
+    return bad(e.message)
+  }
 })
 
 app.get('/api/search', (c) => c.json(searchIssues(c.req.query('q') ?? '')))
@@ -567,6 +1087,15 @@ app.get('/api/projects/:id/rtk', async (c) =>
 app.get('/api/runs/:id/log', (c) =>
   c.json(all('SELECT at, text FROM run_log WHERE run_id=? ORDER BY id LIMIT 5000', id(c))),
 )
+
+// ---------- the replay of a run: its steps, redacted when they were recorded ----------
+app.get('/api/runs/:id/events', (c) => {
+  const kind = c.req.query('kind') || undefined
+  if (kind && !RUN_EVENT_KINDS.includes(kind as RunEventKind)) bad('unknown kind')
+  const found =
+    get('SELECT id, started_at, ended_at, status FROM runs WHERE id=?', id(c)) ?? bad('not found', 404)
+  return c.json({ run: found, events: runEvents(found.id, kind as RunEventKind | undefined) })
+})
 
 // ---------- models per provider, for the dropdowns ----------
 app.get('/api/models', async (c) => c.json(await listModels(c.req.query('refresh') === '1')))
@@ -636,6 +1165,18 @@ app.put('/api/providers/:id', async (c) => {
   } catch (e: any) {
     bad(e.message)
   }
+  // Only which secret changed, never its value.
+  const secrets = [
+    key !== undefined && (key ? 'apiKey' : 'apiKey removed'),
+    provider === 'anthropic' && typeof b.subscriptionToken === 'string' && 'subscriptionToken',
+    provider === MANAGED && typeof b.environmentKey === 'string' && 'environmentKey',
+  ].filter(Boolean)
+  audit(actor(c), 'provider.access', provider, {
+    mode: s(b.mode, 40),
+    changed: secrets,
+    ...(provider === MANAGED && b.runLimitUsd !== undefined ? { runLimitUsd: Number(b.runLimitUsd) } : {}),
+  })
+  if (provider === 'anthropic') void readClaudeUsage().then(kick, () => {})
   kick()
   return c.json(getAccess(provider))
 })
@@ -644,6 +1185,7 @@ app.put('/api/providers/:id/resets', async (c) => {
   const provider = knownProvider(c)
   const b = await body(c)
   setResetsEnabled(provider, b.enabled === true)
+  audit(actor(c), 'provider.resets', provider, { enabled: b.enabled === true })
   kick()
   return c.json({ ok: true })
 })
@@ -661,7 +1203,13 @@ app.get('/api/providers/:id/login', (c) => c.json(loginView(knownProvider(c))))
 
 app.post('/api/providers/:id/login', (c) => {
   try {
-    return c.json(startLogin(knownProvider(c)))
+    const provider = knownProvider(c)
+    const view = startLogin(provider, () => {
+      if (provider === 'anthropic') void readClaudeUsage().catch(() => {}).finally(() => wakeProvider(provider))
+      else wakeProvider(provider)
+    })
+    audit(actor(c), 'provider.login', provider)
+    return c.json(view)
   } catch (e: any) {
     return bad(e.message)
   }
@@ -679,32 +1227,51 @@ app.post('/api/providers/:id/login/code', async (c) => {
 })
 
 app.delete('/api/providers/:id/login', (c) => {
-  cancelLogin(knownProvider(c))
+  const provider = knownProvider(c)
+  cancelLogin(provider)
+  audit(actor(c), 'provider.login-cancel', provider)
   return c.json({ ok: true })
 })
 
 // ---------- routines ----------
+const ROUTINE_FIELDS = ['name', 'agent_id', 'prompt', 'schedule', 'at', 'every_minutes', 'enabled', 'only_when_idle']
+const routineFields = (b: any) => ROUTINE_FIELDS.filter((field) => field in b)
 app.get('/api/projects/:id/routines', (c) => c.json(listRoutines(id(c))))
 
 app.post('/api/projects/:id/routines', async (c) => {
   const pid = id(c)
-  getProject(pid) ?? bad('not found', 404)
+  const project = getProject(pid) ?? bad('not found', 404)
+  const b = await body(c)
+  let routine: any
   try {
-    return c.json(createRoutine(pid, await body(c)), 201)
+    routine = createRoutine(pid, b)
   } catch (e: any) {
     return bad(e.message)
   }
+  audit(actor(c), 'routine.create', `${project.key}/${routine?.name ?? ''}`, { fields: routineFields(b) })
+  return c.json(routine, 201)
 })
 
 app.patch('/api/routines/:id', async (c) => {
+  const b = await body(c)
+  let routine: any
   try {
-    return c.json(updateRoutine(id(c), await body(c)) ?? bad('not found', 404))
+    routine = updateRoutine(id(c), b) ?? bad('not found', 404)
   } catch (e: any) {
     return bad(e.message, e.status)
   }
+  audit(actor(c), 'routine.update', `${projectKey(routine.project_id)}/${routine.name}`, {
+    fields: routineFields(b),
+  })
+  return c.json(routine)
 })
 
-app.delete('/api/routines/:id', (c) => c.json({ ok: deleteRoutine(id(c)) }))
+app.delete('/api/routines/:id', (c) => {
+  const routine = get('SELECT project_id, name FROM routines WHERE id=?', id(c))
+  const ok = deleteRoutine(id(c))
+  if (ok) audit(actor(c), 'routine.delete', `${projectKey(routine.project_id)}/${routine.name}`)
+  return c.json({ ok })
+})
 
 // ---------- mail to the owner ----------
 // ---------- push and morning report ----------
@@ -716,10 +1283,12 @@ app.post('/api/push/subscribe', async (c) => {
   } catch (e: any) {
     bad(e.message)
   }
+  audit(actor(c), 'push.subscribe', s(b.device, 120))
   return c.json({ devices: pushDevices().length }, 201)
 })
 app.post('/api/push/unsubscribe', async (c) => {
   unsubscribePush(s((await body(c)).endpoint, 2000))
+  audit(actor(c), 'push.unsubscribe')
   return c.json({ devices: pushDevices().length })
 })
 app.post('/api/push/test', async (c) =>
@@ -728,11 +1297,14 @@ app.post('/api/push/test', async (c) =>
 
 app.get('/api/report', (c) => c.json({ ...reportSettings(), preview: buildReport().text }))
 app.put('/api/report', async (c) => {
+  let saved: any
   try {
-    return c.json({ ...saveReportSettings(await body(c)), preview: buildReport().text })
+    saved = saveReportSettings(await body(c))
   } catch (e: any) {
     return bad(e.message)
   }
+  audit(actor(c), 'report.settings', '', { at: saved.at })
+  return c.json({ ...saved, preview: buildReport().text })
 })
 app.post('/api/report/send', async (c) => {
   try {
@@ -744,7 +1316,15 @@ app.post('/api/report/send', async (c) => {
 
 app.get('/api/mail', (c) => c.json(mailSettings()))
 
-app.put('/api/mail', async (c) => c.json(saveMailSettings(await body(c))))
+app.put('/api/mail', async (c) => {
+  const b = await body(c)
+  const saved = saveMailSettings(b)
+  // Names of what changed only: the API key is a secret, the addresses are personal data.
+  audit(actor(c), 'mail.settings', '', {
+    changed: ['inbox', 'to', 'apiKey'].filter((field) => typeof b[field] === 'string'),
+  })
+  return c.json(saved)
+})
 
 app.post('/api/mail/test', async (c) => {
   try {
@@ -765,13 +1345,22 @@ app.put('/api/mcp/:id', async (c) => {
   } catch (e: any) {
     bad(e.message, 404)
   }
+  audit(actor(c), 'mcp.key', c.req.param('id'), {
+    changed: [s(b.apiKey, 500).trim() ? 'apiKey' : 'apiKey removed'],
+  })
   return c.json(listConnections())
 })
 
 // ---------- blueprints (used by the UI wizard and by the agentdeck skill) ----------
 app.post('/api/import', async (c) => {
+  const b = await body(c)
+  const key = s(b?.project?.key, 8).toUpperCase()
+  confirmShellChange(c, b, key, changedShellSettings(null, b?.project?.settings))
   try {
-    return c.json(importProject(await body(c)), 201)
+    const imported = importProject(b)
+    audit(actor(c), 'project.import', key)
+    sandboxProjects()
+    return c.json(imported, 201)
   } catch (e: any) {
     return bad(e.message)
   }
@@ -789,6 +1378,8 @@ app.post('/api/templates/:template', async (c) => {
       name: s(b.name, 120),
       repo_path: s(b.repo_path, 500),
     })
+    audit(actor(c), 'project.template', key, { template: s(c.req.param('template'), 60) })
+    sandboxProjects()
     kick()
     return c.json(result, 201)
   } catch (e: any) {
@@ -798,12 +1389,20 @@ app.post('/api/templates/:template', async (c) => {
 
 app.post('/api/blueprint', async (c) => {
   const b = await body(c)
+  const key = s(b?.project?.key, 8).toUpperCase()
+  confirmShellChange(c, b, key, blueprintShellChanges(b?.project))
   let r
   try {
     r = applyBlueprint(b)
   } catch (e: any) {
     bad(e.message)
   }
+  audit(actor(c), 'project.blueprint', key, {
+    agents: Array.isArray(b.agents) ? b.agents.length : 0,
+    issues: Array.isArray(b.issues) ? b.issues.length : 0,
+    settings: !!b.project?.settings,
+  })
+  sandboxProjects()
   kick()
   return c.json(r, 201)
 })
@@ -829,11 +1428,12 @@ app.post('/api/blueprint/generate', async (c) => {
 app.get('/api/events', (c) => {
   const pid = Number(c.req.query('project'))
   return streamSSE(c, async (stream) => {
-    const queue: any[] = []
+    // JSON strings: an event is serialized once in emit, for every browser that listens.
+    const queue: string[] = []
     let wake: (() => void) | null = null
     let open = true
-    const unsub = subscribe(pid, (e) => {
-      queue.push(e)
+    const unsub = subscribe(pid, (_e, json) => {
+      queue.push(json)
       wake?.()
     })
     stream.onAbort(() => {
@@ -841,11 +1441,12 @@ app.get('/api/events', (c) => {
       unsub()
       wake?.()
     })
-    for (const [runId, a] of activity) queue.push({ t: 'activity', runId, issueId: a.issueId, text: a.text })
-    queue.push({ t: 'notice', text: notices.get(pid) ?? '' })
-    queue.push({ t: 'waiting', reasons: waiting.get(pid) ?? {} })
+    const send = (e: unknown) => queue.push(JSON.stringify(e))
+    for (const [runId, a] of activity) send({ t: 'activity', runId, issueId: a.issueId, text: a.text })
+    send({ t: 'notice', text: notices.get(pid) ?? '' })
+    send({ t: 'waiting', reasons: waiting.get(pid) ?? {} })
     while (open) {
-      while (queue.length && open) await stream.writeSSE({ data: JSON.stringify(queue.shift()) })
+      while (queue.length && open) await stream.writeSSE({ data: queue.shift()! })
       await new Promise<void>((r) => {
         wake = r
         setTimeout(r, 25_000)
@@ -861,22 +1462,26 @@ app.use('/assets/*', async (c, next) => {
   await next()
   c.header('cache-control', 'public, max-age=31536000, immutable')
 })
-app.use('/*', compress(), serveStatic({ root: './dist' }))
-app.get('*', serveStatic({ path: './dist/index.html' }))
+// The build writes .br and .gz next to each file, so nothing is compressed per request. compress()
+// stays for a dist built without them; it leaves a response that already has an encoding alone.
+app.use('/*', compress(), serveStatic({ root: './dist', precompressed: true }))
+app.get('*', compress(), serveStatic({ path: './dist/index.html', precompressed: true }))
 
 const port = Number(process.env.PORT ?? 8790)
-const server = serve({ fetch: app.fetch, port, hostname: HOST }, ({ port: boundPort }) =>
-  console.log(`AgentDeck http://localhost:${boundPort}  data=${DATA_DIR}`),
+const server = serve({ fetch: app.fetch, port, hostname: process.env.HOST ?? '127.0.0.1' }, () =>
+  console.log(`AgentDeck http://localhost:${port}  data=${DATA_DIR}`),
 )
 recoverAfterRestart()
+lockDownServerFiles(DATA_DIR)
+startEgress()
+sandboxProjects()
 startEngine()
 startRoutines(kick)
 startHousekeeping()
-if (process.env.AGENTDECK_DEMO !== '1') {
-  startClaudeUsage()
-  startCodexUsage()
-}
+startClaudeUsage(kick)
+startCodexUsage(kick)
 startReports()
+startSpendGuard()
 for (const sig of ['SIGINT', 'SIGTERM'] as const)
   process.on(sig, () => {
     shutdown()

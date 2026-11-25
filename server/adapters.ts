@@ -1,15 +1,18 @@
 import { spawn, execFile, execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { globSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import { startApiRun } from './apiAgent.ts'
 import { apiKey, getAccess, runEnv } from './auth.ts'
 import { EFFORTS, PROVIDERS, MODEL_RE } from './core.ts'
 import { startManagedRun } from './managedAgent.ts'
 import { prepareMcp } from './mcp.ts'
-import { run } from './db.ts'
+import { DATA_DIR, run } from './db.ts'
+import type { TraceEvent } from './runEvents.ts'
+import { rtkInstalled, RTK_INSTRUCTIONS, withRtkPlugin } from './rtk.ts'
+import { execIn, homeOf, loginsIn, loginsOut, ownerOf, placeInHome, removeFromHome, SANDBOX, spawnIn, stopGroup, syncCommandIn } from './sandbox.ts'
 
 /**
  * input counts everything the model read, cached or not. An agent sends its whole context
@@ -32,6 +35,8 @@ export type RunOpts = {
   /** Extra environment for the agent process, e.g. the address and token of the agent API. */
   env?: Record<string, string>
   onActivity?: (line: string) => void
+  /** The parsed steps of the run for its replay (runEvents.ts): messages, tool calls, results. */
+  onEvent?: (event: TraceEvent) => void
 }
 
 /**
@@ -89,6 +94,27 @@ type State = {
   error?: string
   sawResult: boolean
   codexThread?: string
+  /** Claude names a tool only in its call; its result refers to the call's id. */
+  toolNames: Map<string, string>
+}
+
+type Trace = (event: TraceEvent) => void
+
+/** The text of a tool result: a string, or blocks of text (images are only named). */
+export function textOf(content: any): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content))
+    return content
+      .map((block) => (typeof block?.text === 'string' ? block.text : block?.type === 'image' ? '[image]' : ''))
+      .filter(Boolean)
+      .join('\n')
+  return content == null ? '' : JSON.stringify(content)
+}
+
+/** A Codex item without the fields every item has, for the timeline. */
+function codexDetails(it: any) {
+  const { id: _id, type: _type, status: _status, ...rest } = it ?? {}
+  return JSON.stringify(rest)
 }
 
 const lastQuotaReading = new Map<string, { at: number; utilization: number }>()
@@ -127,9 +153,12 @@ export function readCodexQuota(provider: string, threadId: string, codexHome: st
 
   const lines = readFileSync(join(codexHome, file), 'utf8').trimEnd().split('\n')
   const lastWithLimits = lines.findLast((line) => line.includes('"rate_limits"'))
-  if (!lastWithLimits) return
+  if (lastWithLimits) saveCodexLimits(provider, lastWithLimits)
+}
 
-  const found = findKey(JSON.parse(lastWithLimits), 'rate_limits')
+/** Saves the windows of one session line that carries "rate_limits". */
+function saveCodexLimits(provider: string, line: string) {
+  const found = findKey(JSON.parse(line), 'rate_limits')
   for (const name of ['primary', 'secondary']) {
     const window = found?.[name]
     if (typeof window?.used_percent !== 'number') continue
@@ -147,12 +176,26 @@ function findKey(value: any, key: string): any {
   }
 }
 
-function parse(cli: string, provider: string, e: any, st: State, act: (s: string) => void) {
+export function parse(cli: string, provider: string, e: any, st: State, act: (s: string) => void, ev: Trace = () => {}) {
   if (cli === 'claude') {
     if (e.type === 'assistant') {
       for (const c of e.message?.content ?? []) {
-        if (c.type === 'text' && c.text) act((st.text = c.text))
-        else if (c.type === 'tool_use') act(`${c.name}: ${JSON.stringify(c.input ?? {})}`)
+        if (c.type === 'text' && c.text) {
+          act((st.text = c.text))
+          ev({ kind: 'assistant', text: c.text })
+        } else if (c.type === 'tool_use') {
+          const input = JSON.stringify(c.input ?? {})
+          act(`${c.name}: ${input}`)
+          if (c.id) st.toolNames.set(c.id, String(c.name ?? 'tool'))
+          ev({ kind: 'tool_call', name: String(c.name ?? 'tool'), text: input })
+        }
+      }
+    } else if (e.type === 'user') {
+      for (const c of e.message?.content ?? []) {
+        if (c?.type !== 'tool_result') continue
+        const name = st.toolNames.get(c.tool_use_id) ?? 'tool'
+        st.toolNames.delete(c.tool_use_id)
+        ev({ kind: c.is_error ? 'error' : 'tool_result', name, text: textOf(c.content) })
       }
     } else if (e.type === 'rate_limit_event') {
       const w = e.rate_limit_info?.unifiedWindows ?? {}
@@ -171,15 +214,29 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
       if (typeof e.result === 'string' && e.result) st.text = e.result
       st.sawResult = true
       st.ok = !e.is_error
-      if (e.is_error) st.error = short(String(e.result ?? e.subtype ?? 'error'), 400)
+      if (e.is_error) {
+        st.error = short(String(e.result ?? e.subtype ?? 'error'), 400)
+        ev({ kind: 'error', text: String(e.result ?? e.subtype ?? 'error') })
+      }
     }
   } else if (cli === 'codex') {
     const it = e.item
     if (e.type === 'thread.started') st.codexThread = e.thread_id
-    else if (it?.type === 'agent_message' && e.type === 'item.completed') act((st.text = it.text ?? ''))
-    else if (it?.type === 'command_execution' && e.type === 'item.started') act(`$ ${it.command ?? ''}`)
-    else if (it && e.type === 'item.started') act(String(it.type))
-    else if (e.type === 'turn.completed') {
+    else if (it?.type === 'agent_message' && e.type === 'item.completed') {
+      act((st.text = it.text ?? ''))
+      ev({ kind: 'assistant', text: it.text ?? '' })
+    } else if (it?.type === 'command_execution' && e.type === 'item.started') {
+      act(`$ ${it.command ?? ''}`)
+      ev({ kind: 'tool_call', name: 'shell', text: String(it.command ?? '') })
+    } else if (it?.type === 'command_execution' && e.type === 'item.completed') {
+      const exit = it.exit_code == null ? '' : `\n[exit code ${it.exit_code}]`
+      ev({ kind: 'tool_result', name: 'shell', text: `${it.aggregated_output ?? ''}${exit}` })
+    } else if (it && e.type === 'item.started') {
+      act(String(it.type))
+      if (it.type !== 'reasoning' && it.type !== 'agent_message') ev({ kind: 'tool_call', name: String(it.type), text: codexDetails(it) })
+    } else if (it && e.type === 'item.completed' && it.type !== 'reasoning') {
+      ev({ kind: it.type === 'error' ? 'error' : 'tool_result', name: String(it.type), text: it.message ?? codexDetails(it) })
+    } else if (e.type === 'turn.completed') {
       st.usage.input += e.usage?.input_tokens ?? 0
       st.usage.cached = (st.usage.cached ?? 0) + (e.usage?.cached_input_tokens ?? 0)
       st.usage.output += (e.usage?.output_tokens ?? 0) + (e.usage?.reasoning_output_tokens ?? 0)
@@ -187,12 +244,26 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
     } else if (e.type === 'turn.failed' || e.type === 'error') {
       st.ok = false
       st.error = short(String(e.error?.message ?? e.message ?? 'error'), 400)
+      ev({ kind: 'error', text: String(e.error?.message ?? e.message ?? 'error') })
     }
   } else {
     const p = e.part ?? {}
-    if (e.type === 'text' && p.text) act((st.text = p.text))
-    else if (e.type === 'tool_use') act(`${p.tool ?? 'tool'}: ${JSON.stringify(p.state?.input ?? {})}`)
-    else if (e.type === 'step_finish') {
+    if (e.type === 'text' && p.text) {
+      act((st.text = p.text))
+      ev({ kind: 'assistant', text: p.text })
+    } else if (e.type === 'tool_use') {
+      const name = String(p.tool ?? 'tool')
+      const input = JSON.stringify(p.state?.input ?? {})
+      act(`${name}: ${input}`)
+      ev({ kind: 'tool_call', name, text: input })
+      // opencode reports a tool once it has finished, with its output.
+      if (p.state?.output != null || p.state?.error != null)
+        ev({
+          kind: p.state?.status === 'error' ? 'error' : 'tool_result',
+          name,
+          text: textOf(p.state?.output ?? p.state?.error),
+        })
+    } else if (e.type === 'step_finish') {
       st.usage.input += (p.tokens?.input ?? 0) + (p.tokens?.cache?.read ?? 0) + (p.tokens?.cache?.write ?? 0)
       st.usage.cached = (st.usage.cached ?? 0) + (p.tokens?.cache?.read ?? 0)
       st.usage.output += (p.tokens?.output ?? 0) + (p.tokens?.reasoning ?? 0)
@@ -201,21 +272,12 @@ function parse(cli: string, provider: string, e: any, st: State, act: (s: string
     } else if (e.type === 'error') {
       st.ok = false
       st.error = short(String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'error'), 400)
+      ev({ kind: 'error', text: String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'error') })
     }
   }
 }
 
 const quoteForCmd = (arg: string) => (/^[w./:=@-]+$/.test(arg) ? arg : `"${arg.replace(/"/g, '\\"')}"`)
-
-function killTree(pid: number | undefined) {
-  if (!pid) return
-  if (process.platform === 'win32') execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {})
-  else {
-    try {
-      process.kill(-pid, 'SIGTERM')
-    } catch {}
-  }
-}
 
 export function startRun(o: RunOpts): RunHandle {
   const cli = PROVIDERS[o.provider]?.cli
@@ -233,32 +295,96 @@ export function startRun(o: RunOpts): RunHandle {
     return startManagedRun(o, model)
   }
   const [cmd, baseArgs] = command(cli, o)
-  const mcp = prepareMcp(cli, o.mcp ?? [], randomUUID())
+  // In the sandbox the run belongs to the project user that owns its directory. An autonomous run
+  // never falls back to the server's user; a read-only question from the owner may.
+  const owner = ownerOf(o.cwd)
+  if (SANDBOX && o.autonomous && !owner) throw new Error(`Sandbox: ${o.cwd} belongs to no project user`)
+  const files = owner ? join(owner.home, '.agentdeck') : join(DATA_DIR, 'tmp')
+  const mcp = prepareMcp(cli, o.mcp ?? [], randomUUID(), files)
   const env = { ...runEnv(o.provider, cli), ...mcp.env, ...o.env }
+  if (o.env?.RTK_DB_PATH && rtkInstalled()) {
+    o = { ...o, prompt: `${o.prompt}\n\n${RTK_INSTRUCTIONS}` }
+    if (cli === 'opencode') {
+      const plugin = pathToFileURL(join(import.meta.dirname, 'rtk-opencode.mjs')).href
+      env.OPENCODE_CONFIG_CONTENT = withRtkPlugin(env.OPENCODE_CONFIG_CONTENT, plugin)
+    }
+  }
 
   // Codex reads the prompt from stdin when its last argument is "-", so extra flags go in front of it.
   const args = cli === 'codex' ? [...baseArgs.slice(0, -1), ...mcp.args, '-'] : [...baseArgs, ...mcp.args]
 
-  const win = process.platform === 'win32'
-  // On Windows the CLIs are .cmd shims and need a shell. Arguments are fixed flags, a validated
-  // model name or values we built ourselves; anything with special characters gets quoted.
-  const child = win
-    ? spawn([cmd, ...args.map(quoteForCmd)].join(' '), { cwd: o.cwd, env, shell: true, windowsHide: true })
-    : spawn(cmd, args, { cwd: o.cwd, env, detached: true })
-  child.on('close', mcp.cleanup)
-  const st: State = { text: '', usage: { input: 0, output: 0, cost: 0 }, ok: true, sawResult: false }
+  let child: ReturnType<typeof spawn> | undefined
+  let stopped = false
+  const done = (async (): Promise<RunResult> => {
+    if (owner) {
+      // The Codex home of an API key lives with the server's data; the run gets a copy of it.
+      const codexApi = env.CODEX_HOME?.startsWith(DATA_DIR) ? env.CODEX_HOME : null
+      if (codexApi) env.CODEX_HOME = join(owner.home, '.codex-api')
+      // A project that pushes with a token of its own (GH_TOKEN) does not get the owner's gh login.
+      await loginsIn(o.cwd, { extra: codexApi ? [{ from: codexApi, to: '.codex-api' }] : [], gh: !env.GH_TOKEN })
+      for (const file of mcp.files) await placeInHome(o.cwd, file.path, file.content)
+    } else {
+      for (const file of mcp.files) {
+        mkdirSync(dirname(file.path), { recursive: true })
+        writeFileSync(file.path, file.content, { mode: 0o600 })
+      }
+    }
+    if (stopped) return { ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'gestoppt' }
+    const win = process.platform === 'win32'
+    // On Windows the CLIs are .cmd shims and need a shell. Arguments are fixed flags, a validated
+    // model name or values we built ourselves; anything with special characters gets quoted.
+    child = win
+      ? spawn([cmd, ...args.map(quoteForCmd)].join(' '), { cwd: o.cwd, env, shell: true, windowsHide: true })
+      : spawnIn(o.cwd, cmd, args, { env, detached: true }, o.autonomous)
+    return follow(child, cmd, env, o, cli)
+  })()
+    .catch((err): RunResult => ({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: err.message }))
+    .finally(async () => {
+      if (owner) {
+        for (const file of mcp.files) await removeFromHome(o.cwd, file.path).catch(() => {})
+        await loginsOut(o.cwd).catch((err) => console.error('sandbox logins', err.message))
+      } else {
+        for (const file of mcp.files) rmSync(file.path, { force: true })
+      }
+    })
+  return {
+    kill: () => {
+      stopped = true
+      if (child) stopGroup(child.pid)
+    },
+    done,
+  }
+}
+
+export const newState = (): State => ({
+  text: '',
+  usage: { input: 0, output: 0, cost: 0 },
+  ok: true,
+  sawResult: false,
+  toolNames: new Map(),
+})
+
+/** Reads the output of a started CLI until it ends. */
+function follow(child: ReturnType<typeof spawn>, cmd: string, env: NodeJS.ProcessEnv, o: RunOpts, cli: string) {
+  const st = newState()
   const act = (s: string) => o.onActivity?.(short(s, 1200))
+  // Every event of the run is wanted, so a failing listener must not stop the parsing.
+  const ev: Trace = (event) => {
+    try {
+      o.onEvent?.(event)
+    } catch {}
+  }
   let stderr = ''
-  child.stderr.on('data', (d) => (stderr = (stderr + d).slice(-2000)))
-  createInterface({ input: child.stdout }).on('line', (line) => {
+  child.stderr!.on('data', (d) => (stderr = (stderr + d).slice(-2000)))
+  createInterface({ input: child.stdout! }).on('line', (line) => {
     if (line[0] !== '{') return
     try {
-      parse(cli, o.provider, JSON.parse(line), st, act)
+      parse(cli, o.provider, JSON.parse(line), st, act, ev)
     } catch {}
   })
-  child.stdin.on('error', () => {})
-  child.stdin.end(o.prompt)
-  const done = new Promise<RunResult>((resolve) => {
+  child.stdin!.on('error', () => {})
+  child.stdin!.end(o.prompt)
+  return new Promise<RunResult>((resolve) => {
     child.on('error', (err) =>
       resolve({
         ok: false,
@@ -267,24 +393,36 @@ export function startRun(o: RunOpts): RunHandle {
         error: `${cmd} failed to start: ${err.message}`,
       }),
     )
-    child.on('close', (code) => {
+    child.on('close', async (code) => {
       if (st.codexThread && getAccess(o.provider).mode === 'subscription') {
-        try {
-          readCodexQuota(o.provider, st.codexThread, env.CODEX_HOME ?? join(homedir(), '.codex'))
-        } catch {
-          // The quota is a bonus; a run must not fail because the session file looks different.
-        }
+        // The quota is a bonus; a run must not fail because the session file looks different.
+        await readCodexQuotaOf(o.provider, st.codexThread, env.CODEX_HOME ?? join(homeOf(o.cwd), '.codex'), o.cwd).catch(
+          () => {},
+        )
       }
       const ok = st.ok && st.sawResult && code === 0
       resolve({
         ok,
         text: st.text,
         usage: st.usage,
-        error: ok ? undefined : (st.error ?? (short(stderr.trim(), 400) || `exit code ${code}`)),
+        error: ok ? undefined : (st.error ?? (short(stderr.trim(), 400) || `Exit-Code ${code}`)),
       })
     })
   })
-  return { kill: () => killTree(child.pid), done }
+}
+
+/** The session file belongs to the run's user; in the sandbox it is read as that user. */
+async function readCodexQuotaOf(provider: string, threadId: string, codexHome: string, cwd: string) {
+  if (!ownerOf(cwd)) return readCodexQuota(provider, threadId, codexHome)
+  if (!/^[\w-]+$/.test(threadId)) return
+  const { stdout } = await execIn(cwd, 'sh', [
+    '-c',
+    'grep -h rate_limits "$1"/sessions/*/*/*/rollout-*-"$2".jsonl | tail -n 1',
+    'sh',
+    codexHome,
+    threadId,
+  ])
+  if (stdout.trim()) saveCodexLimits(provider, stdout.trim())
 }
 
 /** Read-only single question, used for watchdog reviews and blueprint generation. */
@@ -299,6 +437,11 @@ export const oneShot = (provider: string, prompt: string, cwd: string, model = '
  * message until the self-healing has left a hint on the issue.
  */
 function mockAnswer(o: RunOpts) {
+  // The arena's jury (arena.ts): "[mock:jury:B]" in the task picks that entry, otherwise the first.
+  if (!o.autonomous && o.prompt.includes('<winner>')) {
+    const pick = o.prompt.match(/\[mock:jury:([A-D?])\]/)?.[1] ?? 'A'
+    return `<winner>${pick}</winner>\n<reason>Mock jury: entry ${pick} solves the task with the least code.</reason>`
+  }
   if (!o.autonomous) return 'PASS'
   if (o.prompt.includes('## Your task: review')) {
     // A reviewer that forgets its status block, as real ones sometimes do.
@@ -339,7 +482,14 @@ function mockRun(o: RunOpts): RunHandle {
   const steps = ['Reading issue…', 'Read: src/index.ts', '$ npm test', 'Writing summary…']
 
   if (o.prompt.includes('[mock:create]') && o.env?.AGENTDECK_CLI) {
-    const args = [o.env.AGENTDECK_CLI, 'create', '--title', 'Filed by the mock agent', '--status', 'backlog']
+    const args = [
+      o.env.AGENTDECK_CLI,
+      'create',
+      '--title',
+      'Created by the mock agent',
+      '--status',
+      'backlog',
+    ]
     execFile(process.execPath, args, { env: { ...process.env, ...o.env } }, () => {})
   }
 
@@ -353,20 +503,29 @@ function mockRun(o: RunOpts): RunHandle {
   if (fileToCommit && o.autonomous && !o.prompt.includes('## Your task: review')) {
     const title = o.prompt.match(/## Issue [^\n]*/)?.[0] ?? 'mock'
     const file = join(o.cwd, fileToCommit)
-    mkdirSync(dirname(file), { recursive: true })
-    writeFileSync(file, title + '\n')
     const identity = ['-c', 'user.name=Mock', '-c', 'user.email=mock@localhost']
-    execFileSync('git', ['-C', o.cwd, 'add', '-A'])
-    execFileSync('git', [
-      '-C',
-      o.cwd,
-      ...identity,
-      'commit',
-      '-q',
-      '--allow-empty',
-      '-m',
-      `mock: ${fileToCommit}`,
-    ])
+    if (ownerOf(o.cwd)) {
+      // Everything a run changes in its directory is the project user's, also in the mock.
+      const script =
+        'mkdir -p "$(dirname "$1")" && printf "%s\\n" "$2" > "$1" && git add -A && ' +
+        'git -c user.name=Mock -c user.email=mock@localhost commit -q --allow-empty -m "mock: $3"'
+      const [cmd, args, env] = syncCommandIn(o.cwd, 'sh', ['-c', script, 'sh', file, title, fileToCommit])
+      execFileSync(cmd, args, { cwd: o.cwd, env })
+    } else {
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(file, title + '\n')
+      execFileSync('git', ['-C', o.cwd, 'add', '-A'])
+      execFileSync('git', [
+        '-C',
+        o.cwd,
+        ...identity,
+        'commit',
+        '-q',
+        '--allow-empty',
+        '-m',
+        `mock: ${fileToCommit}`,
+      ])
+    }
   }
 
   const done = new Promise<RunResult>((resolve) => {
@@ -374,13 +533,21 @@ function mockRun(o: RunOpts): RunHandle {
     let i = 0
     timer = setInterval(
       () => {
-        if (i < steps.length) return o.onActivity?.(steps[i++])
+        if (i < steps.length) {
+          // Counted on its own line: inside the optional call it would never advance for a
+          // one-shot question, which has no onActivity, and that run would never end.
+          const step = steps[i++]
+          o.onEvent?.({ kind: 'tool_call', name: 'mock', text: step })
+          return o.onActivity?.(step)
+        }
         clearInterval(timer)
         const failWith = o.prompt.match(/\[mock:fail:([^\]]+)\]/)?.[1]
         if (failWith && o.autonomous && !o.prompt.includes('**Self-healing:**')) {
           return resolve({ ok: false, text: '', usage: { input: 100, output: 0, cost: 0 }, error: failWith })
         }
-        resolve({ ok: true, text: mockAnswer(o), usage: { input: 1200, output: 300, cost: 0.01 } })
+        const text = mockAnswer(o)
+        o.onEvent?.({ kind: 'assistant', text })
+        resolve({ ok: true, text, usage: { input: 1200, output: 300, cost: 0.01 } })
       },
       Number(process.env.AGENTDECK_MOCK_MS ?? 800),
     )
@@ -388,7 +555,7 @@ function mockRun(o: RunOpts): RunHandle {
   return {
     kill: () => {
       clearInterval(timer)
-      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'stopped' })
+      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'gestoppt' })
     },
     done,
   }

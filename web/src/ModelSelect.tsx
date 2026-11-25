@@ -19,7 +19,7 @@ export function ModelSelect(props: {
   return (
     <select onChange={(e) => props.onChange(e.currentTarget.value)}>
       <option value="" selected={!props.value}>
-        {props.emptyLabel ?? 'Provider default'}
+        {props.emptyLabel ?? "Provider's default"}
       </option>
       <For each={options()}>
         {(model) => (

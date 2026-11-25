@@ -1,0 +1,5 @@
+# The server may do exactly two things with sudo: run the sandbox helper as root, and start
+# processes as a project user (ad-*). Agents run as project users and get no sudo at all.
+Defaults:node !use_pty, !requiretty, umask=0007, umask_override
+node ALL=(root) NOPASSWD: /usr/local/sbin/agentdeck-sandbox
+node ALL=(%agentdeck-projects) NOPASSWD:SETENV: ALL

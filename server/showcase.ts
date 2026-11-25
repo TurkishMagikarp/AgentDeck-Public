@@ -2,7 +2,7 @@
 // people who should see the team running (a job application, a demo) without a login. It shows
 // names, states and counts. Issue titles only if the owner allows it; never code, costs or comments.
 import { randomBytes } from 'node:crypto'
-import { activity, PROVIDERS } from './core.ts'
+import { activity, PROVIDERS, versionOf } from './core.ts'
 import { all, get } from './db.ts'
 
 export const newShowcaseSlug = () => randomBytes(9).toString('base64url')
@@ -13,6 +13,17 @@ function projectBySlug(slug: string) {
   return all('SELECT id, key, name, paused, settings FROM projects')
     .map((row) => ({ ...row, settings: JSON.parse(row.settings || '{}') }))
     .find((row) => row.settings.showcase?.enabled && row.settings.showcase.slug === slug)
+}
+
+/**
+ * Changes whenever the project emits an event, the day turns (the counts are per day) or the
+ * owner switches titles on or off. Undefined when there is no such showcase.
+ */
+export function showcaseTag(slug: string) {
+  const project = projectBySlug(slug)
+  if (!project) return undefined
+  const day = new Date().toDateString()
+  return `W/"${project.id}-${versionOf(project.id)}-${day.replace(/ /g, '')}-${project.settings.showcase.titles ? 1 : 0}"`
 }
 
 export function showcaseData(slug: string) {
@@ -78,15 +89,15 @@ export function showcaseData(slug: string) {
 }
 
 /** The page itself. It polls the public endpoint, so it works without the board's login and SSE. */
-export const showcasePage = (slug: string) => `<!doctype html>
-<html lang="en">
+export const showcasePage = (slug: string, nonce: string) => `<!doctype html>
+<html lang="de">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
 <title>AgentDeck Showcase</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-<style>
+<style nonce="${nonce}">
   :root { --bg: #f6f7f9; --surface: #fff; --border: #e1e4ea; --text: #1b1f27; --muted: #677083; --good: #1f9d61; --accent: #3e63dd; }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0e1014; --surface: #161920; --border: #2a2f3a; --text: #e6e8ec; --muted: #8b93a3; --good: #3fb97f; --accent: #6b8afd; }
@@ -121,8 +132,8 @@ export const showcasePage = (slug: string) => `<!doctype html>
   <ol id="recent"></ol>
   <footer class="muted">Runs on AgentDeck. Refreshes every 10 seconds.</footer>
 </main>
-<script>
-const slug = ${JSON.stringify(slug)}
+<script nonce="${nonce}">
+const slug = ${JSON.stringify(slug).replace(/</g, '\\u003c')}
 const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
 const ago = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago' }
 async function load() {

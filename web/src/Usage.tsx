@@ -1,8 +1,8 @@
-import { createEffect, createResource, For, on, Show } from 'solid-js'
+import { createEffect, createResource, For, on, onCleanup, Show } from 'solid-js'
 import { api } from './api'
 import { ModelSelect } from './ModelSelect'
 import { board, providerLabel, saveSettings } from './store'
-import type { Budget } from './types'
+import { TIER_LABEL, TIERS, type Budget } from './types'
 import { formatTokens, Select, Toggle } from './ui'
 
 type ProviderUsage = {
@@ -14,13 +14,14 @@ type ProviderUsage = {
   budget: Budget
   budgetLeft: number | null
   quotaLeft: number | null
-  quotas: { window: string; utilization: number; resets_at: number | null }[]
+  quotas: { window: string; utilization: number; updated_at: number; stale: boolean; active: boolean }[]
   left: number
   available: boolean
   /** Set while the provider rests after a limit or a broken login. */
   resting: { until: number; reason: string } | null
   resets: { available: number; enabled: boolean } | null
   ready: boolean
+  unsupported: boolean
   mode: 'subscription' | 'apikey'
 }
 
@@ -59,7 +60,14 @@ export function Usage() {
   const projectId = () => board.project!.id
   const [usage, { refetch }] = createResource(projectId, (id) => api.get<UsageData>(`/projects/${id}/usage`))
 
-  // Numbers change whenever a run ends or a budget is edited.
+  // The server polls quotas even when there are no runs. Refresh open boards as well.
+  const timer = setInterval(() => { if (document.visibilityState === 'visible') void refetch() }, 30_000)
+  const onVisible = () => { if (document.visibilityState === 'visible') void refetch() }
+  document.addEventListener('visibilitychange', onVisible)
+  onCleanup(() => {
+    clearInterval(timer)
+    document.removeEventListener('visibilitychange', onVisible)
+  })
   createEffect(
     on([() => board.runs.length, () => JSON.stringify(board.project?.settings.budgets)], () => refetch(), {
       defer: true,
@@ -79,7 +87,9 @@ export function Usage() {
       </div>
 
       <div class="grid">
-        <For each={usage()?.providers}>{(item) => <ProviderCard usage={item} onWake={refetch} />}</For>
+        <For each={usage()?.providers.map((item) => item.provider)}>
+          {(id) => <ProviderCard usage={usage()!.providers.find((item) => item.provider === id)!} onWake={refetch} />}
+        </For>
       </div>
 
       <section class="section">
@@ -95,10 +105,13 @@ export function Usage() {
           There is no saving: agents run at full speed until the provider's stop threshold is reached. When a
           subscription window resets within an hour with more than 30 % left, large issues go first. An issue
           is large when its previous runs used more than twice as much as a typical run in the project.
+
         </p>
       </section>
 
       <FallbackOrder />
+
+      <ModelTiersTable />
 
       <RtkSavings />
 
@@ -151,7 +164,11 @@ export function Usage() {
 /** "seven_day" and "seven_day_fable" as Claude reports them, in words. */
 function windowLabel(window: string) {
   const model = window.match(/^(?:seven_day|five_hour)_(.+)$/)?.[1]
-  const base = window.startsWith('five_hour') ? '5 hours' : window.startsWith('seven_day') ? 'Week' : window
+  const base = window.startsWith('five_hour')
+    ? '5 hours'
+    : window.startsWith('seven_day')
+      ? 'Week'
+      : window
   return model ? `${base} ${model[0].toUpperCase()}${model.slice(1)}` : base
 }
 
@@ -161,6 +178,7 @@ const restEnd = (at: number) =>
 function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
   const usage = () => props.usage
   const budget = () => usage().budget
+  const knownLeft = () => usage().quotaLeft != null || usage().budgetLeft != null
 
   function setBudget<K extends keyof Budget>(key: K, value: Budget[K]) {
     saveSettings((settings) => {
@@ -170,7 +188,7 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
 
   const usedText = () => {
     if (budget().unit === 'usd') return `$${usage().cost.toFixed(2)}`
-    if (budget().unit === 'runs') return `${usage().used} ${usage().used === 1 ? 'run' : 'runs'}`
+    if (budget().unit === 'runs') return `${usage().used} runs`
     return `${formatTokens(usage().tokens)} tokens`
   }
 
@@ -179,17 +197,25 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
       <div class="tile-head">
         <strong>{usage().label}</strong>
         <span class="badge" classList={{ bad: !usage().available }}>
-          {!usage().ready ? 'Not set up' : usage().available ? 'Available' : 'Paused'}
+          {usage().unsupported ? 'Disabled' : !usage().ready ? 'Not set up' : usage().available ? 'Available' : 'Paused'}
         </span>
       </div>
 
+      <Show when={knownLeft()}>
       <div class="meter" title={`${Math.round(usage().left)}% left`}>
-        <div classList={{ low: !usage().available }} style={{ width: `${usage().left}%` }} />
-        <span class="threshold" style={{ left: `${budget().stopAtPct}%` }} />
-      </div>
+          <div classList={{ low: !usage().available }} style={{ width: `${usage().left}%` }} />
+          <span class="threshold" style={{ left: `${budget().stopAtPct}%` }} />
+        </div>
+      </Show>
       <p>
-        <strong>{Math.round(usage().left)}%</strong> left · used {usedText()}
+        <Show when={knownLeft()}>
+          <strong>{Math.round(usage().left)}%</strong> left{usage().quotaLeft == null ? ' in your own budget' : ''} ·{' '}
+        </Show>
+        Used {usedText()}
       </p>
+      <Show when={usage().mode === 'subscription' && usage().quotaLeft == null}>
+        <p class="muted">Remaining subscription quota unknown.</p>
+      </Show>
       <Show when={usage().resting}>
         {(rest) => (
           <p class="resting">
@@ -207,7 +233,9 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
         <p class="muted">
           Subscription usage:{' '}
           {usage()
-            .quotas.map((q) => `${windowLabel(q.window)} ${Math.round(q.utilization * 100)}%`)
+            .quotas.map((q) => `${windowLabel(q.window)} ${Math.round(q.utilization * 100)}%${
+              q.stale ? (q.active ? ' (last known value)' : ' (outdated, does not count)') : ''
+            }`)
             .join(' · ')}
         </p>
       </Show>
@@ -295,7 +323,7 @@ function RtkSavings() {
           <h3>RTK savings</h3>
           <span class="muted">
             {formatTokens(report()!.total.saved)} tokens saved ({share(report()!.total)}%) across{' '}
-            {report()!.total.commands} {report()!.total.commands === 1 ? 'command' : 'commands'}
+            {report()!.total.commands} commands
           </span>
         </div>
         <p class="muted">
@@ -342,6 +370,58 @@ function RtkSavings() {
   )
 }
 
+/**
+ * Which model of each provider counts as strong, medium or light. Fallback and "Switch provider"
+ * use it to give an agent the same kind of model on the other provider.
+ */
+function ModelTiersTable() {
+  const settings = () => board.project!.settings
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Model tiers</h3>
+      </div>
+      <p class="muted">
+        On a fallback and when switching providers, every agent gets the model of its tier at the new
+        provider. Empty means: the provider's default.
+      </p>
+      <div class="table-scroll">
+        <table class="tiers">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <For each={TIERS}>{(tier) => <th>{TIER_LABEL[tier]}</th>}</For>
+            </tr>
+          </thead>
+          <tbody>
+            <For each={settings().fallback}>
+              {(provider) => (
+                <tr>
+                  <td>{providerLabel(provider)}</td>
+                  <For each={TIERS}>
+                    {(tier) => (
+                      <td>
+                        <ModelSelect
+                          provider={provider}
+                          value={settings().modelTiers[tier][provider] ?? ''}
+                          onChange={(model) =>
+                            saveSettings((s) => void (s.modelTiers[tier][provider] = model))
+                          }
+                        />
+                      </td>
+                    )}
+                  </For>
+                </tr>
+              )}
+            </For>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
 function FallbackOrder() {
   const settings = () => board.project!.settings
 
@@ -363,18 +443,16 @@ function FallbackOrder() {
           onChange={(on) => saveSettings((s) => void (s.fallbackEnabled = on))}
         />
       </div>
+      <p class="muted">
+        Without an agent override the search starts at the top here, for reviews too. The stop value
+        of each provider applies. The model follows the agent's model tier.
+      </p>
       <ol class="order">
         <For each={settings().fallback}>
           {(provider, index) => (
             <li>
               <span class="order-pos">{index() + 1}</span>
               <span class="order-name">{providerLabel(provider)}</span>
-              <ModelSelect
-                provider={provider}
-                value={settings().fallbackModels[provider] ?? ''}
-                emptyLabel="Default model on fallback"
-                onChange={(model) => saveSettings((s) => void (s.fallbackModels[provider] = model))}
-              />
               <button
                 class="ghost"
                 onClick={() => move(index(), -1)}

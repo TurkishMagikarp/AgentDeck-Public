@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show, type JSX } from 'solid-js'
 import { api } from './api'
+import { Arena } from './Arena'
 import { PRIORITIES } from './Board'
 import { Changes } from './Changes'
 import { Icon } from './icons'
-import { CommentItem, RunItem, Screenshots, Spending } from './IssueParts'
+import { CommentItem, CostForecast, RunItem, Screenshots, Spending } from './IssueParts'
 import { ModelSelect } from './ModelSelect'
 import { RunLog } from './RunLog'
 import {
@@ -126,7 +127,7 @@ export function IssuePage() {
         <div class="issue-main">
           <Show when={!activeRun() && waitReasons[issue().id]}>
             {(reason) => (
-              <p class="wait-reason large">
+              <p class={`wait-reason large ${reason().kind}`}>
                 <Icon name="clock" size={14} />
                 <span>
                   <strong>Waiting:</strong> {reason().text}
@@ -156,6 +157,7 @@ export function IssuePage() {
             <Checklist />
           </Show>
           <Dependencies />
+          <Arena issue={issue()} version={version()} />
 
           <Show when={issue().handoff}>
             <section class="issue-section">
@@ -642,6 +644,9 @@ export function IssuePage() {
           />,
         )}
         {row('Spent', <Spending issueId={issue().id} version={version()} />)}
+        <Show when={issue().status !== 'done'}>
+          {row('Forecast', <CostForecast issueId={issue().id} version={version()} />)}
+        </Show>
 
         <h3>History</h3>
         {row('Built by', <span>{maker()?.name ?? '–'}</span>)}
@@ -650,6 +655,23 @@ export function IssuePage() {
         <Show when={issue().done_at}>{row('Done', <span>{when(issue().done_at!)}</span>)}</Show>
         <Show when={issue().landing === 'waiting'}>
           {row('Landing', <span>Pull request waiting for checks</span>)}
+        </Show>
+        <Show when={issue().landing === 'approval' && issue().gate_sha}>
+          {row(
+            'Landing',
+            <span>
+              Waits for your approval of state <code>{issue().gate_sha!.slice(0, 10)}</code>{' '}
+              <button
+                class="link"
+                title="Lets exactly this state land once. If the branch changes, it needs a new approval."
+                onClick={() =>
+                  api.post(`/issues/${issue().id}/approve-landing`, { sha: issue().gate_sha }).catch(fail)
+                }
+              >
+                Approve landing
+              </button>
+            </span>,
+          )}
         </Show>
       </div>
     )
@@ -683,7 +705,7 @@ function IssueTitle(props: { title: string; onSave: (title: string) => void }) {
     <textarea
       ref={field}
       class="title-input issue-title"
-      aria-label="Titel"
+      aria-label="Title"
       rows={1}
       value={props.title}
       onInput={fitHeight}

@@ -1,15 +1,16 @@
 :root {
-  /* Slate surfaces with a green accent, from the ui-ux-pro-max design system for developer tools. */
-  --bg: #0f172a;
-  --surface: #1b2336;
-  --surface-2: #232c40;
-  --border: #334155;
-  --text: #f8fafc;
-  --muted: #94a3b8;
-  --accent: #22c55e;
-  --accent-strong: #22c55e;
-  --accent-text: #0f172a;
-  --good: #22c55e;
+  /* Night-blue surfaces; periwinkle for actions, amber only for agents that are working right now. */
+  --bg: #0f1220;
+  --surface: #161a2a;
+  --surface-2: #1e2337;
+  --border: #2b3150;
+  --text: #eef0fa;
+  --muted: #959bbb;
+  --accent: #8ea2ff;
+  --accent-strong: #8ea2ff;
+  --accent-text: #0f1220;
+  --live: #f5b14a;
+  --good: #4fd1a5;
   --warn: #f59e0b;
   --bad: #fa8585;
   --on-bad: #0f172a;
@@ -19,7 +20,7 @@
   --series-4: #eab308;
   --series-5: #ec4899;
   --series-6: #22c55e;
-  --chart-grid: #1e293b;
+  --chart-grid: #222842;
   --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
   --shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px rgb(0 0 0 / 0.16);
   --radius: 8px;
@@ -31,15 +32,16 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme='dark']) {
     --bg: #f8fafc;
     --surface: #fff;
     --surface-2: #f1f5f9;
     --border: #e2e8f0;
     --text: #0f172a;
     --muted: #475569;
-    --accent: #15803d;
-    --accent-strong: #15803d;
+    --accent: #4256d6;
+    --accent-strong: #4256d6;
+    --live: #b86e00;
     --accent-text: #fff;
     --series-1: #2563eb;
     --series-2: #ea580c;
@@ -55,6 +57,32 @@
     --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
     color-scheme: light;
   }
+}
+
+:root[data-theme='light'] {
+    --bg: #f8fafc;
+    --surface: #fff;
+    --surface-2: #f1f5f9;
+    --border: #e2e8f0;
+    --text: #0f172a;
+    --muted: #475569;
+    --accent: #4256d6;
+    --accent-strong: #4256d6;
+    --live: #b86e00;
+    --accent-text: #fff;
+    --series-1: #2563eb;
+    --series-2: #ea580c;
+    --series-3: #0d9488;
+    --series-4: #ca8a04;
+    --series-5: #db2777;
+    --series-6: #16a34a;
+    --chart-grid: #e2e8f0;
+    --good: #166534;
+    --warn: #92400e;
+    --bad: #b91c1c;
+    --on-bad: #fff;
+    --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 4px 12px rgb(15 23 42 / 0.06);
+    color-scheme: light;
 }
 
 * {
@@ -85,7 +113,7 @@ h1,
 h2,
 h3,
 h4 {
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
 }
 
 h1 {
@@ -93,14 +121,14 @@ h1 {
 }
 
 h2 {
-  font-size: 20px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 h3 {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 650;
 }
 
 h4 {
@@ -300,8 +328,8 @@ textarea {
 }
 
 .running-count {
-  background: var(--good);
-  color: #06281a;
+  background: var(--live);
+  color: var(--accent-text);
   border-radius: 10px;
   font-size: 12px;
   font-weight: 700;
@@ -424,6 +452,29 @@ main.switching {
   font-size: 12px;
 }
 
+/* Quiet until used: muted text, no box, the accent once a column has its own order. */
+.column-sort {
+  margin-left: auto;
+  width: auto;
+  max-width: 9.5em;
+  padding: 2px 4px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+.column-sort:hover,
+.column-sort:focus-visible {
+  border-color: var(--border);
+}
+
+.column-sort.changed {
+  color: var(--accent);
+}
+
 .cards {
   flex: 1;
   overflow-y: auto;
@@ -451,7 +502,7 @@ main.switching {
 }
 
 .card.running {
-  border-color: var(--good);
+  border-color: transparent;
 }
 
 .card-top,
@@ -505,7 +556,7 @@ main.switching {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--good);
+  color: var(--live);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -516,7 +567,7 @@ main.switching {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--good);
+  background: var(--live);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -1166,6 +1217,38 @@ a {
   color: var(--text);
 }
 
+/* ---------- audit log ---------- */
+
+.audit td {
+  vertical-align: top;
+  font-size: 13px;
+}
+
+.audit-time {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.audit-detail {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.audit-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+.user-add {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.user-add input {
+  flex: 1;
+}
+
 .new-project {
   margin-top: 0;
 }
@@ -1425,6 +1508,127 @@ button.link {
   color: var(--accent);
   text-decoration: underline;
   font-size: inherit;
+}
+
+/* ---------- run replay: one line per step, the payload opens below it ---------- */
+
+.replay {
+  margin-top: 6px;
+  color: var(--text);
+}
+
+.replay-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.replay-filter button.chip {
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.replay-filter button.chip.active {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+
+.replay-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.replay-step + .replay-step {
+  border-top: 1px solid var(--border);
+}
+
+.replay-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.replay-head:hover {
+  background: var(--surface-2);
+}
+
+.replay-head time {
+  flex: none;
+  min-width: 52px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.replay-kind {
+  flex: none;
+  min-width: 80px;
+  font-weight: 600;
+}
+
+.replay-head code {
+  flex: none;
+  font-family: var(--font-mono);
+}
+
+.replay-summary {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.replay-assistant .replay-kind {
+  color: var(--accent);
+}
+
+.replay-tool_call .replay-kind,
+.replay-tool_result .replay-kind {
+  color: var(--good);
+}
+
+.replay-error .replay-kind {
+  color: var(--bad);
+}
+
+.replay-changes .replay-kind,
+.replay-end .replay-kind {
+  color: var(--live);
+}
+
+.replay-payload {
+  margin: 0 8px 6px;
+  padding: 6px 8px;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border-radius: var(--radius-small);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.replay-step > p.muted {
+  margin: 0 8px 6px;
 }
 
 /* The live output of a running agent is what you came to watch: it gets room. */
@@ -1803,6 +2007,17 @@ button.link {
 
 .lessons li span {
   flex: 1;
+}
+
+.webhook-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 6px;
+}
+
+.lessons li .webhook-events span {
+  flex: none;
 }
 
 .key-form .grow {
@@ -2249,6 +2464,18 @@ button.queue-reason.provider {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Approved work on its way into the base branch: nothing to do, it only has to land. */
+.wait-reason.landing,
+.wait-reason.merge {
+  color: var(--accent);
+}
+
+button.queue-reason.landing,
+button.queue-reason.merge {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
 .wait-reason.large {
@@ -2814,4 +3041,274 @@ a.issue-key {
 
 a.issue-key:hover {
   text-decoration: underline;
+}
+
+/* Wide tables in panels scroll on their own instead of the page. */
+.table-scroll {
+  overflow-x: auto;
+}
+.tiers td select,
+.switch-plan td {
+  min-width: 9rem;
+}
+.switch-plan tr.off td {
+  opacity: 0.45;
+}
+
+/* Provider comparison: one card per provider with a ring for the usable share. */
+.provider-compare {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.provider-card {
+  display: grid;
+  gap: 12px;
+  justify-items: center;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.provider-card header {
+  font-weight: 600;
+}
+.provider-card .usable-ring {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, var(--surface) 76%, transparent 78%),
+    conic-gradient(var(--accent) var(--value), var(--surface-2) 0);
+  font: 600 16px var(--font-mono);
+}
+.provider-card dl {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.provider-card dt {
+  color: var(--muted);
+}
+.provider-card dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+.page-head .row button {
+  white-space: nowrap;
+}
+
+/* ---------- Signal layer ----------
+   The one loud thing in the interface: agents at work. A card in progress gets an amber
+   signal running around its edge and its agent's avatar breathes. Everything else stays calm. */
+
+@property --signal-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+body {
+  background:
+    radial-gradient(
+      1200px 600px at 85% -10%,
+      color-mix(in srgb, var(--accent) 9%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      900px 500px at -10% 110%,
+      color-mix(in srgb, var(--live) 5%, transparent),
+      transparent 70%
+    ),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+.column {
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: blur(6px);
+}
+
+.column > header {
+  font-weight: 650;
+}
+
+.card {
+  position: relative;
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+
+.card:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.card.running {
+  background:
+    linear-gradient(var(--surface-2), var(--surface-2)) padding-box,
+    conic-gradient(
+        from var(--signal-angle),
+        transparent 0 55%,
+        color-mix(in srgb, var(--live) 40%, transparent) 75%,
+        var(--live) 92%,
+        transparent 100%
+      )
+      border-box;
+  box-shadow: 0 0 24px -8px color-mix(in srgb, var(--live) 55%, transparent);
+  animation: signal 3.2s linear infinite;
+}
+
+@keyframes signal {
+  to {
+    --signal-angle: 360deg;
+  }
+}
+
+.card.running .avatar,
+.tile.working .avatar {
+  box-shadow:
+    0 0 0 2px var(--surface-2),
+    0 0 0 4px var(--live);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes breathe {
+  50% {
+    box-shadow:
+      0 0 0 2px var(--surface-2),
+      0 0 0 4px color-mix(in srgb, var(--live) 35%, transparent),
+      0 0 18px 2px color-mix(in srgb, var(--live) 40%, transparent);
+  }
+}
+
+.tile.working {
+  border-color: color-mix(in srgb, var(--live) 45%, var(--border));
+}
+
+.issue-key,
+.count,
+.num {
+  font-family: var(--font-mono);
+}
+
+.page-head h2 {
+  font-size: 28px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.running,
+  .card.running .avatar,
+  .tile.working .avatar {
+    animation: none;
+  }
+}
+
+/* Journal: one line per event, a coloured kind badge, the issue and a short text. */
+.journal-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.journal-chip {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.journal-chip.off {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.journal-day h3 {
+  margin: 18px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.journal-day ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.journal-line {
+  display: grid;
+  grid-template-columns: 3.2em 9.5em 5.5em minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.journal-line time {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.journal-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.journal-kind {
+  justify-self: start;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.journal-kind.good,
+.journal-chip.good {
+  color: var(--good);
+}
+
+.journal-kind.bad,
+.journal-chip.bad {
+  color: var(--bad);
+}
+
+.journal-kind.wait,
+.journal-chip.wait {
+  color: var(--warn);
+}
+
+.journal-kind.info,
+.journal-chip.info {
+  color: var(--series-1);
+}
+
+.journal-more {
+  margin-top: 14px;
+}
+
+@media (max-width: 640px) {
+  .journal-line {
+    grid-template-columns: 3.2em minmax(0, 1fr);
+  }
+  .journal-line .issue-key,
+  .journal-line .journal-text {
+    grid-column: 2;
+  }
+  .journal-text {
+    white-space: normal;
+  }
 }

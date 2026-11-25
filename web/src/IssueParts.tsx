@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Show } from 'solid-js'
 import { api } from './api'
 import { RunLog } from './RunLog'
+import { RunReplay } from './RunReplay'
 import { fail, providerLabel } from './store'
 import type { Comment, Run } from './types'
 import { formatTokens, timeAgo } from './ui'
@@ -23,13 +24,15 @@ export function CommentItem(props: { comment: Comment }) {
 export function RunItem(props: { run: Run }) {
   const run = () => props.run
   const [showsOutput, setShowsOutput] = createSignal(false)
+  const [showsReplay, setShowsReplay] = createSignal(false)
   // What was actually new for the model: input that did not come from the cache, plus its output.
   const freshTokens = () =>
     (run().input_tokens ?? 0) - (run().cached_tokens ?? 0) + (run().output_tokens ?? 0)
   const seconds = () => Math.round(((run().ended_at ?? Date.now()) - run().started_at) / 1000)
   const label = () =>
-    ({ done: 'finished', failed: 'failed', stopped: 'stopped', running: 'running' })[run().status ?? ''] ??
-    run().status
+    ({ done: 'finished', failed: 'failed', stopped: 'stopped', running: 'running' })[
+      run().status ?? ''
+    ] ?? run().status
 
   return (
     <li class={`run-item ${run().status}`}>
@@ -44,9 +47,15 @@ export function RunItem(props: { run: Run }) {
       </Show>{' '}
       <button class="link" onClick={() => setShowsOutput(!showsOutput())}>
         {showsOutput() ? 'Hide output' : 'Show output'}
+      </button>{' '}
+      <button class="link" onClick={() => setShowsReplay(!showsReplay())}>
+        {showsReplay() ? 'Hide history' : 'Show history'}
       </button>
       <Show when={showsOutput()}>
         <RunLog runId={run().id} />
+      </Show>
+      <Show when={showsReplay()}>
+        <RunReplay runId={run().id} />
       </Show>
     </li>
   )
@@ -86,6 +95,44 @@ export function Screenshots(props: { issueId: number; comments: number }) {
           </For>
         </div>
       </section>
+    </Show>
+  )
+}
+
+type ForecastRange = { median: number; low: number; high: number }
+type ForecastInfo = {
+  forecast: { sample: number; usd: ForecastRange; tokens: ForecastRange; runs: ForecastRange } | null
+  cap: { usd: number; tokens: number }
+  overCap: boolean
+}
+
+/**
+ * What similar finished issues cost (server/forecast.ts). Dollars when the providers reported
+ * any, fresh tokens otherwise (subscriptions report no price). Nothing below three similar issues.
+ */
+export function CostForecast(props: { issueId: number; version: number }) {
+  const [data] = createResource(
+    () => ({ id: props.issueId, version: props.version }),
+    ({ id }) => api.get<ForecastInfo>(`/issues/${id}/forecast`),
+  )
+  const thousands = (tokens: number) => `${Math.round(tokens / 1000).toLocaleString('en-US')}k`
+  const text = (info: ForecastInfo) => {
+    const f = info.forecast!
+    const amount =
+      f.usd.high > 0
+        ? `~$${f.usd.median.toFixed(2)} (${f.usd.low.toFixed(2)}–${f.usd.high.toFixed(2)})`
+        : `~${thousands(f.tokens.median)} tokens (${thousands(f.tokens.low)}–${thousands(f.tokens.high)})`
+    return `Expected: ${amount}, from ${f.sample} similar issues`
+  }
+
+  return (
+    <Show when={data()?.forecast ? data() : null} fallback={<span class="muted">–</span>}>
+      {(info) => (
+        <span class="spending" classList={{ capped: info().overCap }}>
+          {text(info())}
+          <Show when={info().overCap}> · above the cost cap</Show>
+        </span>
+      )}
     </Show>
   )
 }

@@ -30,7 +30,8 @@ const TEMPLATES: Template[] = [
       'Lead plans, two developers build, a reviewer approves. Starts with scaffold, data model and a first page.',
     blueprint: {
       project: {
-        description: 'A web application as a minimum viable product. Start small, keep every stage running.',
+        description:
+          'A web application as a minimum viable product. Start small, keep every stage running.',
         settings: { autonomous: true, maxConcurrent: 2 },
       },
       agents: [
@@ -94,7 +95,8 @@ const TEMPLATES: Template[] = [
       'Game designer, programmer and artist with PixelLab and ElevenLabs. The reviewer plays every change.',
     blueprint: {
       project: {
-        description: 'A small game that stays playable from the start. Core loop first, then content.',
+        description:
+          'A small game that stays playable from the start. Core loop first, then content.',
         settings: { autonomous: true, maxConcurrent: 2, workspace: 'agent' },
       },
       agents: [
@@ -158,7 +160,8 @@ const TEMPLATES: Template[] = [
   {
     id: 'blog',
     name: 'Blog with a daily article',
-    summary: 'Every morning the writer drafts an article, and the editor checks it before it is published.',
+    summary:
+      'Every morning the writer drafts an article, and the editor checks it before it is published.',
     blueprint: {
       project: {
         description:

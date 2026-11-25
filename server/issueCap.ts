@@ -26,7 +26,8 @@ export function overCap(projectCap: IssueCap, issue: { id: number; cap_factor: n
   if (!projectCap.usd && !projectCap.tokens) return ''
   const limit = capOf(projectCap, Math.max(1, issue.cap_factor))
   const spent = spentOn(issue.id)
-  if (limit.usd && spent.usd >= limit.usd) return `$${spent.usd.toFixed(2)} of $${limit.usd.toFixed(2)} used`
+  if (limit.usd && spent.usd >= limit.usd)
+    return `$${spent.usd.toFixed(2)} of $${limit.usd.toFixed(2)} used`
   if (limit.tokens && spent.tokens >= limit.tokens) {
     const k = (value: number) => `${Math.round(value / 1000).toLocaleString('en-US')}k`
     return `${k(spent.tokens)} of ${k(limit.tokens)} tokens used`

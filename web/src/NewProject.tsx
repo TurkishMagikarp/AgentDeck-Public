@@ -235,7 +235,7 @@ function TemplateSetup(props: { onDone: (projectId: number) => void }) {
               <strong>{template.name}</strong>
               <span>{template.summary}</span>
               <small class="muted">
-                {template.agents.join(', ')} · {template.issues} starter issues
+                {template.agents.join(', ')} · {template.issues} Start-Issues
               </small>
             </button>
           )}

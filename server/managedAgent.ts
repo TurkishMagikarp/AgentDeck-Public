@@ -14,6 +14,7 @@ import { get, run } from './db.ts'
 import { prepareMcp } from './mcp.ts'
 import { openManagedMcp, type ManagedMcp } from './managedMcp.ts'
 import type { BetaRunnableTool } from '@anthropic-ai/sdk/lib/tools/BetaRunnableTool'
+import { SANDBOX } from './sandbox.ts'
 
 export const MANAGED = 'claude-managed'
 export const ENVIRONMENT_KEY_SECRET = 'claude-managed.environment-key'
@@ -194,8 +195,18 @@ function usageOf(session: Anthropic.Beta.Sessions.BetaManagedAgentsSession): Usa
 }
 
 export function startManagedRun(opts: RunOpts, model: string): RunHandle {
+  // The worker runs the agent's tools inside the server process, as the server's user. In the
+  // sandbox that would give the agent the database, the keys and every project, so managed runs
+  // stay off there until the worker runs its tools as the project user.
+  if (SANDBOX) {
+    throw new Error(
+      "Claude Managed Agents are locked in the sandbox: their tools would run with the server's rights. Switch the agent to another provider.",
+    )
+  }
   if (process.platform === 'win32') {
-    throw new Error('Claude Managed Agents only run on the Linux server (the tools need /bin/bash)')
+    throw new Error(
+      'Claude Managed Agents only run on the Linux server (the tools need /bin/bash)',
+    )
   }
 
   const abort = new AbortController()
@@ -273,17 +284,22 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
             .filter((block: any) => block.type === 'text')
             .map((block: any) => block.text)
             .join('')
-          if (said) activity((text = said))
+          if (said) {
+            activity((text = said))
+            opts.onEvent?.({ kind: 'assistant', text: said })
+          }
           return
         }
         case 'agent.tool_use':
         case 'agent.mcp_tool_use':
         case 'agent.custom_tool_use':
           activity(`${event.name}: ${JSON.stringify(event.input ?? {})}`)
+          opts.onEvent?.({ kind: 'tool_call', name: String(event.name ?? 'tool'), text: JSON.stringify(event.input ?? {}) })
           return
         case 'session.error': {
           const message = event.error?.message ?? event.error?.type ?? 'error'
           activity(`Error: ${message}`)
+          opts.onEvent?.({ kind: 'error', text: String(message) })
           if (event.error?.retry_status?.type !== 'retrying') error = short(String(message))
           return
         }

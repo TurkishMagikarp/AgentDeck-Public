@@ -1,6 +1,5 @@
 // Built-in MCP connections. A connection is switched on by storing its key once; after that
 // every agent that lists it gets the server configured for its run, whichever CLI it uses.
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { decrypt, encrypt } from './auth.ts'
 import { DATA_DIR, all, get, run } from './db.ts'
@@ -24,13 +23,13 @@ export const CONNECTIONS: Record<string, Connection> = {
   pixellab: {
     label: 'PixelLab',
     description: 'Pixel art: characters, animations, tilesets',
-    keyLabel: 'API token',
+    keyLabel: 'API-Token',
     envVar: 'PIXELLAB_API_KEY',
     url: 'https://api.pixellab.ai/mcp',
   },
   elevenlabs: {
     label: 'ElevenLabs',
-    description: 'Text to speech, voices, sound effects',
+    description: 'Speech, voices, sound effects',
     keyLabel: 'API key',
     envVar: 'ELEVENLABS_API_KEY',
     command: 'uvx',
@@ -110,14 +109,15 @@ function launcher(command: string, args: string[]): [string, string[]] {
 const tomlString = (value: string) => `'${value}'`
 const tomlList = (values: string[]) => `[${values.map(tomlString).join(',')}]`
 
-export type McpSetup = { args: string[]; env: Record<string, string>; cleanup: () => void }
+/** `files`: what the caller writes (private, 0600) before the CLI starts and removes after. */
+export type McpSetup = { args: string[]; env: Record<string, string>; files: { path: string; content: string }[] }
 
 /**
  * Translates the selected connections into what the given CLI understands.
  * Keys travel in environment variables or a private temp file, never on the command line.
  */
-export function prepareMcp(cli: string, ids: string[], runId: string): McpSetup {
-  const setup: McpSetup = { args: [], env: connectionKeys(), cleanup: () => {} }
+export function prepareMcp(cli: string, ids: string[], runId: string, dir = join(DATA_DIR, 'tmp')): McpSetup {
+  const setup: McpSetup = { args: [], env: connectionKeys(), files: [] }
   const active = ids
     .map((id) => ({ id, connection: CONNECTIONS[id], key: apiKeyOfConnection(id) }))
     .filter((entry) => entry.connection && entry.key) as { id: string; connection: Connection; key: string }[]
@@ -133,12 +133,9 @@ export function prepareMcp(cli: string, ids: string[], runId: string): McpSetup 
         servers[id] = { command, args, env: { [connection.envVar]: key } }
       }
     }
-    const dir = join(DATA_DIR, 'tmp')
-    mkdirSync(dir, { recursive: true })
     const file = join(dir, `mcp-${runId}.json`)
-    writeFileSync(file, JSON.stringify({ mcpServers: servers }), { mode: 0o600 })
+    setup.files.push({ path: file, content: JSON.stringify({ mcpServers: servers }) })
     setup.args = ['--mcp-config', file]
-    setup.cleanup = () => rmSync(file, { force: true })
   }
 
   if (cli === 'codex') {

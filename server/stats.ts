@@ -195,5 +195,25 @@ function outcomes(projectId: number, since: number) {
     costPerRun: row.runs ? row.cost / row.runs : 0,
   }))
 
-  return { outcomeByAgent, outcomeByModel }
+  // Same counting as per model, summed per provider, so providers can be compared side by side.
+  const outcomeByProvider = all(
+    `SELECT provider, COUNT(*) AS runs,
+       SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'partial', 'approve', 'changes')) AS usable,
+       COALESCE(SUM(cost_usd), 0) AS cost,
+       AVG(ended_at - started_at) AS avgMs
+     FROM runs WHERE project_id = ? AND started_at >= ? AND status != 'running' AND agent_name != 'Watchdog'
+       AND NOT (status = 'done' AND verdict = '')
+     GROUP BY provider ORDER BY runs DESC`,
+    projectId,
+    since,
+  ).map((row) => ({
+    provider: row.provider,
+    label: PROVIDERS[row.provider]?.label ?? row.provider,
+    runs: row.runs,
+    usableRate: row.runs ? row.usable / row.runs : 0,
+    costPerRun: row.runs ? row.cost / row.runs : 0,
+    avgMs: row.avgMs ?? 0,
+  }))
+
+  return { outcomeByAgent, outcomeByModel, outcomeByProvider }
 }

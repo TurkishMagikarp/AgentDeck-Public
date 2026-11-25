@@ -2,14 +2,14 @@
 // the RAM-backed /tmp do not fill up over months. Nothing here touches a checkout an agent works
 // in: a checkout that grew too big is only marked, and its build output is removed when the next
 // run prepares it (see workspace.ts), the one moment nobody else can use it.
-import { execFile } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { DATA_DIR, all, get, run } from './db.ts'
+import { pruneRunEvents } from './runEvents.ts'
+import { execIn, gitIn } from './sandbox.ts'
+import { pruneAudit } from './audit.ts'
 
-const execFileAsync = promisify(execFile)
 
 const DAY = 86_400_000
 const RUN_LOG_DAYS = 30
@@ -28,12 +28,14 @@ const succeeds = (command: Promise<unknown>) =>
     () => false,
   )
 
-const git = (repo: string, ...args: string[]) =>
-  execFileAsync('git', ['-C', repo, ...args], { maxBuffer: 16 * 1024 * 1024 })
+const git = (repo: string, ...args: string[]) => gitIn(repo, args)
 
 function pruneRunLog() {
   return Number(run('DELETE FROM run_log WHERE at < ?', Date.now() - RUN_LOG_DAYS * DAY).changes)
 }
+
+/** The replay timelines are kept as long as the run log. */
+const pruneReplays = () => pruneRunEvents(Date.now() - RUN_LOG_DAYS * DAY)
 
 /**
  * Issue branches and per-issue worktrees of issues that are done (and landed, if the project
@@ -78,7 +80,8 @@ async function removeFinishedBranches() {
 /** Deletes files older than `days` below `dir` (only those matching `name`), then empty folders. */
 async function deleteOldFiles(dir: string, days: number, name = '*') {
   if (!existsSync(dir)) return 0
-  const { stdout } = await execFileAsync('find', [
+  // As the folder's owner: a project's files are deleted by its own user.
+  const { stdout } = await execIn(dir, 'find', [
     dir,
     '-xdev',
     '-mindepth',
@@ -93,7 +96,7 @@ async function deleteOldFiles(dir: string, days: number, name = '*') {
     '-delete',
   ]).catch((error) => ({ stdout: error.stdout ?? '' }))
   await succeeds(
-    execFileAsync('find', [
+    execIn(dir, 'find', [
       dir,
       '-xdev',
       '-mindepth',
@@ -117,7 +120,7 @@ async function markOversizedCheckouts() {
   for (const key of readdirSync(root)) {
     for (const name of readdirSync(join(root, key))) {
       const checkout = join(root, key, name)
-      const { stdout } = await execFileAsync('du', ['-sk', checkout]).catch(() => ({ stdout: '0' }))
+      const { stdout } = await execIn(checkout, 'du', ['-sk', checkout]).catch(() => ({ stdout: '0' }))
       const gigabytes = Number(stdout.split('\t')[0]) / 1024 / 1024
       if (gigabytes > CHECKOUT_LIMIT_GB) {
         oversized.add(checkout)
@@ -130,20 +133,33 @@ async function markOversizedCheckouts() {
 
 export async function houseKeeping() {
   const logLines = pruneRunLog()
+  const auditEntries = pruneAudit()
+  const replayEvents = pruneReplays()
   const branches = await removeFinishedBranches()
   // find and du are what the server's container has; on a developer's Windows machine this part rests.
   if (process.platform !== 'linux') {
-    console.log(`housekeeping: ${logLines} old log lines, ${branches} finished branches`)
+    console.log(
+      `housekeeping: ${logLines} old log lines, ${auditEntries} old audit entries, ${replayEvents} replay events, ${branches} finished branches`,
+    )
+
     return
   }
   const tmpFiles = await deleteOldFiles(tmpdir(), TMP_DAYS)
   // The CLIs keep every session as a file. AgentDeck never resumes one, it only reads the newest.
-  const sessions =
-    (await deleteOldFiles(join(homedir(), '.codex', 'sessions'), SESSION_DAYS, '*.jsonl')) +
-    (await deleteOldFiles(join(homedir(), '.claude', 'projects'), SESSION_DAYS, '*.jsonl'))
+  // In the sandbox the runs keep their sessions in the homes of the project users.
+  const homesDir = join(DATA_DIR, 'homes')
+  const homes = [homedir(), ...(existsSync(homesDir) ? readdirSync(homesDir).map((name) => join(homesDir, name)) : [])]
+  let sessions = 0
+  for (const home of homes) {
+    sessions +=
+      (await deleteOldFiles(join(home, '.codex', 'sessions'), SESSION_DAYS, '*.jsonl')) +
+      (await deleteOldFiles(join(home, '.claude', 'projects'), SESSION_DAYS, '*.jsonl'))
+  }
   const marked = await markOversizedCheckouts()
   console.log(
-    `housekeeping: ${logLines} old log lines, ${branches} finished branches, ${tmpFiles} files in ${tmpdir()},` +
+    `housekeeping: ${logLines} old log lines, ${auditEntries} old audit entries, ${replayEvents} replay events, ${branches} finished branches,` +
+      ` ${tmpFiles} files in ${tmpdir()},` +
+
       ` ${sessions} old CLI sessions` +
       (marked.length ? `; emptied before their next run: ${marked.join(', ')}` : ''),
   )

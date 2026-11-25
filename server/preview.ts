@@ -1,15 +1,13 @@
 // Branch preview: when a maker hands work to review, the project's preview command starts the app
 // from the issue's checkout, Playwright takes a desktop and a phone screenshot, and the app stops
 // again. Owner and reviewer see what changed without starting anything themselves.
-import { execFile, spawn } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
-import { mkdir } from 'node:fs/promises'
+import { copyFile, mkdir } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { DATA_DIR } from './db.ts'
-
-const execFileAsync = promisify(execFile)
+import { safeEnv } from './auth.ts'
+import { execIn, ownerOf, spawnShellIn, stopGroup } from './sandbox.ts'
 const PLAYWRIGHT = 'playwright@1.65.0'
 const START_TIMEOUT_MS = 90_000
 
@@ -53,20 +51,6 @@ async function waitUntilServing(url: string, exited: () => boolean) {
   throw new Error(`The app did not answer within ${START_TIMEOUT_MS / 1000} s`)
 }
 
-function stopTree(pid: number | undefined) {
-  if (!pid) return
-  if (process.platform === 'win32') {
-    execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {})
-    return
-  }
-  try {
-    // The command runs in its own process group, so its children (vite, a dev server) stop too.
-    process.kill(-pid, 'SIGTERM')
-  } catch {
-    // already gone
-  }
-}
-
 /**
  * Starts the preview, takes the screenshots and stops it. Returns the saved file names. Throws
  * with a short reason when the app does not come up or the browser is missing.
@@ -79,12 +63,11 @@ export async function capturePreview(input: {
   env?: Record<string, string>
 }) {
   const port = await freePort()
-  const env = { ...process.env, ...input.env, PORT: String(port) }
+  const env = safeEnv({ ...input.env, PORT: String(port) })
   const command = input.settings.command.replaceAll('$PORT', String(port))
-  const child = spawn(command, {
-    cwd: input.cwd,
+  // Its own process group, so its children (vite, a dev server) stop with it.
+  const child = spawnShellIn(input.cwd, command, {
     env,
-    shell: true,
     detached: process.platform !== 'win32',
     stdio: 'ignore',
   })
@@ -93,6 +76,11 @@ export async function capturePreview(input: {
 
   const dir = shotsDir(input.issueId)
   await mkdir(dir, { recursive: true })
+  // Playwright runs as the project user, which cannot write to the server's data. It saves into
+  // the project's home, and the server copies the pictures over.
+  const owner = ownerOf(input.cwd)
+  const saveDir = owner ? join(owner.home, '.agentdeck-shots') : dir
+  if (owner) await execIn(input.cwd, 'mkdir', ['-p', saveDir])
   const url = `http://127.0.0.1:${port}${input.settings.path.startsWith('/') ? '' : '/'}${input.settings.path}`
   const views = [
     { name: 'desktop', size: '1280,800' },
@@ -108,7 +96,8 @@ export async function capturePreview(input: {
     const saved: string[] = []
     for (const view of views) {
       const file = `${input.runId}-${view.name}.png`
-      await execFileAsync(
+      await execIn(
+        input.cwd,
         'npx',
         [
           ...playwright,
@@ -116,10 +105,14 @@ export async function capturePreview(input: {
           `--viewport-size=${view.size}`,
           '--wait-for-timeout=1500',
           url,
-          join(dir, file),
+          join(saveDir, file),
         ],
         { cwd: input.cwd, env, timeout: 90_000, shell: process.platform === 'win32' },
       )
+      if (owner) {
+        await copyFile(join(saveDir, file), join(dir, file))
+        await execIn(input.cwd, 'rm', ['-f', join(saveDir, file)])
+      }
       saved.push(file)
     }
     return saved
@@ -133,6 +126,6 @@ export async function capturePreview(input: {
     const reason = output.trim().split('\n').slice(-2).join(' ')
     throw new Error(reason.slice(0, 300))
   } finally {
-    stopTree(child.pid)
+    stopGroup(child.pid)
   }
 }

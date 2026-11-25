@@ -44,8 +44,8 @@ export function importProject(data: any) {
       const model = text(agent.model, 80)
       if (!MODEL_RE.test(model)) throw new Error(`Agent ${agent.name}: invalid model name`)
       const inserted = run(
-        `INSERT INTO agents (project_id, name, role, provider, model, instructions, max_instances, effort, mcp_ids)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO agents (project_id, name, role, provider, model, instructions, max_instances, effort, mcp_ids, provider_override)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
         projectId,
         text(agent.name, 80),
         text(agent.role, 200),
@@ -55,6 +55,7 @@ export function importProject(data: any) {
         Math.max(1, Math.min(20, Number(agent.max_instances) || 1)),
         EFFORTS.includes(agent.effort) ? agent.effort : '',
         JSON.stringify((agent.mcp ?? []).filter((id: string) => CONNECTIONS[id])),
+        agent.provider_override === true ? 1 : 0,
       )
       agentIds.set(agent.name, Number(inserted.lastInsertRowid))
     }

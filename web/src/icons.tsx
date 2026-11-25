@@ -4,6 +4,7 @@ import type { JSX } from 'solid-js'
 const PATHS = {
   board: 'M4 4h5v16H4zM10 4h5v10h-5zM16 4h4v7h-4z',
   chart: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  journal: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01',
   network: 'M6 6h4v4H6zM14 14h4v4h-4zM14 4h4v4h-4zM10 8h4M8 10v6h6',
   branch: 'M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a9 9 0 0 1-9 9',
   users:
@@ -24,6 +25,13 @@ const PATHS = {
   maximize: 'M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7',
   minimize: 'M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7',
   play: 'M6 4l14 8-14 8z',
+  radar: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM12 12l6-6M12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z',
+  inbox: 'M22 12h-6l-2 3h-4l-2-3H2M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z',
+  stop: 'M8 2h8l6 6v8l-6 6H8l-6-6V8zM9 9h6v6H9z',
+  bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  check: 'M20 6 9 17l-5-5',
+  sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+  moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z',
 } as const
 
 export type IconName = keyof typeof PATHS

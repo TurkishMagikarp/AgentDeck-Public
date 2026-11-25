@@ -1,0 +1,184 @@
+#!/bin/bash
+# The only things the AgentDeck server may do as root. sudoers lets the server user run this
+# script and nothing else as root, so every argument is checked here before it is used.
+#
+#   agentdeck-sandbox ensure <KEY> [<repo path>]   create the project user and hand it its folders
+#   agentdeck-sandbox install <package>...         install Debian packages for the agents
+#   agentdeck-sandbox kill <pgid>                  stop a process group the server started as a project user
+#   agentdeck-sandbox egress <KEY> open|allowlist  outbound network of a project user (iptables)
+set -euo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 022
+
+SERVER_USER=node
+DATA=/data
+REPOS=/repos
+HOMES=$DATA/homes
+PROJECTS_GROUP=agentdeck-projects
+# Project users get uids from here on, far from the image's own users.
+FIRST_UID=20000
+
+die() {
+  echo "agentdeck-sandbox: $*" >&2
+  exit 2
+}
+
+project_user() {
+  [[ "$1" =~ ^[A-Z][A-Z0-9]{1,7}$ ]] || die "invalid project key"
+  echo "ad-${1,,}"
+}
+
+# A folder of a project: owned by the project user, group of the server, nobody else.
+# setgid keeps the server's group on everything created inside.
+hand_over() {
+  local user=$1 dir=$2
+  mkdir -p "$dir"
+  if [ "$(stat -c %U "$dir")" != "$user" ]; then
+    chown -R "$user:$SERVER_USER" "$dir"
+    chmod -R g+rwX,o-rwx "$dir"
+    find "$dir" -type d -exec chmod g+s {} +
+  fi
+}
+
+ensure() {
+  local key=$1 repo=${2:-}
+  local user
+  user=$(project_user "$key")
+  # One at a time: two new projects must not pick the same uid.
+  exec 8>/run/agentdeck-ensure.lock
+  flock 8
+  # Nothing under the repos folder is open to everyone, also no repo that has no project yet.
+  # The folder itself only lets project users pass through to their own repo (a host folder
+  # mounted there may come with 0700).
+  chmod 0711 "$REPOS"
+  find "$REPOS" -mindepth 1 -maxdepth 1 -exec chmod o-rwx {} +
+  local home="$HOMES/$user"
+  mkdir -p "$HOMES"
+  chown "$SERVER_USER:$SERVER_USER" "$HOMES"
+  chmod 0711 "$HOMES"
+  if ! id "$user" >/dev/null 2>&1; then
+    # Users live in the container's /etc/passwd, their files in the data volume. A recreated
+    # container gets the user back under the uid that owns its files.
+    local uid
+    if [ -d "$home" ]; then
+      uid=$(stat -c %u "$home")
+    else
+      uid=$(find "$HOMES" -mindepth 1 -maxdepth 1 -type d -printf '%U\n' 2>/dev/null |
+        awk -v min="$FIRST_UID" 'BEGIN { max = min - 1 } $1 + 0 > max { max = $1 + 0 } END { print max + 1 }')
+    fi
+    [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge "$FIRST_UID" ] || die "no usable uid for $user"
+    groupadd --gid "$uid" "$user" 2>/dev/null || true
+    useradd --uid "$uid" --gid "$uid" --no-create-home --home-dir "$home" --shell /bin/bash \
+      --groups "$PROJECTS_GROUP" "$user"
+  fi
+  mkdir -p "$home"
+  chown "$user:$SERVER_USER" "$home"
+  chmod 2770 "$home"
+  mkdir -p "$DATA/landing"
+  chown "$SERVER_USER:$SERVER_USER" "$DATA/landing"
+  chmod 0711 "$DATA/landing"
+  for dir in "$DATA/worktrees/$key" "$DATA/workspaces/$key" "$DATA/rtk/$key" "$DATA/landing/$key"; do
+    hand_over "$user" "$dir"
+  done
+  if [ -n "$repo" ]; then
+    local real
+    real=$(realpath -e -- "$repo") || die "repo path does not exist"
+    case "$real" in
+      "$REPOS"/?* | "$DATA/workspaces/$key" | "$DATA/workspaces/$key"/*) ;;
+      *) die "repo path must lie under $REPOS" ;;
+    esac
+    local owner
+    owner=$(stat -c %U "$real")
+    if [[ "$owner" == ad-* && "$owner" != "$user" ]]; then
+      die "repo already belongs to project user $owner"
+    fi
+    hand_over "$user" "$real"
+  fi
+}
+
+install_packages() {
+  [ $# -gt 0 ] || die "no package given"
+  [ $# -le 20 ] || die "at most 20 packages at once"
+  for name in "$@"; do
+    [[ "$name" =~ ^[a-z0-9][a-z0-9+.-]{0,62}$ ]] || die "invalid package name: $name"
+  done
+  exec 9>/run/agentdeck-apt.lock
+  flock 9
+  local lists=/var/lib/apt/lists
+  if [ -z "$(find "$lists" -maxdepth 1 -name '*Packages*' -mmin -360 2>/dev/null | head -n1)" ]; then
+    apt-get update -qq
+  fi
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends -- "$@"
+}
+
+# Only a group whose leader is a sudo the server started may be stopped, and only when every
+# other member belongs to a project user.
+kill_group() {
+  local pgid=$1
+  [[ "$pgid" =~ ^[1-9][0-9]*$ ]] || die "invalid process group"
+  local server_pid
+  server_pid=$(ps -o ppid= -p "$PPID" | tr -d ' ')
+  local leader_parent leader_comm
+  leader_parent=$(ps -o ppid= -p "$pgid" | tr -d ' ') || die "no such process group"
+  leader_comm=$(ps -o comm= -p "$pgid")
+  [ "$leader_comm" = sudo ] && [ "$leader_parent" = "$server_pid" ] || die "not a group the server started"
+  while read -r pid user; do
+    [ "$pid" = "$pgid" ] && continue
+    [[ "$user" == ad-* ]] || die "process $pid of $user is not a project process"
+  done < <(ps -e -o pid=,user= -o pgid= | awk -v g="$pgid" '$3 == g { print $1, $2 }')
+  kill -TERM -- "-$pgid" 2>/dev/null || true
+}
+
+# One family (iptables or ip6tables) for egress. With allowlist the project user reaches only the
+# loopback address: the egress proxy of the server and its API. Everything else, DNS included,
+# is rejected; the proxy resolves names and checks the hosts. Idempotent, and a change never
+# leaves a moment without the REJECT rule.
+egress_rules() {
+  local ipt=$1 loopback=$2 mode=$3 uid=$4 chain=$5
+  if ! command -v "$ipt" >/dev/null; then
+    [ "$mode" = open ]
+    return
+  fi
+  if [ "$mode" = open ]; then
+    while "$ipt" -w -D OUTPUT -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null; do :; done
+    "$ipt" -w -F "$chain" 2>/dev/null || true
+    "$ipt" -w -X "$chain" 2>/dev/null || true
+    return 0
+  fi
+  "$ipt" -w -N "$chain" 2>/dev/null || true
+  # set -e does not hold in a function called with ||, so every step says so itself.
+  "$ipt" -w -C "$chain" -o lo -d "$loopback" -j ACCEPT 2>/dev/null ||
+    "$ipt" -w -I "$chain" 1 -o lo -d "$loopback" -j ACCEPT || return 1
+  "$ipt" -w -C "$chain" -j REJECT 2>/dev/null || "$ipt" -w -A "$chain" -j REJECT || return 1
+  "$ipt" -w -C OUTPUT -m owner --uid-owner "$uid" -j "$chain" 2>/dev/null ||
+    "$ipt" -w -I OUTPUT 1 -m owner --uid-owner "$uid" -j "$chain" || return 1
+}
+
+egress() {
+  local key=$1 mode=$2
+  local user uid
+  user=$(project_user "$key")
+  [[ "$mode" == open || "$mode" == allowlist ]] || die "invalid egress mode"
+  uid=$(id -u -- "$user" 2>/dev/null) || die "no such project user"
+  [[ "$uid" =~ ^[0-9]+$ ]] && [ "$uid" -ge "$FIRST_UID" ] || die "not a project user"
+  local chain="AD-EGRESS-$key"
+  exec 7>/run/agentdeck-egress.lock
+  flock 7
+  egress_rules iptables 127.0.0.1 "$mode" "$uid" "$chain" || die "iptables rules failed (iptables installed, NET_ADMIN?)"
+  if ! egress_rules ip6tables ::1 "$mode" "$uid" "$chain"; then
+    # Without IPv6 beyond loopback there is nothing to close.
+    if [ -r /proc/net/if_inet6 ] && awk '$6 != "lo" { found = 1 } END { exit !found }' /proc/net/if_inet6; then
+      die "ip6tables rules failed"
+    fi
+  fi
+}
+
+command=${1:-}
+shift || true
+case "$command" in
+  ensure) [ $# -ge 1 ] && [ $# -le 2 ] || die "usage: ensure <KEY> [<repo>]"; ensure "$@" ;;
+  install) install_packages "$@" ;;
+  kill) [ $# -eq 1 ] || die "usage: kill <pgid>"; kill_group "$1" ;;
+  egress) [ $# -eq 2 ] || die "usage: egress <KEY> open|allowlist"; egress "$@" ;;
+  *) die "unknown command" ;;
+esac

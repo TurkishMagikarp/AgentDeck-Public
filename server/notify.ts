@@ -4,6 +4,7 @@ import { getSecret, setSecret } from './auth.ts'
 import { addComment } from './core.ts'
 import { get, run } from './db.ts'
 import { sendPush } from './push.ts'
+import { notifyWebhooks } from './webhooks.ts'
 
 type MailSettings = { inbox: string; to: string; hasKey: boolean }
 
@@ -43,6 +44,8 @@ const PUBLIC_URL = (process.env.AGENTDECK_PUBLIC_URL ?? '').replace(/\/$/, '')
  * mail is set up. Quietly does nothing when the project does not want to be told.
  */
 export function notifyOwner(project: any, issue: any, reason: string) {
+  // Webhooks have their own event choice, so they do not depend on the push and mail switch.
+  notifyWebhooks(project.id, issue, 'owner')
   if (!project.settings.notifyOwner) return
   const key = `${project.key}-${issue.number}`
   sendPush(`${key}: ${issue.title}`, reason, `/#${key}`).catch((error) =>

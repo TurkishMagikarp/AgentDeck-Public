@@ -75,7 +75,9 @@ export function PushSettings() {
       >
         <div class="key-form">
           <span class="grow">
-            {here() ? 'This device gets push notifications.' : 'This device gets no push notifications.'}{' '}
+            {here()
+              ? 'This device gets push messages.'
+              : 'This device gets no push messages.'}{' '}
             <span class="muted">Devices in total: {info()?.devices ?? 0}</span>
           </span>
           <Show
@@ -87,7 +89,7 @@ export function PushSettings() {
             }
           >
             <button disabled={busy()} onClick={() => api.post('/push/test').catch(fail)}>
-              Test push
+              Test-Push
             </button>
             <button class="ghost" disabled={busy()} onClick={turnOff}>
               Unsubscribe

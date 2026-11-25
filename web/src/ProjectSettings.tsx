@@ -1,7 +1,8 @@
 import { api } from './api'
 import { Icon } from './icons'
-import { board, closeProject, fail, loadProjects, saveSettings } from './store'
-import { createResource, createSignal, For, Show } from 'solid-js'
+import { board, closeProject, fail, loadProjects, saveSettings, setBoard } from './store'
+import type { Webhook, WebhookEvent } from './types'
+import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { Field, Select, Toggle } from './ui'
 
 const LANDING_MODES = [
@@ -22,6 +23,68 @@ const splitLines = (text: string) =>
     .map((line) => line.trim())
     .filter(Boolean)
 
+/**
+ * A row of jump links over a long settings page: one per block, the one in view highlighted.
+ * The blocks are found in the page itself, so a new block shows up here without extra code.
+ */
+function SectionRail(props: { root: () => HTMLElement | undefined }) {
+  const [items, setItems] = createSignal<{ el: HTMLElement; label: string }[]>([])
+  const [active, setActive] = createSignal(0)
+
+  onMount(() => {
+    const root = props.root()
+    if (!root) return
+    const scan = () => {
+      const found = [...root.querySelectorAll<HTMLElement>('.section')]
+        .map((el) => ({ el, label: el.querySelector('h3')?.textContent?.trim() ?? '' }))
+        .filter((item) => item.label)
+      // The rail sits inside the page it watches: only a real change of the blocks may update it,
+      // or its own redraw would trigger the observer again, forever.
+      const same =
+        found.length === items().length && found.every((item, index) => item.el === items()[index].el && item.label === items()[index].label)
+      if (!same) setItems(found)
+    }
+    const follow = () => {
+      const top = root.getBoundingClientRect().top + 90
+      const index = items().findLastIndex((item) => item.el.getBoundingClientRect().top <= top)
+      setActive(Math.max(0, index))
+    }
+    scan()
+    // Blocks appear and disappear with the settings (webhooks, network mode), so look again on change.
+    const observer = new MutationObserver(() => {
+      scan()
+      follow()
+    })
+    observer.observe(root, { childList: true, subtree: true })
+    root.addEventListener('scroll', follow, { passive: true })
+    onCleanup(() => {
+      observer.disconnect()
+      root.removeEventListener('scroll', follow)
+    })
+  })
+
+  return (
+    <Show when={items().length > 1}>
+      <nav class="section-rail" aria-label="Sections of this page">
+        <For each={items()}>
+          {(item, index) => (
+            <button
+              classList={{ active: active() === index() }}
+              aria-current={active() === index() ? 'true' : undefined}
+              onClick={() => {
+                setActive(index())
+                item.el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+              }}
+            >
+              {item.label}
+            </button>
+          )}
+        </For>
+      </nav>
+    </Show>
+  )
+}
+
 /** Long enough that nobody guesses the showcase link. */
 function randomSlug() {
   const bytes = crypto.getRandomValues(new Uint8Array(9))
@@ -29,6 +92,11 @@ function randomSlug() {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
 }
+
+const EGRESS_MODES = [
+  ['open', 'Open'],
+  ['allowlist', 'Allowed hosts only'],
+] as const
 
 const WORKSPACES = [
   ['issue', 'One worktree per issue'],
@@ -58,11 +126,14 @@ export function ProjectSettings() {
     await loadProjects()
   }
 
+  let page: HTMLDivElement | undefined
+
   return (
-    <div class="page narrow">
+    <div class="page narrow" ref={page}>
       <div class="page-head">
         <h2>Project</h2>
       </div>
+      <SectionRail root={() => page} />
       <div class="form">
         <div class="row">
           <Field label="Name">
@@ -111,6 +182,14 @@ export function ProjectSettings() {
         >
           <input value={project().repo_path} onChange={(e) => save({ repo_path: e.currentTarget.value })} />
         </Field>
+        <div class="row">
+          <Toggle
+            label="Record the history of runs"
+            title='Stores the prompt, tool calls, results, answers and the changes of every run, shortened and without detected secrets. To be seen under "Show history" at every run, for 30 days.'
+            checked={project().settings.replay}
+            onChange={(on) => saveSettings((s) => void (s.replay = on))}
+          />
+        </div>
         <section class="section">
           <div class="section-head">
             <h3>Acceptance</h3>
@@ -230,7 +309,7 @@ export function ProjectSettings() {
                 />
               </Show>
               <Show when={project().settings.landing.mode === 'pr'}>
-                <Field label="Merge method">
+                <Field label="Merge-Art">
                   <Select
                     value={project().settings.landing.mergeMethod}
                     options={MERGE_METHODS}
@@ -257,6 +336,45 @@ export function ProjectSettings() {
                 }}
               />
             </Field>
+            <Field
+              label="Approval before landing"
+              hint='What matches here does not land automatically but waits for "Approve landing" in the issue. The approval holds for exactly one state of the branch; if it changes after that, it needs a new one.'
+            >
+              <div class="row">
+                <Toggle
+                  label="Every landing"
+                  checked={project().settings.landing.approval.merge}
+                  onChange={(on) => saveSettings((s) => void (s.landing.approval.merge = on))}
+                />
+                <Toggle
+                  label="New dependencies"
+                  title="package.json, requirements*.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile, composer.json: new packages, not plain version changes"
+                  checked={project().settings.landing.approval.dependencies}
+                  onChange={(on) => saveSettings((s) => void (s.landing.approval.dependencies = on))}
+                />
+                <Toggle
+                  label="Infrastructure files"
+                  checked={project().settings.landing.approval.infra}
+                  onChange={(on) => saveSettings((s) => void (s.landing.approval.infra = on))}
+                />
+              </div>
+            </Field>
+            <Show when={project().settings.landing.approval.infra}>
+              <Field
+                label="Infrastructure patterns"
+                hint='One pattern per line. Without "/" it applies to the file name in any folder (*.tf), with "/" from the root of the repository (docker/**). ** includes subfolders.'
+              >
+                <textarea
+                  rows="4"
+                  class="mono"
+                  value={project().settings.landing.approval.infraGlobs.join('\n')}
+                  onChange={(e) => {
+                    const globs = splitLines(e.currentTarget.value)
+                    saveSettings((s) => void (s.landing.approval.infraGlobs = globs))
+                  }}
+                />
+              </Field>
+            </Show>
             <div class="row">
               <Field
                 label="Evidence required for"
@@ -345,6 +463,8 @@ export function ProjectSettings() {
           onChange={(on) => saveSettings((s) => void (s.notifyOwner = on))}
         />
 
+        <Webhooks projectId={project().id} />
+
         <section class="section">
           <div class="section-head">
             <h3>Cost cap per issue</h3>
@@ -414,6 +534,8 @@ export function ProjectSettings() {
           </div>
         </section>
 
+        <Egress projectId={project().id} />
+
         <section class="section">
           <div class="section-head">
             <h3>Showcase</h3>
@@ -458,6 +580,10 @@ export function ProjectSettings() {
           </Show>
         </section>
 
+        <GithubIntake />
+
+        <Connect />
+
         <Lessons projectId={project().id} />
 
         <Field label="Context for all agents">
@@ -474,6 +600,337 @@ export function ProjectSettings() {
         </footer>
       </div>
     </div>
+  )
+}
+
+const INTAKE_STATUSES = [
+  ['backlog', 'Backlog: look first'],
+  ['todo', 'To Do: agents start at once'],
+] as const
+
+const GITHUB_REPO = /^[\w.-]{1,39}\/[\w.-]{1,100}$/
+
+/** GitHub issues with the project's label are filed on the board (server/intake.ts). */
+function GithubIntake() {
+  const intake = () => board.project!.settings.intake
+  const switchOn = (on: boolean) => {
+    if (on && !GITHUB_REPO.test(intake().repo)) return fail(new Error('Enter the repository as owner/name first.'))
+    saveSettings((s) => void (s.intake.enabled = on))
+  }
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Take in GitHub issues</h3>
+        <Toggle label="Take in issues with the label" checked={intake().enabled} onChange={switchOn} />
+      </div>
+      <p class="muted">
+        When an issue in the repository gets the label, AgentDeck creates it here and the agents take over. On
+        GitHub only people who work on the repository may set a label: strangers can write an issue, but cannot
+        hand it to the agents. The text still comes from outside, so the backlog is the default.
+      </p>
+      <div class="row">
+        <Field label="Repository" hint="owner/name, as in the address on GitHub">
+          <input
+            class="mono"
+            placeholder="acme/shop"
+            value={intake().repo}
+            onChange={(e) => {
+              const repo = e.currentTarget.value.trim()
+              saveSettings((s) => {
+                s.intake.repo = GITHUB_REPO.test(repo) ? repo : ''
+                if (!s.intake.repo) s.intake.enabled = false
+              })
+            }}
+          />
+        </Field>
+        <Field label="Label">
+          <input
+            value={intake().label}
+            onChange={(e) => saveSettings((s) => void (s.intake.label = e.currentTarget.value.trim() || 'agentdeck'))}
+          />
+        </Field>
+        <Field label="Lands in">
+          <Select
+            value={intake().status}
+            options={INTAKE_STATUSES}
+            onChange={(status) => saveSettings((s) => void (s.intake.status = status))}
+          />
+        </Field>
+      </div>
+      <p class="muted">
+        Needs the GitHub webhook of this server (<span class="mono">{location.origin}/api/github/webhook</span>) with
+        the "Issues" event. Setup: README, "Approval gates and GitHub webhooks".
+      </p>
+    </section>
+  )
+}
+
+/** How tools outside reach this server: the MCP endpoint and the metrics. The same for every project. */
+function Connect() {
+  const endpoint = `${location.origin}/api/mcp-server`
+  const command = `claude mcp add --transport http agentdeck ${endpoint} --header "Authorization: Bearer $AGENTDECK_TOKEN"`
+  const [copied, setCopied] = createSignal(false)
+  const copy = () =>
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }, fail)
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Control from outside</h3>
+      </div>
+      <p class="muted">
+        AgentDeck is an MCP server itself. Claude Code, Codex, Cursor or a chat app use it to read the boards,
+        create issues, comment on them, move and stop them, with the rights of the token used. Applies to
+        all projects.
+      </p>
+      <div class="inline-row">
+        <code class="connect-command">{command}</code>
+        <button class="ghost" onClick={copy}>
+          {copied() ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <p class="muted">
+        Numbers for Prometheus and Grafana (issues, runs, costs, tokens, quotas):{' '}
+        <span class="mono">{location.origin}/api/metrics</span>, with a bearer token as well.
+      </p>
+    </section>
+  )
+}
+
+const WEBHOOK_EVENTS: readonly (readonly [WebhookEvent, string])[] = [
+  ['review', 'Ready for review'],
+  ['blocked', 'Blocked'],
+  ['done', 'Done'],
+  ['failed', 'Run failed'],
+  ['owner', 'Waits for you'],
+]
+
+const WEBHOOK_KINDS = [
+  ['slack', 'Slack'],
+  ['generic', 'Generic (JSON, signed)'],
+] as const
+
+/** Slack or any HTTPS endpoint. The URL is sent once and stays on the server, like the secret. */
+function Webhooks(props: { projectId: number }) {
+  const hooks = () => board.project?.settings.webhooks ?? []
+  const [url, setUrl] = createSignal('')
+  const [kind, setKind] = createSignal<Webhook['kind']>('slack')
+  const [events, setEvents] = createSignal<WebhookEvent[]>(['blocked', 'done', 'owner'])
+  const [secret, setSecret] = createSignal('')
+  const [result, setResult] = createSignal('')
+
+  const toggle = (list: WebhookEvent[], event: WebhookEvent, on: boolean) =>
+    on ? [...list.filter((e) => e !== event), event] : list.filter((e) => e !== event)
+
+  function add() {
+    if (!url().trim()) return
+    api
+      .post<{ webhook: Webhook; secret?: string }>(`/projects/${props.projectId}/webhooks`, {
+        url: url().trim(),
+        kind: kind(),
+        events: events(),
+      })
+      .then((created) => {
+        setBoard('project', 'settings', 'webhooks', (list) => [...list, created.webhook])
+        setSecret(created.secret ?? '')
+        setUrl('')
+      })
+      .catch(fail)
+  }
+
+  function remove(hook: Webhook) {
+    if (!confirm(`Delete the webhook to ${hook.host}?`)) return
+    api
+      .del(`/projects/${props.projectId}/webhooks/${hook.id}`)
+      .then(() => setBoard('project', 'settings', 'webhooks', (list) => list.filter((h) => h.id !== hook.id)))
+      .catch(fail)
+  }
+
+  function test(hook: Webhook) {
+    setResult('')
+    api
+      .post<{ status: number }>(`/projects/${props.projectId}/webhooks/${hook.id}/test`)
+      .then((r) => setResult(`${hook.host}: delivered (HTTP ${r.status})`))
+      .catch(fail)
+  }
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Webhooks</h3>
+      </div>
+      <p class="muted">
+        Reports status changes to Slack or an endpoint of your own. Only https, no addresses in a private network.
+        Project, issue number, title and status are sent, never code or comments. Generic webhooks
+        are signed with HMAC-SHA256 (header X-AgentDeck-Signature).
+      </p>
+      <ul class="lessons">
+        <For each={hooks()} fallback={<li class="muted">No webhooks yet.</li>}>
+          {(hook) => (
+            <li class="webhook">
+              <span>
+                <strong>{hook.kind === 'slack' ? 'Slack' : 'Generic'}</strong>{' '}
+                <span class="mono">{hook.host}</span>
+                <span class="webhook-events">
+                  <For each={WEBHOOK_EVENTS}>
+                    {([event, label]) => (
+                      <Toggle
+                        label={label}
+                        checked={hook.events.includes(event)}
+                        onChange={(on) =>
+                          saveSettings((s) => {
+                            const target = s.webhooks.find((h) => h.id === hook.id)
+                            if (target) target.events = toggle(target.events, event, on)
+                          })
+                        }
+                      />
+                    )}
+                  </For>
+                </span>
+              </span>
+              <button class="ghost" onClick={() => test(hook)}>
+                Test
+              </button>
+              <button
+                class="ghost icon-button"
+                title="Delete webhook"
+                aria-label="Delete webhook"
+                onClick={() => remove(hook)}
+              >
+                <Icon name="close" size={14} />
+              </button>
+            </li>
+          )}
+        </For>
+      </ul>
+      <Show when={result()}>
+        <p class="muted">{result()}</p>
+      </Show>
+      <Show when={secret()}>
+        <div class="notice">
+          Signing secret, shown only now: <code class="mono">{secret()}</code>{' '}
+          <button class="ghost" onClick={() => setSecret('')}>
+            Noted
+          </button>
+        </div>
+      </Show>
+      <div class="inline-row">
+        <input
+          class="mono"
+          placeholder="https://hooks.slack.com/services/…"
+          aria-label="Webhook address"
+          value={url()}
+          onInput={(e) => setUrl(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === 'Enter' && add()}
+        />
+        <Select aria-label="Kind" value={kind()} options={WEBHOOK_KINDS} onChange={setKind} />
+        <button onClick={add}>Add</button>
+      </div>
+      <div class="webhook-events">
+        <For each={WEBHOOK_EVENTS}>
+          {([event, label]) => (
+            <Toggle
+              label={label}
+              checked={events().includes(event)}
+              onChange={(on) => setEvents((list) => toggle(list, event, on))}
+            />
+          )}
+        </For>
+      </div>
+    </section>
+  )
+}
+
+type EgressStatus = {
+  sandbox: boolean
+  mode: 'open' | 'allowlist'
+  firewall: 'off' | 'open' | 'pending' | 'active' | 'unavailable'
+  error: string
+  blocked: { target: string; at: number }[]
+}
+
+/** Outbound network of the project's agents: open, or only the hosts on the list. */
+function Egress(props: { projectId: number }) {
+  const egress = () => board.project!.settings.egress
+  const [status, { refetch }] = createResource(
+    () => [props.projectId, egress().mode] as const,
+    ([id]) => api.get<EgressStatus>(`/projects/${id}/egress`),
+  )
+  // The firewall is set up in the background; one more look shows how it went.
+  const later = () => setTimeout(refetch, 1500)
+
+  const allow = (target: string) => {
+    // Without a port the entry covers 80 and 443 anyway.
+    const entry = target.replace(/:(80|443)$/, '')
+    saveSettings((s) => void (s.egress.allow = [...s.egress.allow.filter((e) => e !== entry), entry]))?.then(later)
+  }
+
+  const firewallText = (s: EgressStatus) => {
+    if (!s.sandbox) return 'No sandbox: the setting only takes effect in the container.'
+    if (s.mode === 'open') return 'Open: the agents reach every host.'
+    if (s.firewall === 'active') return 'Firewall active: other targets and DNS are blocked.'
+    if (s.firewall === 'unavailable')
+      return `Firewall not available, the project is open (${s.error || 'error'}). The container needs iptables and NET_ADMIN, see the README.`
+    return 'Setting up the firewall…'
+  }
+
+  return (
+    <section class="section">
+      <div class="section-head">
+        <h3>Network of the agents</h3>
+      </div>
+      <p class="muted">
+        With an allowlist the agents of this project reach only the listed hosts, through a proxy in
+        AgentDeck. The container's firewall blocks everything else, DNS too. Git over SSH does not work then, Git
+        over HTTPS does. AgentDeck itself (board, API) stays reachable.
+      </p>
+      <div class="row">
+        <Field label="Outbound connections">
+          <Select
+            value={egress().mode}
+            options={EGRESS_MODES}
+            onChange={(mode) => saveSettings((s) => void (s.egress.mode = mode))?.then(later)}
+          />
+        </Field>
+      </div>
+      <Field
+        label="Allowed hosts"
+        hint="One entry per line: github.com, *.example.com (subdomains only), host:8443, 192.0.2.7. Without a port, 80 and 443 apply. Invalid entries are dropped."
+      >
+        <textarea
+          rows="6"
+          class="mono"
+          value={egress().allow.join('\n')}
+          onChange={(e) => {
+            const allow = splitLines(e.currentTarget.value)
+            saveSettings((s) => void (s.egress.allow = allow))
+          }}
+        />
+      </Field>
+      <Show when={status()}>
+        {(s) => (
+          <>
+            <p class="muted">{firewallText(s())}</p>
+            <Show when={s().blocked.length}>
+              <p class="muted">Blocked recently:</p>
+              <div class="chips">
+                <For each={s().blocked}>
+                  {(b) => (
+                    <button class="ghost" title="Put on the allowlist" onClick={() => allow(b.target)}>
+                      Allow {b.target}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </Show>
+          </>
+        )}
+      </Show>
+    </section>
   )
 }
 
@@ -531,7 +988,7 @@ function Lessons(props: { projectId: number }) {
       </ul>
       <div class="inline-row">
         <input
-          placeholder='e.g. Tests run with "npm test -- --run"'
+          placeholder='e.g. tests run with "npm test -- --run"'
           aria-label="New note"
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}

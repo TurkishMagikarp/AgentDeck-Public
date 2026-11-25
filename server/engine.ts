@@ -1,7 +1,20 @@
 // The scheduler: decides which agent starts on which issue, follows the run and moves the issue
 // on when it ends (done, to the next reviewer, back to the maker, or to a human).
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { oneShot, startRun, type RunHandle, type RunResult } from './adapters.ts'
+import {
+  arenaOf,
+  closeArena,
+  dissolveArena,
+  holdEntry,
+  juryPrompt,
+  labelled,
+  openArenas,
+  parseVerdict,
+  type ArenaView,
+} from './arena.ts'
+import { readyBacklog } from './backlog.ts'
 import {
   activity,
   addComment,
@@ -14,17 +27,29 @@ import {
   mapAgent,
   mapIssue,
   patchIssue,
-  pickProvider,
-  providerLeft,
+  providerOrder,
+  routeProvider,
   PROVIDERS,
+  takeChangedProjects,
 } from './core.ts'
 import { checklistFor, parseReport } from './checklist.ts'
 import { issueChanges } from './diff.ts'
-import { all, get, run, tx } from './db.ts'
-import { baseBranchOf, githubTokenOf, landIssue, watchPullRequests, type Outcome } from './landing.ts'
+import { all, DATA_DIR, get, run, tx } from './db.ts'
+import {
+  baseBranchOf,
+  branchTip,
+  githubTokenOf,
+  landIssue,
+  landings,
+  onLandingsChange,
+  watchPullRequests,
+  type Outcome,
+} from './landing.ts'
 import { addLesson } from './lessons.ts'
 import { notifyOwner } from './notify.ts'
+import { runFailed } from './webhooks.ts'
 import { blockerWeights, byBlockerWeight, cycles, type Weight } from './blockers.ts'
+import { partialStep, waitingLines } from './partial.ts'
 import { overCap } from './issueCap.ts'
 import { capturePreview } from './preview.ts'
 import { precheck } from './precheck.ts'
@@ -33,15 +58,18 @@ import { buildPrompt, tag, type RunKind } from './prompt.ts'
 import { rtkEnv } from './rtk.ts'
 import { createRunToken, revokeRunToken } from './runTokens.ts'
 import { prepareWorkdir, releaseWorkdir, type Workdir } from './workspace.ts'
+import { headOf, knownSecrets, promptHash, recordRun, runChanges, type Recorder } from './runEvents.ts'
 import {
   classifyFailure,
   clock,
   hintFor,
   when,
+  parkedRest,
   PROVIDER_FAILURES,
   restOf,
   restProvider,
   retryDelay,
+  whenProviderWakes,
   type Failure,
 } from './recovery.ts'
 
@@ -62,6 +90,10 @@ type Live = {
   stop?: { to: string }
   /** The agent has ended and the server checks its work (precheck.ts); the watchdog leaves it alone. */
   checking?: boolean
+  /** The replay of the run (runEvents.ts), when the project records them. */
+  trace?: Recorder
+  /** HEAD of the checkout when the run started, to show what the run changed. */
+  startHead?: string
 }
 
 type Pick = { provider: string; model: string; fallback: boolean }
@@ -126,11 +158,9 @@ function ownGithubToken(p: any): Record<string, string> {
 
 // ---------- starting a run ----------
 
-function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
+function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skipped: string[]) {
   const kind: RunKind = issue.review_index >= 0 ? 'review' : 'work'
-  // A model set on the issue wins, but only on the agent's own provider: on a fallback
-  // provider that model name would mean nothing.
-  const model = issue.model && !pick.fallback ? issue.model : pick.model
+  const model = pick.model
   const now = Date.now()
 
   const inserted = run(
@@ -178,13 +208,12 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
     }
   }
   patchIssue(issue.id, taken)
-  if (pick.fallback) {
-    const preferred = PROVIDERS[agent.provider]?.label ?? agent.provider
+  if (skipped.length) {
     addComment(
       issue.id,
       'System',
       'system',
-      `Routing: ${preferred} is below its threshold, this run uses ${PROVIDERS[pick.provider].label}.`,
+      `Routing: ${PROVIDERS[pick.provider].label} chosen. Skipped: ${skipped.join(' · ')}.`,
     )
   }
 
@@ -220,36 +249,47 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
   })
     .then(async (workdir) => {
       l.workdir = workdir
-      if (l.stop) return finish(l, agent, failed('stopped'))
+      if (l.stop) return finish(l, agent, failed('gestoppt'))
       // A reviewer that gets the diff does not spend its context searching for the change.
       const changes =
         kind === 'review' ? await issueChanges(p, issue.number).catch(() => undefined) : undefined
       try {
+        const prompt = buildPrompt({
+          project: p,
+          issue: getIssue(issue.id),
+          agent,
+          team: agents,
+          workdir,
+          kind,
+          decides: kind === 'work' && issue.escalated > 0 && deputyOf(p)?.id === agent.id,
+          changes,
+        })
+        const env = {
+          AGENTDECK_URL: OWN_URL,
+          AGENTDECK_RUN_TOKEN: token,
+          AGENTDECK_CLI: AGENT_CLI,
+          ...noPush(p),
+          ...ownGithubToken(p),
+          ...rtkEnv(p.key, agent.id),
+        }
+        if (p.settings.replay) {
+          // The run's token and a project GitHub token have no shape the scanner knows.
+          l.trace = recordRun(runId, knownSecrets(env))
+          if (kind === 'work') l.startHead = await headOf(workdir.cwd)
+          if (l.stop) return finish(l, agent, failed('gestoppt'))
+          l.trace.add({ kind: 'prompt', name: `sha256:${promptHash(prompt)}`, text: prompt })
+        }
+        const trace = l.trace
         l.handle = startRun({
           provider: pick.provider,
           model,
           effort: agent.effort,
           cwd: workdir.cwd,
-          prompt: buildPrompt({
-            project: p,
-            issue: getIssue(issue.id),
-            agent,
-            team: agents,
-            workdir,
-            kind,
-            decides: kind === 'work' && issue.escalated > 0 && deputyOf(p)?.id === agent.id,
-            changes,
-          }),
+          prompt,
           autonomous: true,
           mcp: agent.mcp_ids,
-          env: {
-            AGENTDECK_URL: OWN_URL,
-            AGENTDECK_RUN_TOKEN: token,
-            AGENTDECK_CLI: AGENT_CLI,
-            ...noPush(p),
-            ...ownGithubToken(p),
-            ...rtkEnv(p.key, agent.id),
-          },
+          env,
+          onEvent: trace ? (event) => trace.add(event) : undefined,
           onActivity: (output) => {
             const text = output.slice(0, 1200)
             l.lastActivity = Date.now()
@@ -266,7 +306,12 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick) {
     .catch((e) => {
       // Without a working directory a retry would fail the same way, so a human has to look.
       l.stop = { to: 'blocked' }
-      addComment(issue.id, 'System', 'system', `Could not prepare the working directory: ${e.message}`)
+      addComment(
+        issue.id,
+        'System',
+        'system',
+        `The working directory could not be prepared: ${e.message}`,
+      )
       return finish(l, agent, failed(e.message))
     })
     .catch((e) => console.error('run', e))
@@ -278,6 +323,10 @@ function endRun(l: Live, status: string, res: RunResult, note = '', failure = ''
   live.delete(l.runId)
   activity.delete(l.runId)
   revokeRunToken(l.runId)
+  if (l.trace) {
+    l.trace.add({ kind: 'end', text: endSummary(status, res, note, verdict) })
+    l.trace.close()
+  }
   run(
     `UPDATE runs SET status=?, ended_at=?, input_tokens=?, output_tokens=?, cached_tokens=?, cost_usd=?, note=?,
        failure=?, verdict=?
@@ -295,6 +344,21 @@ function endRun(l: Live, status: string, res: RunResult, note = '', failure = ''
   )
   invalidate(l.projectId)
   emit(l.projectId, { t: 'run.end', id: l.runId, issueId: l.issueId })
+  if (status === 'failed') runFailed(l.projectId, l.issueId)
+}
+
+/** The last step of a replay: how the run ended and what it used. */
+function endSummary(status: string, res: RunResult, note: string, verdict: string) {
+  const label: Record<string, string> = { done: 'finished', failed: 'failed', stopped: 'stopped' }
+  return [
+    `Run ${label[status] ?? status}${verdict ? ` (${verdict})` : ''}.`,
+    `Tokens: ${res.usage.input} in (${res.usage.cached ?? 0} of them from the cache), ${res.usage.output} out` +
+      (res.usage.cost ? `, $${res.usage.cost.toFixed(2)}` : '') +
+      '.',
+    note || res.error || '',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 /** Failed runs in a row on this issue. A limit or a broken login is the provider's fault and does not count. */
@@ -313,6 +377,11 @@ function failedStreak(issueId: number) {
 async function finish(l: Live, agent: any, res: RunResult) {
   const p = getProject(l.projectId)
   const issue = getIssue(l.issueId)
+  // What the run left in its checkout, read while it is still the run's.
+  if (l.trace && l.startHead && l.workdir) {
+    const changes = await runChanges(l.workdir.cwd, l.startHead).catch((e) => `Changes could not be read: ${e.message}`)
+    if (changes) l.trace.add({ kind: 'changes', text: changes })
+  }
   // Checked in the maker's checkout before it is let go, while the branch is still checked out there.
   const gate = p && issue && l.kind === 'work' && !l.stop && res.ok ? await gateWork(l, p, issue, res) : null
   if (p && l.workdir) await releaseWorkdir(p, l.workdir)
@@ -411,7 +480,12 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
       addComment(issue.id, 'System', 'system', `Sent to ${deputy.name} for review.`)
       return patchIssue(issue.id, { reviewers: [deputy.id], review_index: 0, assignee_id: deputy.id })
     }
-    addComment(issue.id, 'System', 'system', 'No other reviewer available, the work counts as approved.')
+    addComment(
+      issue.id,
+      'System',
+      'system',
+      'No other reviewer available, the work counts as approved.',
+    )
     patchIssue(issue.id, { status: 'done' })
     return landByHand(issue.id)
   }
@@ -419,12 +493,17 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
   const deputyGaveUp = !deputy || issue.assignee_id === deputy.id || issue.escalated >= MAX_DEPUTY_DECISIONS
   if (!deputyGaveUp) return handToDeputy(issue, deputy, reason)
 
-  const note = `Parked: ${reason}\n\nThe issue waits in the backlog and holds nothing up. It comes up again once the open work is done.`
+  // A parked issue rests before anything pulls it out of the backlog again, longer each time.
+  // Without the rest an issue that fails at once (a checkout git refuses) is parked and started
+  // again every second, see parkedRest.
+  const parkedUntil = Date.now() + parkedRest(issue.id)
+  const note = `Parked: ${reason}\n\nThe issue waits in the backlog and holds nothing up. It comes up again at ${when(parkedUntil)} at the earliest, once the open work is done. Moved back to To Do, it starts at once.`
   addComment(issue.id, 'Watchdog', 'watchdog', note)
   patchIssue(issue.id, {
     status: 'backlog',
     review_index: -1,
     assignee_id: issue.maker_id ?? issue.assignee_id,
+    parked_until: parkedUntil,
   })
   notifyOwner(p, issue, note)
 }
@@ -433,19 +512,35 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
  * The safety net of an autonomous project: whatever still sits in a state that waits for a
  * person (moved there by hand, imported that way, or left by an older version) is settled.
  */
-function sweepWaitingIssues() {
-  for (const row of all('SELECT id FROM projects WHERE paused=0')) {
-    const p = getProject(row.id)
-    if (!p.settings.autonomous) continue
+let lastSweep = 0
+
+function sweepWaitingIssues(everyProject: boolean) {
+  // What the sweep looks at only changes with the board, so a project nobody touched is skipped,
+  // unless a parked issue came free since the last sweep. The full pass catches writes that went
+  // around the event bus.
+  const now = Date.now()
+  const unparked = all(
+    "SELECT DISTINCT project_id AS id FROM issues WHERE status='backlog' AND parked_until>? AND parked_until<=?",
+    lastSweep,
+    now,
+  ).map((row) => row.id)
+  lastSweep = now
+  const changed = [...new Set([...takeChangedProjects(), ...unparked])]
+  const ids = everyProject ? all('SELECT id FROM projects WHERE paused=0').map((row) => row.id) : changed
+  for (const id of ids) {
+    const p = getProject(id)
+    if (!p || p.paused || !p.settings.autonomous) continue
     const waiting = all(
       `SELECT id FROM issues WHERE project_id=?
-       AND (status='blocked' OR (status='review' AND review_index<0 AND landing=''))`,
+       AND ((status='blocked' AND landing!='approval') OR (status='review' AND review_index<0 AND landing=''))`,
       p.id,
     )
     for (const { id } of waiting) {
       const issue = getIssue(id)
       const reason =
-        issue.status === 'review' ? 'Was waiting for a review by a human.' : 'Was set to "Waits for a human".'
+        issue.status === 'review'
+          ? 'Waited for a review by a human.'
+          : 'Was on "Waits for a human".'
       settleWithoutHuman(p, issue, reason)
     }
     if (waiting.length + pullBlockersFromBacklog(p) + resolveRings(p)) kick()
@@ -564,9 +659,10 @@ function pullBlockersFromBacklog(p: any) {
   if (!waitingOn.size) return 0
 
   const stuck = all(
-    `SELECT id FROM issues WHERE project_id=? AND status='backlog' AND capped=0
+    `SELECT id FROM issues WHERE project_id=? AND status='backlog' AND capped=0 AND parked_until<=?
      AND number IN (${[...waitingOn.keys()].map(() => '?').join(',')})`,
     p.id,
+    Date.now(),
     ...waitingOn.keys(),
   )
   const deputy = deputyOf(p)
@@ -647,14 +743,40 @@ function applyLanding(p: any, issueId: number, outcome: Outcome) {
       patch.status = 'blocked'
       patch.review_rounds = 0
       needsOwner = true
-      addComment(issueId, 'Watchdog', 'watchdog', 'Landing failed several times. Please decide how to go on.')
+      addComment(
+        issueId,
+        'Watchdog',
+        'watchdog',
+        'Landing failed several times. Please decide how to go on.',
+      )
     }
   }
 
   // 'review' here means: a pull request is open and its checks decide. Everything else ends the wait.
-  if (outcome.status !== 'review') patch.landing = ''
+  // 'approval': held at a gate until the owner approves this commit (gates.ts).
+  if (outcome.status !== 'review') patch.landing = outcome.gate ? 'approval' : ''
+  patch.gate_sha = outcome.gate?.sha ?? ''
   patchIssue(issueId, patch)
-  if (needsOwner) needsHuman(p, issueId, outcome.note)
+  // A gate asks the owner, never the deputy: an agent must not approve its own landing.
+  if (outcome.gate) notifyOwner(p, getIssue(issueId), outcome.note)
+  else if (needsOwner) needsHuman(p, issueId, outcome.note)
+}
+
+/**
+ * The owner approves a landing held at a gate. sha is the commit the owner saw; the approval
+ * holds only while the branch still points there, and lets that commit land once.
+ */
+export async function approveLanding(issueId: number, sha: string, actor: string) {
+  const issue = getIssue(issueId)
+  const p = issue && getProject(issue.project_id)
+  if (!p) throw new Error('not found')
+  if (issue.landing !== 'approval' || !issue.gate_sha) throw new Error('The issue does not wait for an approval.')
+  if (sha !== issue.gate_sha || (await branchTip(p, issue)) !== sha) {
+    throw new Error('The branch has moved since it was held. Please reload and check the new state.')
+  }
+  addComment(issue.id, actor, 'system', `Landing of state ${sha.slice(0, 10)} approved.`)
+  patchIssue(issue.id, { approved_sha: sha, gate_sha: '', landing: '', status: 'done' }, actor)
+  landByHand(issue.id)
 }
 
 /** The work is approved: bring it into the base branch, then close the issue. */
@@ -729,7 +851,12 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
       `Run of ${agent.name} failed: ${failure!.cause}\n\n${hint}`,
     )
   } else if (failure) {
-    addComment(issue.id, 'System', 'system', `Run of ${agent.name} failed: ${res.error ?? 'unknown error'}`)
+    addComment(
+      issue.id,
+      'System',
+      'system',
+      `Run of ${agent.name} failed: ${res.error ?? 'unknown error'}`,
+    )
   }
 
   // Back into the queue it came from: a failed review stays a review.
@@ -808,7 +935,10 @@ async function gateWork(l: Live, p: any, issue: any, res: RunResult): Promise<Ga
     cwd: l.workdir.cwd,
     branch: l.workdir.branch,
     base: await baseBranchOf(p),
-    command: p.settings.precheck.commandAt === 'landing' ? '' : p.settings.precheck.command,
+    command:
+      p.settings.precheck.commandAt === 'landing'
+        ? p.settings.precheck.quickCommand
+        : p.settings.precheck.command,
     timeoutMin: p.settings.precheck.timeoutMin,
     report,
   }).catch((error) => ({
@@ -860,7 +990,10 @@ function sendBackFromPrecheck(p: any, issue: any, agent: any, gate: Gate, patch:
   patchIssue(issue.id, { ...patch, status: 'todo', precheck_fails: fails, assignee_id: agent.id })
 }
 
-/** Checklist items are still open: an interim look by the first reviewer, or straight on. */
+/**
+ * Checklist items are still open. The rules are in partial.ts: wait for a named issue, an interim
+ * look by the first reviewer only the first time, later straight on, and a human when nothing moved.
+ */
 function handInPartial(
   p: any,
   issue: any,
@@ -868,6 +1001,7 @@ function handInPartial(
   agents: any[],
   gate: Gate,
   patch: Record<string, any>,
+  text: string,
 ) {
   const streak = partialStreak(issue.id)
   if (streak >= MAX_PARTIALS) {
@@ -878,6 +1012,39 @@ function handInPartial(
       `${agent.name} handed in ${streak} partial results in a row without finishing the checklist. ${gate.note}`,
     )
   }
+
+  const count = issue.checklist?.length ?? 0
+  const step = partialStep({
+    waitsFor: namedOpenIssues(p, issue, waitingLines(text)),
+    openBefore: issue.checklist_report ? (parseReport(issue.checklist_report, count)?.open ?? null) : null,
+    openNow: parseReport(gate.report, count)?.open ?? [],
+  })
+  if (step.kind === 'wait') {
+    addComment(
+      issue.id,
+      'System',
+      'system',
+      `${gate.note} Now waits for ${issueList(p.key, step.on)} and carries on by itself once that is done.`,
+    )
+    return patchIssue(issue.id, {
+      ...patch,
+      status: 'todo',
+      blocked_by: [...new Set([...issue.blocked_by, ...step.on])],
+    })
+  }
+  if (step.kind === 'stuck') {
+    patchIssue(issue.id, { ...patch, status: 'blocked' })
+    return needsHuman(
+      p,
+      issue.id,
+      `${agent.name} handed in a partial result again without meeting another item, and names no open issue it waits for. ${gate.note}`,
+    )
+  }
+  if (step.kind === 'goOn') {
+    addComment(issue.id, 'System', 'system', `${gate.note} Carry on with the open items, without an interim review.`)
+    return patchIssue(issue.id, { ...patch, status: 'todo' })
+  }
+
   const first = nextReviewer(issue, 0, agent.id, agents)
   if (first < 0) {
     addComment(issue.id, 'System', 'system', `${gate.note} Carry on with the open items.`)
@@ -914,7 +1081,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     }
   }
 
-  // "Blocked, waits for ABC-12": the issue waits for it and goes on by itself, nobody has to decide.
+  // "Blocked, waits for SHOP-12": the issue waits for it and goes on by itself, nobody has to decide.
   if (status === 'blocked') {
     const waitsFor = namedOpenIssues(p, issue, `${summary}\n${patch.handoff}`)
     if (waitsFor.length) {
@@ -935,13 +1102,20 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     if (getIssue(issue.id)?.status !== 'in_progress')
       return void patchIssue(issue.id, { handoff: patch.handoff })
     return gate.result === 'partial'
-      ? handInPartial(p, issue, agent, agents, gate, patch)
+      ? handInPartial(p, issue, agent, agents, gate, patch, `${summary}\n${patch.handoff}`)
       : sendBackFromPrecheck(p, issue, agent, gate, patch)
   }
   if (gate?.note) addComment(issue.id, 'Precheck', 'system', gate.note)
   if (gate) patch.precheck_fails = 0
 
   const isFinished = status === 'done' || status === 'review'
+
+  // An arena entry is held for the jury instead of being reviewed or landed (arena.ts).
+  if (isFinished && isOpenEntry(issue)) {
+    endRun(l, 'done', res, '', '', 'arena')
+    if (getIssue(issue.id)?.status === 'in_progress') holdEntry(issue.id, patch)
+    return
+  }
 
   if (isFinished && (await watchdogRejects(l, p, issue, summary))) {
     status = p.settings.watchdog.llm.onFail
@@ -1070,7 +1244,12 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
     const next = nextReviewer(issue, issue.review_index + 1, issue.maker_id, agents)
     if (next >= 0) {
       const following = agents.find((a) => a.id === issue.reviewers[next])
-      addComment(issue.id, 'System', 'system', `${reviewer.name} approved. On to ${following.name}.`)
+      addComment(
+        issue.id,
+        'System',
+        'system',
+        `${reviewer.name} approved. On to ${following.name}.`,
+      )
       return moveIssue(issue.id, { status: 'review', review_index: next, assignee_id: following.id })
     }
     addComment(issue.id, 'System', 'system', `${reviewer.name} approved.`)
@@ -1087,11 +1266,7 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
         `${rounds} rounds of changes without approval. Please decide how to go on.`,
       )
       moveIssue(issue.id, { status: 'blocked', review_rounds: 0, review_interim: 0, ...backToMaker })
-      return needsHuman(
-        p,
-        issue.id,
-        `${rounds} rounds of changes without approval. Last objection: ${summary}`,
-      )
+      return needsHuman(p, issue.id, `${rounds} rounds of changes without approval. Last objection: ${summary}`)
     }
     return moveIssue(issue.id, {
       status: 'todo',
@@ -1121,6 +1296,169 @@ export function stopIssueRun(issueId: number, reason: string, to: string, author
   return l ? stopRun(l.runId, reason, to, author) : false
 }
 
+// ---------- arena ----------
+
+/** True for an entry whose arena is still undecided. The winner goes its normal way again. */
+function isOpenEntry(issue: any) {
+  if (!issue.arena_of) return false
+  const parent = getIssue(issue.arena_of)
+  return !!parent && parent.arena_winner === 0
+}
+
+const JURY_TRIES = 3
+const JURY_RETRY_MS = 5 * 60_000
+/** Originals whose jury is deciding right now, and when a jury that failed may try again. */
+const judging = new Set<number>()
+const juryFails = new Map<number, { count: number; retryAt: number }>()
+
+/** Moves every open arena of the project one step: judge, close the original, or dissolve. */
+function settleArenas(p: any) {
+  for (const parentId of openArenas(p.id)) {
+    const arena = arenaOf({ id: parentId })
+    if (!arena || arena.winnerId < 0) continue
+    if (arena.winnerId) {
+      const winner = arena.entries.find((entry) => entry.id === arena.winnerId)
+      if (!winner) dissolveArena(parentId)
+      else if (winner.status === 'done') {
+        patchIssue(parentId, { status: 'done' })
+        addComment(parentId, 'Arena', 'system', `Done by the winning entry #${winner.number}.`)
+      }
+      continue
+    }
+    if (arena.phase === 'empty') dissolveArena(parentId)
+    if (arena.phase !== 'judge' || judging.has(parentId)) continue
+    const retryAt = juryFails.get(parentId)?.retryAt ?? 0
+    if (retryAt > Date.now()) {
+      if (Number.isFinite(retryAt)) wakeAt(retryAt)
+      continue
+    }
+    judging.add(parentId)
+    judgeArena(p, arena)
+      .catch((error) => console.error('arena', error))
+      .finally(() => {
+        judging.delete(parentId)
+        kick()
+      })
+  }
+}
+
+/** The provider that judges: the deputy's, otherwise the one of the first entry's agent. */
+function juryProvider(p: any, arena: ArenaView) {
+  const deputy = deputyOf(p)
+  if (deputy && PROVIDERS[deputy.provider]) return deputy.provider
+  return getAgent(arena.entries[0].agentId ?? 0)?.provider ?? ''
+}
+
+async function judgeArena(p: any, arena: ArenaView) {
+  const parent = getIssue(arena.parent.id)
+  const handedIn = arena.entries.filter((entry) => entry.state === 'handed-in')
+  if (!parent || !handedIn.length) return
+  if (handedIn.length === 1)
+    return pickArenaWinner(parent.id, handedIn[0].id, 'The only entry handed in.', 'The arena')
+
+  const entries = await Promise.all(
+    labelled(handedIn).map(async ({ label, entry }) => ({
+      label,
+      entryId: entry.id,
+      costUsd: entry.costUsd,
+      summary:
+        get("SELECT body FROM comments WHERE issue_id=? AND kind='agent' ORDER BY id DESC LIMIT 1", entry.id)
+          ?.body ?? '',
+      files: await issueChanges(p, entry.number).then(
+        (changes) => changes.files,
+        () => [],
+      ),
+    })),
+  )
+  const provider = juryProvider(p, arena)
+  const repo = p.repo_path || join(DATA_DIR, 'workspaces', p.key)
+  const started = Date.now()
+  const verdict = PROVIDERS[provider]
+    ? await oneShot(provider, juryPrompt(parent, entries), existsSync(repo) ? repo : '.')
+    : failed('no provider for the jury')
+  run(
+    `INSERT INTO runs (project_id, issue_id, agent_id, agent_name, provider, kind, status, started_at, ended_at,
+       input_tokens, output_tokens, cost_usd, verdict)
+     VALUES (?,?,NULL,'Jury',?,'review',?,?,?,?,?,?,'arena')`,
+    p.id,
+    parent.id,
+    provider || 'none',
+    verdict.ok ? 'done' : 'failed',
+    started,
+    Date.now(),
+    verdict.usage.input,
+    verdict.usage.output,
+    verdict.usage.cost,
+  )
+
+  const choice = verdict.ok
+    ? parseVerdict(
+        verdict.text,
+        entries.map((entry) => entry.label),
+      )
+    : undefined
+  if (choice) {
+    const winner = entries.find((entry) => entry.label === choice.label)!
+    return pickArenaWinner(parent.id, winner.entryId, choice.reason, 'The jury')
+  }
+
+  const fails = (juryFails.get(parent.id)?.count ?? 0) + 1
+  if (fails < JURY_TRIES) {
+    juryFails.set(parent.id, { count: fails, retryAt: Date.now() + JURY_RETRY_MS })
+    if (fails === 1)
+      addComment(
+        parent.id,
+        'Arena',
+        'system',
+        `The jury reached no decision (${verdict.error || 'answer not readable'}). Next attempt in five minutes.`,
+      )
+    return
+  }
+  // Nothing may stay stuck in an autonomous project: the first entry in line wins, and it says so.
+  if (p.settings.autonomous) {
+    return pickArenaWinner(
+      parent.id,
+      handedIn[0].id,
+      'The jury was not reachable; the first entry handed in was taken.',
+      'The arena',
+    )
+  }
+  juryFails.set(parent.id, { count: fails, retryAt: Infinity })
+  const note = 'The jury could not decide the arena. Please pick an entry in the issue.'
+  addComment(parent.id, 'Arena', 'system', note)
+  notifyOwner(p, parent, note)
+}
+
+/**
+ * Decides an arena, by the jury or by the owner: the other entries stop, the winner goes on to its
+ * reviewers, or lands at once when it has none.
+ */
+export function pickArenaWinner(parentId: number, entryId: number, reason: string, by: string) {
+  const arena = arenaOf({ id: parentId })
+  if (!arena) throw new Error('There is no arena for this issue.')
+  const { winner } = closeArena(parentId, entryId, reason, by)
+  juryFails.delete(parentId)
+  for (const entry of arena.entries)
+    if (entry.id !== entryId)
+      stopIssueRun(entry.id, 'The arena is decided, the run was stopped.', 'done', 'Arena')
+
+  const p = getProject(winner.project_id)
+  const agents = all('SELECT * FROM agents WHERE project_id=?', p.id).map(mapAgent)
+  const first = nextReviewer(winner, 0, winner.maker_id, agents)
+  if (first >= 0) {
+    const reviewer = agents.find((agent) => agent.id === winner.reviewers[first])
+    patchIssue(winner.id, { status: 'review', review_index: first, assignee_id: reviewer.id, landing: '' })
+    addComment(winner.id, 'System', 'system', `Sent to ${reviewer.name} for review.`)
+  } else {
+    // "In progress" is the state a finished issue has while its branch lands.
+    patchIssue(winner.id, { status: 'in_progress', landing: '' })
+    landAndClose(p, getIssue(winner.id))
+      .then(kick)
+      .catch((error) => console.error('landing', error))
+  }
+  kick()
+}
+
 // ---------- scheduler ----------
 
 function tick() {
@@ -1128,22 +1466,34 @@ function tick() {
 }
 
 function scheduleProject(p: any) {
+  // A parked issue comes back at its time without any event, so the scheduler wakes for it.
+  const parked = get(
+    "SELECT MIN(parked_until) AS at FROM issues WHERE project_id=? AND status='backlog' AND parked_until>?",
+    p.id,
+    Date.now(),
+  )?.at
+  if (parked) wakeAt(parked)
+  settleArenas(p)
   const running = [...live.values()].filter((l) => l.projectId === p.id)
   let slots = p.settings.maxConcurrent - running.length
+  if (p.settings.autonomous && slots > 0) pullFromBacklog(p, slots)
 
   // Waiting work: issues to do, and issues queued for a reviewer agent. Only the front of the
   // queue matters; the full issue is loaded when a run actually starts.
   const queue = all(
-    `SELECT id, number, priority, assignee_id, blocked_by, review_index FROM issues
+    `SELECT id, number, priority, assignee_id, blocked_by, review_index, model FROM issues
      WHERE project_id=? AND (status='todo' OR (status='review' AND review_index>=0))
      ORDER BY priority DESC, rank, id LIMIT 500`,
     p.id,
   ).map(mapIssue)
   if (!queue.length) {
-    if (!running.length) openNextGroup(p)
-    setWaiting(p.id, {})
+    if (!running.length && !p.settings.autonomous) openNextGroup(p)
+    setWaiting(p.id, landingReasons(p.id))
     return setNotice(p.id, '')
   }
+  const landingNumbers = new Set(
+    [...landings.values()].filter((l) => l.projectId === p.id).map((l) => l.number),
+  )
 
   const agents = all('SELECT * FROM agents WHERE project_id=? ORDER BY id', p.id).map(mapAgent)
   const startedNow: number[] = []
@@ -1173,7 +1523,7 @@ function scheduleProject(p: any) {
     if (!paces.has(provider)) paces.set(provider, paceOf(provider).pace)
     return paces.get(provider)!
   }
-  if (paced && big.size && agents.some((agent) => paceFor(agent.provider) === 'spend')) {
+  if (paced && big.size && agents.some((agent) => paceFor(providerOrder(p.settings, agent)[0]) === 'spend')) {
     // Same priority: big issues first, while the expiring quota can still pay for them.
     queue.sort((a, b) => priorityOf(b) - priorityOf(a) || Number(big.has(b.id)) - Number(big.has(a.id)))
   }
@@ -1196,18 +1546,26 @@ function scheduleProject(p: any) {
   for (const issue of queue) {
     const blockers = issue.blocked_by.filter((number: number) => openNumbers.has(number))
     if (blockers.length) {
-      wait(issue, 'blocked', `Waits for ${issueList(p.key, blockers)}`)
+      // Approved blockers only need to land: say so, so nobody has to look why it still waits.
+      if (blockers.every((number: number) => landingNumbers.has(number)))
+      wait(issue, 'merge', `Waits for the merge of ${issueList(p.key, blockers)}`)
+      else wait(issue, 'blocked', `Waits for ${issueList(p.key, blockers)}`)
       continue
     }
     const retryAt = retryAfter.get(issue.id) ?? 0
     if (retryAt > Date.now()) {
       wait(issue, 'retry', `Next attempt from ${when(retryAt)}, the last run failed`)
+      wakeAt(retryAt)
       continue
     }
 
     const agent = issue.assignee_id ? agents.find((a) => a.id === issue.assignee_id) : agents.find(isFree)
     if (!agent) {
-      wait(issue, 'agent', issue.assignee_id ? 'The assigned agent no longer exists' : 'No agent free')
+      wait(
+        issue,
+        'agent',
+        issue.assignee_id ? 'The assigned agent no longer exists' : 'No agent free',
+      )
       continue
     }
     if (!agent.enabled) {
@@ -1228,27 +1586,51 @@ function scheduleProject(p: any) {
     }
 
     const kind = issue.review_index >= 0 ? 'review' : 'work'
-    const pick = pickProvider(p, agent, avoidProvider.get(issue.id), kind)
+    const { pick, skipped } = routeProvider(p, agent, avoidProvider.get(issue.id), kind, issue.model)
     if (!pick) {
       exhausted = true
-      wait(issue, 'provider', `No provider available. ${providerProblems(p, agent, kind)}`)
+      wait(issue, 'provider', `No provider available. ${skipped.join(' · ')}`)
       continue
     }
     const full = getIssue(issue.id)
     // The cap may have been lowered since the last run, so it is checked before every start too.
     if (parkIfOverCap(p, full)) continue
     avoidProvider.delete(issue.id)
-    start(p, full, agent, agents, pick)
+    start(p, full, agent, agents, pick, skipped)
     startedNow.push(agent.id)
     startedOn.push(pick.provider)
     slots--
   }
 
-  setWaiting(p.id, reasons)
+  // A resting provider takes runs again on its own, so the scheduler comes back then.
+  if (exhausted)
+    for (const provider of Object.keys(PROVIDERS)) {
+      const rest = restOf(provider)
+      if (rest) wakeAt(rest.until)
+    }
+  setWaiting(p.id, { ...reasons, ...landingReasons(p.id) })
   setNotice(p.id, exhausted ? exhaustedNotice(agents) : '')
 }
 
-export type Reason = { kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider'; text: string }
+/** Approved issues on their way into the base branch: their place in line, or the running test. */
+function landingReasons(projectId: number): Record<number, Reason> {
+  const reasons: Record<number, Reason> = {}
+  let place = 0
+  for (const [issueId, landing] of landings) {
+    if (landing.projectId !== projectId) continue
+    const minutes = Math.floor((Date.now() - landing.since) / 60_000)
+    reasons[issueId] =
+      landing.step === 'testing'
+        ? { kind: 'landing', text: `Approved, landing in progress (merge and test, for ${minutes} min)` }
+        : { kind: 'landing', text: `Approved, waits for landing: place ${++place} in line` }
+  }
+  return reasons
+}
+
+export type Reason = {
+  kind: 'blocked' | 'merge' | 'landing' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'
+  text: string
+}
 
 /** Why each waiting issue of a project does not start, as of the last scheduling pass. */
 export const waiting = new Map<number, Record<number, Reason>>()
@@ -1265,46 +1647,27 @@ const issueList = (key: string, numbers: number[]) => {
   return numbers.length > 3 ? `${shown.join(', ')} and ${numbers.length - 3} more` : shown.join(', ')
 }
 
-/** For each provider the agent may use: why it cannot take the run right now. */
-function providerProblems(p: any, agent: any, kind: 'work' | 'review') {
-  const s = p.settings
-  const mayFall = s.fallbackEnabled && (kind === 'work' || s.fallbackReviews)
-  const chain = [agent.provider, ...(mayFall ? s.fallback : [])]
-  const problems = [...new Set(chain)]
-    .filter((provider) => PROVIDERS[provider])
-    .map((provider) => {
-      const state = providerLeft(p, provider)
-      const label = PROVIDERS[provider].label
-      if (state.resting) return `${label}: ${state.resting.reason} until ${when(state.resting.until)}`
-      if (!state.ready) return `${label}: not set up`
-      const reset = state.quotas.find((quota: any) => quota.resets_at)?.resets_at
-      const stop = provider === agent.provider ? state.budget.stopAtPct : s.fallbackReservePct
-      const stopText = provider === agent.provider ? `stops at ${stop}%` : `reserve ${stop}%`
-      return `${label}: ${Math.round(state.left)}% left, ${stopText}${reset ? `, reset ${when(reset)}` : ''}`
-    })
-  const note = !s.fallbackEnabled
-    ? ' · Fallback is switched off'
-    : kind === 'review' && !s.fallbackReviews
-      ? ' · Reviews do not fall back'
-      : ''
-  return problems.join(' · ') + note
-}
-
 function exhaustedNotice(agents: any[]) {
   const resting = [...new Set(agents.map((a) => a.provider))]
     .map((provider) => ({ provider, rest: restOf(provider) }))
     .filter((r) => r.rest)
-    .map(
-      (r) => `${PROVIDERS[r.provider]?.label ?? r.provider}: ${r.rest!.reason} until ${when(r.rest!.until)}`,
-    )
+    .map((r) => `${PROVIDERS[r.provider]?.label ?? r.provider}: ${r.rest!.reason} until ${when(r.rest!.until)}`)
   if (resting.length) return `Agents are paused. ${resting.join(', ')}.`
   return 'Usage limit reached: no provider is above its threshold. Agents are paused.'
 }
 
-/**
- * Groups are worked one after the other: "1 Refactor" before "2 Polish". When no issue is open
- * any more, the backlog of the next group moves to "todo". Blockers keep the order inside it.
- */
+/** Fill free slots with eligible work. A parked-only group must not stall an autonomous project. */
+function pullFromBacklog(p: any, slots: number) {
+  const issues = all(
+    `SELECT id, number, status, grp, blocked_by, capped, parked_until, review_index FROM issues
+     WHERE project_id=? AND status!='done' ORDER BY priority DESC, rank, id`,
+    p.id,
+  ).map(mapIssue)
+  const pulled = readyBacklog(issues, slots, p.settings.openGroupsInOrder)
+  for (const issue of pulled) patchIssue(issue.id, { status: 'todo' })
+  if (pulled.length) console.log(`${p.key}: pulled from backlog: ${pulled.map((i) => `${p.key}-${i.number}`).join(', ')}`)
+}
+
 function openNextGroup(p: any) {
   if (!p.settings.openGroupsInOrder) return
   const open = get(
@@ -1319,16 +1682,54 @@ function openNextGroup(p: any) {
   if (!next) return
 
   const waiting = all(
-    "SELECT id FROM issues WHERE project_id=? AND status='backlog' AND grp=? AND capped=0",
+    "SELECT id FROM issues WHERE project_id=? AND status='backlog' AND grp=? AND capped=0 AND parked_until<=?",
     p.id,
     next,
+    Date.now(),
   )
+  if (!waiting.length) return
   for (const issue of waiting) patchIssue(issue.id, { status: 'todo' })
   console.log(`${p.key}: nothing left to work on, group "${next}" opened (${waiting.length} issues)`)
   kick()
 }
 
 // ---------- watchdog ----------
+
+// The watchdog wakes when the first rule of a live run can fire, not on a fixed beat. Activity
+// only pushes a stall deadline back, so an early wake-up finds nothing and sets the next one.
+// It never sleeps longer than this, so changed rules take effect without an event.
+const WATCHDOG_MAX_SLEEP_MS = 60_000
+let watchdogTimer: ReturnType<typeof setTimeout> | undefined
+
+function armWatchdog() {
+  clearTimeout(watchdogTimer)
+  watchdogTimer = undefined
+  if (!live.size) return
+  const now = Date.now()
+  let next = now + WATCHDOG_MAX_SLEEP_MS
+  for (const l of live.values()) {
+    const settings = getProject(l.projectId)?.settings.watchdog
+    if (!settings?.enabled || l.stop || l.checking) continue
+    for (const rule of settings.rules) {
+      if (rule.action === 'comment' && l.warned.has(rule.type)) continue
+      const from = rule.type === 'stall' ? l.lastActivity : rule.type === 'runtime' ? l.startedAt : null
+      if (from !== null) next = Math.min(next, from + rule.value * 60_000)
+    }
+  }
+  // A little late rather than early: a deadline met by a millisecond fires on this wake-up.
+  watchdogTimer = setTimeout(
+    () => {
+      try {
+        watchdog()
+      } catch (e) {
+        console.error('watchdog', e)
+      }
+      armWatchdog()
+    },
+    Math.max(1_000, next - now + 50),
+  )
+  watchdogTimer.unref()
+}
 
 function watchdog() {
   const now = Date.now()
@@ -1366,6 +1767,20 @@ const MIN_TICK_GAP_MS = 40
 let pending = false
 let lastTick = 0
 
+// Between kicks the scheduler sleeps until a waiting issue can start on its own (a retry time, a
+// provider's rest running out). Time-based changes nobody announces, like a quota window that
+// reset, are caught by a slow safety pass.
+const SAFETY_PASS_MS = 60_000
+let wakeTimer: ReturnType<typeof setTimeout> | undefined
+let nextWake = Infinity
+const wakeAt = (at: number) => void (nextWake = Math.min(nextWake, at))
+
+function armWake() {
+  clearTimeout(wakeTimer)
+  wakeTimer = setTimeout(kick, Math.max(MIN_TICK_GAP_MS, nextWake - Date.now()))
+  wakeTimer.unref()
+}
+
 export function kick() {
   if (pending) return
   pending = true
@@ -1373,26 +1788,28 @@ export function kick() {
   setTimeout(() => {
     pending = false
     lastTick = Date.now()
+    nextWake = lastTick + SAFETY_PASS_MS
     try {
       tick()
     } catch (e) {
       console.error('tick', e)
+    } finally {
+      armWake()
+      armWatchdog()
     }
   }, wait)
 }
 
+/** Every this many sweeps, all autonomous projects are swept, changed or not. */
+const FULL_SWEEP_EVERY = 20
+
 export function startEngine() {
-  setInterval(kick, 5_000).unref()
+  whenProviderWakes(kick)
+  onLandingsChange(() => kick())
+  let sweeps = 0
   setInterval(() => {
     try {
-      watchdog()
-    } catch (e) {
-      console.error('watchdog', e)
-    }
-  }, 10_000).unref()
-  setInterval(() => {
-    try {
-      sweepWaitingIssues()
+      sweepWaitingIssues(sweeps++ % FULL_SWEEP_EVERY === 0)
     } catch (e) {
       console.error('sweep', e)
     }

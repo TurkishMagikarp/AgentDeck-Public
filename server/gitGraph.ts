@@ -1,18 +1,24 @@
 // The git workflow of a project as data for a graph: the base branch with its newest commits,
 // and one lane per issue branch with the point it left the base, its own commits, whether it
 // has landed, who made it and which agent is on it right now.
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { all } from './db.ts'
 import { DATA_DIR } from './db.ts'
+import { gitIn } from './sandbox.ts'
+import { Lru } from './lru.ts'
 
-const execFileAsync = promisify(execFile)
 
 const BASE_COMMITS = 25
 const BRANCH_COMMITS = 15
 const MAX_BRANCHES = 40
+
+// Git answers by commit id do not change, so they are cached by commit id: the base's history by
+// the base's tip, a branch's history and distance by both tips. A graph request then spawns git
+// only to read the refs, not once or twice per branch.
+type BaseInfo = { baseCommits: Commit[]; mainLine: Map<string, Commit>; mergedBy: Map<string, string> }
+const baseCache = new Lru<BaseInfo>({ maxEntries: 50 })
+const branchCache = new Lru<{ history: Commit[]; ahead: number }>({ maxEntries: 5000 })
 
 type Project = {
   id: number
@@ -24,7 +30,7 @@ type Project = {
 export type Commit = { hash: string; at: number; subject: string }
 
 async function git(repo: string, ...args: string[]) {
-  const { stdout } = await execFileAsync('git', ['-C', repo, ...args], { maxBuffer: 32 * 1024 * 1024 })
+  const { stdout } = await gitIn(repo, args, { maxBuffer: 32 * 1024 * 1024 })
   return stdout.trim()
 }
 
@@ -64,13 +70,17 @@ export async function gitGraph(project: Project) {
   }
 
   const base = project.settings.landing.baseBranch || (await git(repo, 'symbolic-ref', '--short', 'HEAD'))
-  const baseCommits = parseLog(await git(repo, 'log', '--first-parent', LOG_FORMAT, `-${BASE_COMMITS}`, base))
-
-  const refs = (
-    await git(repo, 'for-each-ref', '--format=%(refname:short)', `refs/heads/agentdeck/${project.key}-*`)
-  )
+  const [baseSha, refLines] = await Promise.all([
+    git(repo, 'rev-parse', '--verify', `${base}^{commit}`),
+    git(repo, 'for-each-ref', '--format=%(refname:short)%09%(objectname)', `refs/heads/agentdeck/${project.key}-*`),
+  ])
+  const refs = refLines
     .split('\n')
     .filter(Boolean)
+    .map((line) => {
+      const [branch, sha] = line.split('\t')
+      return { branch, sha }
+    })
 
   const issues = new Map(
     all(
@@ -86,37 +96,44 @@ export async function gitGraph(project: Project) {
   )
   const checkouts = await agentCheckouts(project)
 
-  // The base's own line of history. A branch's commits are the ones above the first commit that
-  // lies on this line; that commit is where it forked. This also works after a merge has landed
-  // the branch, when "base..branch" would be empty.
-  const mainLine = new Map(
-    parseLog(await git(repo, 'log', '--first-parent', LOG_FORMAT, '-400', base)).map((commit) => [
-      commit.hash,
-      commit,
-    ]),
-  )
-
-  // Merge commits on the base line, by the branch tip they brought in (their second parent).
-  const mergedBy = new Map<string, string>()
-  const merges = await git(repo, 'log', '--first-parent', '--merges', '--format=%h %p', '-400', base)
-  for (const line of merges.split('\n').filter(Boolean)) {
-    const [merge, , brought] = line.split(' ')
-    if (brought) mergedBy.set(brought.slice(0, 7), merge)
-  }
+  const { baseCommits, mainLine, mergedBy } = await baseCache.remember(`${repo}\0${baseSha}`, async () => {
+    const [recent, line, merges] = await Promise.all([
+      git(repo, 'log', '--first-parent', LOG_FORMAT, `-${BASE_COMMITS}`, baseSha),
+      // The base's own line of history. A branch's commits are the ones above the first commit
+      // that lies on this line; that commit is where it forked. This also works after a merge has
+      // landed the branch, when "base..branch" would be empty.
+      git(repo, 'log', '--first-parent', LOG_FORMAT, '-400', baseSha),
+      // Merge commits on the base line, by the branch tip they brought in (their second parent).
+      git(repo, 'log', '--first-parent', '--merges', '--format=%h %p', '-400', baseSha),
+    ])
+    const mergedBy = new Map<string, string>()
+    for (const entry of merges.split('\n').filter(Boolean)) {
+      const [merge, , brought] = entry.split(' ')
+      if (brought) mergedBy.set(brought.slice(0, 7), merge)
+    }
+    return {
+      baseCommits: parseLog(recent),
+      mainLine: new Map(parseLog(line).map((commit) => [commit.hash, commit])),
+      mergedBy,
+    }
+  })
 
   const branches = await Promise.all(
-    refs.map(async (branch) => {
+    refs.map(async ({ branch, sha }) => {
       const number = Number(branch.split('-').pop())
       const issue = issues.get(number)
-      const history = parseLog(
-        await git(repo, 'log', '--first-parent', LOG_FORMAT, `-${BRANCH_COMMITS + 1}`, branch),
-      )
+      const { history, ahead } = await branchCache.remember(`${repo}\0${baseSha}\0${sha}`, async () => {
+        const [log, count] = await Promise.all([
+          git(repo, 'log', '--first-parent', LOG_FORMAT, `-${BRANCH_COMMITS + 1}`, sha),
+          attempt(git(repo, 'rev-list', '--count', `${baseSha}..${sha}`), '0'),
+        ])
+        return { history: parseLog(log), ahead: Number(count) }
+      })
       const forkIndex = history.findIndex((commit) => mainLine.has(commit.hash))
       const own = (
         forkIndex === -1 ? history.slice(0, BRANCH_COMMITS) : history.slice(0, forkIndex)
       ).reverse()
       const fork = forkIndex === -1 ? { hash: '', at: 0 } : history[forkIndex]
-      const ahead = Number(await attempt(git(repo, 'rev-list', '--count', `${base}..${branch}`), '0'))
       const working = running.filter((run) => run.number === number)
       const tip = own.at(-1)?.hash.slice(0, 7) ?? ''
       return {
@@ -157,7 +174,7 @@ export async function gitGraph(project: Project) {
   return {
     repo: true as const,
     base,
-    baseCommits: baseCommits.reverse(),
+    baseCommits: [...baseCommits].reverse(),
     branches: branches.slice(0, MAX_BRANCHES),
     agents,
   }

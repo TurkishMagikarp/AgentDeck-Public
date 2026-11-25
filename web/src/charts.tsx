@@ -9,7 +9,7 @@ export type Series = { name: string; color: string; values: (number | null)[] }
 
 const WIDTH = 720
 const HEIGHT = 220
-const PAD = { top: 12, right: 12, bottom: 24, left: 44 }
+const PAD = { top: 12, right: 12, bottom: 26, left: 64 }
 const PLOT_WIDTH = WIDTH - PAD.left - PAD.right
 const PLOT_HEIGHT = HEIGHT - PAD.top - PAD.bottom
 const MAX_BAR = 24
@@ -24,12 +24,12 @@ function niceMax(value: number) {
 }
 
 export function compact(value: number) {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)}M`
-  if (value >= 10_000) return `${Math.round(value / 1000)}k`
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)} M`
+  if (value >= 10_000) return `${Math.round(value / 1000)} k`
   return value.toLocaleString('en-US')
 }
 
-const shortDay = (day: string) => `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}`
+const shortDay = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}.`
 
 /** Axis, grid, day labels, the hover band and the tooltip. The marks come in as children. */
 function Frame(props: {
@@ -313,4 +313,36 @@ export function Lines(props: {
       </Frame>
     </>
   )
+}
+
+/**
+ * The charts draw in a fixed 720-unit box that scales with the page, so their labels shrink with it
+ * (5 px on a phone). This keeps every tick label at about 11 px on screen: each chart svg reports its
+ * width, and the label size in drawing units follows from it.
+ */
+export function keepTicksReadable() {
+  const size = (svg: SVGSVGElement, width: number) =>
+    svg.style.setProperty('--tick', `${Math.min(17, Math.max(12, (11 * WIDTH) / Math.max(width, 1)))}px`)
+  const resizer = new ResizeObserver((entries) => {
+    for (const entry of entries) size(entry.target as SVGSVGElement, entry.contentRect.width)
+  })
+  const watch = (root: ParentNode) =>
+    root.querySelectorAll<SVGSVGElement>('.chart svg').forEach((svg) => {
+      if (svg.dataset.ticks) return
+      svg.dataset.ticks = '1'
+      // Size it right away: the observer only reports on the next rendered frame.
+      size(svg, svg.getBoundingClientRect().width)
+      resizer.observe(svg)
+    })
+  // One look per 50 ms, however many nodes changed: a long list must not make every change cost a scan.
+  let scheduled = false
+  new MutationObserver(() => {
+    if (scheduled) return
+    scheduled = true
+    setTimeout(() => {
+      scheduled = false
+      watch(document)
+    }, 50)
+  }).observe(document.body, { childList: true, subtree: true })
+  watch(document)
 }

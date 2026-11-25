@@ -8,6 +8,7 @@ import { listShots, shotsDir } from './preview.ts'
 import type { FileChange } from './diff.ts'
 import type { Workdir } from './workspace.ts'
 import { TICKET_FORMAT } from './ticket.ts'
+import { SANDBOX } from './sandbox.ts'
 
 export type RunKind = 'work' | 'review'
 
@@ -22,6 +23,9 @@ Write all prose terse, like a caveman: drop articles, filler, pleasantries, hedg
 Keep exact and unchanged: code, commands, paths, identifiers, error messages, numbers, and the required blocks and status values.
 Use full sentences only for security warnings and irreversible actions.`
 
+const INSTALL = `- \`node "$AGENTDECK_CLI" install <package> [...]\` installs Debian packages (apt names, e.g. \`ffmpeg libsdl2-dev\`). You have no sudo; this is how system packages get in. Python and Node packages need no root: use uv, venv or npm.
+`
+
 const AGENT_CLI = `## Board commands
 You can read and write the shared board from the shell:
 - \`node "$AGENTDECK_CLI" list [--status todo]\` lists issues.
@@ -30,7 +34,7 @@ You can read and write the shared board from the shell:
 - \`node "$AGENTDECK_CLI" unblock <number> <blocker>\` removes a dependency: issue <number> no longer waits for <blocker>.
 - \`node "$AGENTDECK_CLI" learn "text"\` records a lesson for every later run of this project: a build or test command, a pitfall, a tool you had to install. One sentence, only what is not obvious from the repo.
 - \`node "$AGENTDECK_CLI" create --title "..." --description "..." [--assignee "Agent name"] [--status backlog|todo] [--blocked-by 12,13] [--reviewers "Name, Name"] [--group "..."] [--checklist "item | item"]\` files a new issue. \`--checklist\` lists what "done" means, each item checkable with a file or a command result. Give the issues it waits for with \`--blocked-by\`. If a similar open issue exists, the command names it and refuses; add \`--force yes\` only when yours is really different.
-A bug or doubt outside your issue becomes a new issue, it is not fixed on the side.
+${SANDBOX ? INSTALL : ''}A bug or doubt outside your issue becomes a new issue, it is not fixed on the side.
 If your issue cannot go on until another issue is done, name that issue as KEY-number in your summary and end with status "blocked": your issue then waits for it and goes on by itself.
 
 ${TICKET_FORMAT}`

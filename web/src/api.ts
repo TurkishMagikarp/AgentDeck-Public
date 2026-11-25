@@ -1,18 +1,30 @@
 import { createSignal } from 'solid-js'
+import { askConfirmToken } from './Confirm'
 
 /** True once the server answered "unauthorized": the app then shows the login form. */
 export const [needsLogin, setNeedsLogin] = createSignal(false)
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch('/api' + path, {
-    method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const data = await res.json().catch(() => ({}))
-  if (res.status === 401 && path !== '/login') setNeedsLogin(true)
-  if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
-  return data
+  let sent = body
+  for (;;) {
+    const res = await fetch('/api' + path, {
+      method,
+      headers: sent === undefined ? undefined : { 'content-type': 'application/json' },
+      body: sent === undefined ? undefined : JSON.stringify(sent),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (res.status === 401 && path !== '/login') setNeedsLogin(true)
+    // A change to a command the server runs needs the token again: ask, then send the same request
+    // with it. A wrong token comes back the same way, with the reason in the message.
+    if (res.status === 403 && data.confirm && sent && typeof sent === 'object') {
+      const token = await askConfirmToken(data.error ?? '', data.fields ?? [])
+      if (!token) throw new Error('Not saved: confirmation canceled.')
+      sent = { ...sent, confirmToken: token }
+      continue
+    }
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`)
+    return data
+  }
 }
 
 export const api = {

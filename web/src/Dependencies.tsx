@@ -142,11 +142,32 @@ export function Dependencies() {
           <h2>Dependencies</h2>
           <p class="muted">
             Blockers on the left, what waits on them on the right. Whoever holds up others starts earlier: it
-            gets the highest priority of the waiting issues, one level more from {BOOST_FROM} held up, two
+            gets the highest priority of the waiting issues, one level more from {BOOST_FROM} held up, two{' '}
             from {BOOST_FROM * 2}.
           </p>
         </div>
       </div>
+
+      <Show when={layout().nodes.length}>
+        <ul class="dependency-summary" aria-label="Overview of the dependencies">
+          <li classList={{ zero: String(layout().nodes.length) === '0' }}>
+            <strong>{layout().nodes.length}</strong>
+            <span>issues in the graph</span>
+          </li>
+          <li classList={{ zero: String(layout().nodes.filter((node) => node.layer === 0 && node.issue.status !== 'done').length) === '0' }}>
+            <strong>{layout().nodes.filter((node) => node.layer === 0 && node.issue.status !== 'done').length}</strong>
+            <span>blockers without a predecessor: this is where it starts</span>
+          </li>
+          <li classList={{ zero: String(layout().nodes.filter((node) => node.layer > 0).length) === '0' }}>
+            <strong>{layout().nodes.filter((node) => node.layer > 0).length}</strong>
+            <span>wait for others</span>
+          </li>
+          <li classList={{ zero: String(Math.max(...layout().nodes.map((node) => node.layer)) + 1) === '0' }}>
+            <strong>{Math.max(...layout().nodes.map((node) => node.layer)) + 1}</strong>
+            <span>levels: the longest chain</span>
+          </li>
+        </ul>
+      </Show>
 
       <div class="dependency-options">
         <Toggle
@@ -172,7 +193,9 @@ export function Dependencies() {
 
       <Show
         when={layout().nodes.length}
-        fallback={<p class="muted">No open dependencies. They come from “Waiting on” in an issue.</p>}
+        fallback={
+          <p class="muted">No open dependencies. They are created through "Waiting on" in the issue.</p>
+        }
       >
         <div class="dependency-graph">
           <div

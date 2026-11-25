@@ -123,6 +123,7 @@ function addColumn(table: string, column: string, definition: string) {
 
 addColumn('agents', 'mcp_ids', "TEXT NOT NULL DEFAULT '[]'")
 addColumn('agents', 'effort', "TEXT NOT NULL DEFAULT ''")
+addColumn('agents', 'provider_override', 'INTEGER NOT NULL DEFAULT 0')
 
 // Review chain: reviewers are agent ids in order. review_index is -1 while the maker works,
 // otherwise the position of the reviewer whose turn it is.
@@ -160,6 +161,8 @@ addColumn('issues', 'cap_factor', 'INTEGER NOT NULL DEFAULT 1')
 addColumn('issues', 'capped', 'INTEGER NOT NULL DEFAULT 0')
 // How often a backlog issue that blocks open work was put back into the queue (engine.ts).
 addColumn('issues', 'blocker_returns', 'INTEGER NOT NULL DEFAULT 0')
+// Until when a parked issue rests in the backlog before the scheduler pulls it again (engine.ts).
+addColumn('issues', 'parked_until', 'INTEGER NOT NULL DEFAULT 0')
 db.exec(`
 -- What changed on an issue, by whom: the history tab of the issue page.
 CREATE TABLE IF NOT EXISTS issue_events (
@@ -180,6 +183,12 @@ addColumn('runs', 'verdict', "TEXT NOT NULL DEFAULT ''")
 // Landing: '' or 'waiting' while a pull request is open and its checks run.
 addColumn('issues', 'landing', "TEXT NOT NULL DEFAULT ''")
 addColumn('issues', 'pr_number', 'INTEGER')
+// The commit a pull request was opened for: only that commit is merged (landing.ts).
+addColumn('issues', 'pr_sha', "TEXT NOT NULL DEFAULT ''")
+// Approval gates (gates.ts): the commit held for the owner while landing='approval', and the
+// commit the owner approved. An approval lets exactly that commit land once.
+addColumn('issues', 'gate_sha', "TEXT NOT NULL DEFAULT ''")
+addColumn('issues', 'approved_sha', "TEXT NOT NULL DEFAULT ''")
 // 1 once a blocked issue was handed to the project's escalation agent, so it is done only once.
 addColumn('issues', 'escalated', 'INTEGER NOT NULL DEFAULT 0')
 // When the issue reached "done". Empty again if it is reopened.
@@ -195,6 +204,12 @@ addColumn('issues', 'review_from', 'INTEGER NOT NULL DEFAULT 0')
 addColumn('issues', 'review_interim', 'INTEGER NOT NULL DEFAULT 0')
 // Failed server checks in a row before a review (precheck.ts).
 addColumn('issues', 'precheck_fails', 'INTEGER NOT NULL DEFAULT 0')
+// Arena (arena.ts): an entry names the issue it competes for; the original names the entry that
+// won, or -1 when the arena ended without one.
+addColumn('issues', 'arena_of', 'INTEGER NOT NULL DEFAULT 0')
+addColumn('issues', 'arena_winner', 'INTEGER NOT NULL DEFAULT 0')
+// Where an issue came from when it was not filed here: the URL of the GitHub issue (intake.ts).
+addColumn('issues', 'source', "TEXT NOT NULL DEFAULT ''")
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS quota_history (
@@ -235,9 +250,45 @@ CREATE TABLE IF NOT EXISTS routines (
 // A planner's routine waits until nothing in the project is open any more.
 addColumn('routines', 'only_when_idle', 'INTEGER NOT NULL DEFAULT 0')
 
+db.exec(`
+-- People with their own login and role (users.ts, roles.ts). Only hashes of their tokens.
+CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  role TEXT NOT NULL CHECK (role IN ('viewer','operator','admin')),
+  token_hash TEXT NOT NULL UNIQUE,
+  session_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER
+);
+-- Who changed the owner's settings (audit.ts). detail is JSON and never holds a secret value.
+CREATE TABLE IF NOT EXISTS audit_log (
+  id INTEGER PRIMARY KEY,
+  at INTEGER NOT NULL,
+  actor TEXT NOT NULL,
+  action TEXT NOT NULL,
+  target TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS audit_log_at ON audit_log(at);
+-- The replay of a run (runEvents.ts): prompt, tool calls, results, messages and what changed.
+-- payload is redacted and capped; size is the length before the cut.
+CREATE TABLE IF NOT EXISTS run_events (
+  run_id INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '',
+  payload TEXT NOT NULL,
+  size INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (run_id, seq)
+);
+
+`)
+
 /**
  * Clean-up that is only right when the server itself starts: nothing can be running then.
- * It must never happen just because some other process opened the database. On 21 Nov 2026 a
+ * It must never happen just because some other process opened the database. Once a
  * check script imported this module while agents were working, and their live runs were marked
  * as failed.
  */
