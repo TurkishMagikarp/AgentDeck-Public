@@ -4,9 +4,9 @@
 OpenCode. Watch runs live, inspect diffs, and choose whether finished work stays in review,
 merges locally, or opens as a pull request.
 
-[Try the demo](#try-the-demo) · [Self-host](#quick-start) · [Star on GitHub](https://github.com/TurkishMagikarp/Agentdeck-Public-)
+[Try the demo](#try-the-demo) · [Self-host](#quick-start) · [Star on GitHub](https://github.com/TurkishMagikarp/AgentDeck-Public)
 
-![AgentDeck board with issues across backlog, to do, review, and done](docs/board.png)
+![AgentDeck demo: mock agents pick up issues on the Demo shop board and move them through review to done](docs/demo.gif)
 
 The board runs on Node.js and SQLite. The demo needs no API key or agent CLI; real runs use your
 chosen providers.
@@ -16,7 +16,7 @@ chosen providers.
 With [Node.js 24+](https://nodejs.org/) and Git installed:
 
 ```sh
-git clone https://github.com/TurkishMagikarp/Agentdeck-Public-.git agentdeck
+git clone https://github.com/TurkishMagikarp/AgentDeck-Public.git agentdeck
 cd agentdeck
 npm ci
 npm run demo
