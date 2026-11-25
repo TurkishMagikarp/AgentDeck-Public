@@ -85,7 +85,7 @@ console.log(`Board response: ${(boardBytes / 1024).toFixed(0)} KB uncompressed\n
 await measure('Read board (warm cache)', 2000, 50, () => api('GET', `/projects/${projectId}/board`))
 await measure('Read issue details', 2000, 50, (i) => api('GET', `/issues/${(i % ISSUES) + 1}`))
 await measure('Create issue', 1000, 20, (i) =>
-  api('POST', `/projects/${projectId}/issues`, { title: `New ${i}` }),
+  api('POST', `/projects/${projectId}/issues`, { title: `Neu ${i}` }),
 )
 await measure('Write comment', 2000, 20, (i) =>
   api('POST', `/issues/${(i % ISSUES) + 1}/comments`, { body: 'Comment' }),
@@ -102,7 +102,9 @@ const abort = new AbortController()
 for (let i = 0; i < 100; i++) listen(projectId, counter, abort.signal)
 
 t = performance.now()
-await measure('Move issue to "To Do"', BATCH, 20, (i) => api('PATCH', `/issues/${i + 1}`, { status: 'todo' }))
+await measure('Move issue to "To Do"', BATCH, 20, (i) =>
+  api('PATCH', `/issues/${i + 1}`, { status: 'todo' }),
+)
 
 let peakRunning = 0
 let slowestPoll = 0

@@ -55,7 +55,7 @@ function askCodex(requests: Request[]): Promise<any[]> {
           continue
         }
         if (message.id !== nextId - 1) continue
-        if (message.error) return finish(new Error(message.error.message ?? 'codex app-server Fehler'))
+        if (message.error) return finish(new Error(message.error.message ?? 'codex app-server error'))
         if (message.id === 1) send({ method: 'initialized' })
         else results.push(message.result)
         sendNext()
@@ -84,7 +84,8 @@ export async function readCodexUsage(now = Date.now(), afterReset = false) {
 
   if (afterReset) return
   const enabled = resetsEnabled(PROVIDER)
-  if (!shouldRedeem({ enabled, available, windows: limitingWindows(PROVIDER, now), now })) return
+  if (!shouldRedeem({ enabled, available, windows: limitingWindows(PROVIDER, now).filter((w) => !w.stale), now }))
+    return
   const [answer] = await askCodex([
     { method: 'account/rateLimitResetCredit/consume', params: { idempotencyKey: randomUUID() } },
   ])
@@ -92,8 +93,9 @@ export async function readCodexUsage(now = Date.now(), afterReset = false) {
   if (answer?.outcome === 'reset') await readCodexUsage(Date.now(), true)
 }
 
-export function startCodexUsage() {
-  const read = () => readCodexUsage().catch(() => {})
+/** `onRead` runs after each reading: new quota numbers can let waiting issues start. */
+export function startCodexUsage(onRead: () => void = () => {}) {
+  const read = () => readCodexUsage().then(onRead, () => {})
   read()
   setInterval(read, EVERY).unref()
 }

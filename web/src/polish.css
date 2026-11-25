@@ -1,0 +1,1070 @@
+/* Finishing layer, loaded last: motion, depth and a calmer sidebar. Tokens only, no new colours. */
+
+/* ---------- views arrive instead of popping in ---------- */
+main > .board,
+main > .page,
+main > .dashboard,
+main > section {
+  animation: view-in 0.22s ease-out both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* ---------- board ---------- */
+.column {
+  position: relative;
+  overflow: hidden;
+}
+
+/* A hairline in the colour of the status heads each column: the board reads at a glance. */
+.column::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: var(--column-tone, transparent);
+  opacity: 0.8;
+}
+
+.column[data-status='backlog'] {
+  --column-tone: var(--muted);
+}
+.column[data-status='todo'] {
+  --column-tone: var(--accent);
+}
+.column[data-status='in_progress'] {
+  --column-tone: var(--live);
+}
+.column[data-status='review'] {
+  --column-tone: var(--series-5);
+}
+.column[data-status='blocked'] {
+  --column-tone: var(--bad);
+}
+.column[data-status='done'] {
+  --column-tone: var(--good);
+}
+
+.card {
+  transition:
+    border-color 0.15s,
+    transform 0.15s,
+    box-shadow 0.15s;
+}
+
+.card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.22);
+}
+
+.card:active {
+  transform: scale(0.99);
+}
+
+/* Cards of a column slide in one after another the first time the board shows. */
+.cards > .card {
+  animation: card-in 0.3s ease-out both;
+}
+.cards > .card:nth-child(2) {
+  animation-delay: 0.04s;
+}
+.cards > .card:nth-child(3) {
+  animation-delay: 0.08s;
+}
+.cards > .card:nth-child(4) {
+  animation-delay: 0.12s;
+}
+.cards > .card:nth-child(n + 5) {
+  animation-delay: 0.16s;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ---------- top bar ---------- */
+.tabs button {
+  position: relative;
+  transition:
+    color 0.15s,
+    background-color 0.15s;
+}
+
+.tabs button.active::after {
+  content: '';
+  position: absolute;
+  inset: auto 10px -7px 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ---------- sidebar ---------- */
+.sidebar {
+  gap: 4px;
+}
+
+.sidebar .home-link {
+  font-size: 13.5px;
+}
+
+.sidebar .home-link .project-name {
+  min-width: 0;
+}
+
+.sidebar .sidebar-link {
+  font-size: 13px;
+  padding: 6px 10px;
+  min-height: 32px;
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.sidebar .sidebar-link .muted {
+  display: block;
+  font-size: 11.5px;
+}
+
+.sidebar li button,
+.sidebar .home-link,
+.card,
+.palette-results li,
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.modal:focus {
+  outline: none;
+}
+
+/* ---------- reduced motion: everything above is decoration ---------- */
+@media (prefers-reduced-motion: reduce) {
+  main > .board,
+  main > .page,
+  main > .dashboard,
+  main > section,
+  .cards > .card {
+    animation: none;
+  }
+  .card,
+  .card:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
+/* ---------- agent tiles: what each one does now, and how its week went ---------- */
+.tile-now {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--live);
+}
+
+.tile-now-line {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.tile-week {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- statistics: the same tiles and cards as Mission Control ---------- */
+.stat {
+  position: relative;
+  overflow: hidden;
+  padding-left: 16px;
+}
+
+.stat::before {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.stat:nth-child(2)::before {
+  background: var(--good);
+}
+.stat:nth-child(5)::before {
+  background: var(--series-5);
+}
+.stat:nth-child(6)::before {
+  background: var(--warn);
+}
+
+.stat strong {
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.chart-grid > * {
+  transition: border-color 0.15s;
+}
+
+.chart-grid > *:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.page-head h2 {
+  letter-spacing: -0.03em;
+}
+
+/* ---------- git: the branch graph as a card, dots that answer the pointer ---------- */
+.git-graph {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.git-dot,
+.git-base-dot {
+  transition:
+    transform 0.15s,
+    filter 0.15s;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.git-dot:hover,
+.git-base-dot:hover {
+  transform: scale(1.35);
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+
+.git-agents .key {
+  border-radius: 3px;
+}
+
+.git-label {
+  transition: background-color 0.15s;
+}
+
+.git-label:hover {
+  background: var(--surface-2);
+}
+
+/* ---------- journal: a timeline instead of a list ---------- */
+.journal-day ul {
+  position: relative;
+  padding-left: 14px;
+}
+
+.journal-day ul::before {
+  content: '';
+  position: absolute;
+  inset: 4px auto 4px 3px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border);
+}
+
+.journal-line {
+  position: relative;
+  border-radius: var(--radius-small);
+  padding-inline: 8px;
+  transition: background-color 0.12s;
+}
+
+.journal-line::before {
+  content: '';
+  position: absolute;
+  left: -15px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--muted);
+}
+
+.journal-line:hover {
+  background: var(--surface-2);
+}
+
+.journal-day h3 {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 0;
+  background: var(--bg);
+}
+
+/* ---------- dependencies: nodes that lift, edges that read ---------- */
+.dependency-node {
+  transition:
+    transform 0.15s,
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.dependency-node:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.22);
+}
+
+.dependency-graph {
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .git-dot,
+  .git-base-dot,
+  .dependency-node,
+  .journal-line {
+    transition: none;
+  }
+  .git-dot:hover,
+  .git-base-dot:hover,
+  .dependency-node:hover {
+    transform: none;
+  }
+}
+
+/* ---------- journal search ---------- */
+.journal-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.journal-search:focus-within {
+  border-color: var(--accent);
+}
+
+.journal-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.journal-search input:focus-visible {
+  outline: none;
+}
+
+/* ---------- dependencies: the numbers before the graph ---------- */
+.dependency-summary,
+.git-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.dependency-summary li,
+.git-summary li {
+  display: grid;
+  gap: 2px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+}
+
+.dependency-summary strong,
+.git-summary strong {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.dependency-summary span,
+.git-summary span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* ---------- settings: every block is one card, with a heading that reads as a heading ---------- */
+.page.narrow .section {
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: border-color 0.15s;
+}
+
+.page.narrow .section:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+}
+
+.page.narrow .section-head h3 {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.git-table {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+tr.git-row {
+  cursor: pointer;
+}
+
+tr.git-row:hover > *,
+tr.git-row:focus-visible > * {
+  background: var(--surface-2);
+}
+
+table.scores tbody th .mono {
+  color: var(--muted);
+}
+
+/* ---------- settings: jump links over the long page ---------- */
+.section-rail {
+  flex: none;
+  box-sizing: border-box;
+  min-height: 52px;
+  align-items: center;
+  position: sticky;
+  top: -24px;
+  z-index: 3;
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin: -8px -4px 0;
+  padding: 10px 4px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(8px);
+  scrollbar-width: none;
+}
+
+.section-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.section-rail button {
+  flex: none;
+  min-height: 32px;
+  background: none;
+  border-color: var(--border);
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.section-rail button.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--text);
+}
+
+.page.narrow .section {
+  scroll-margin-top: 64px;
+}
+
+/* ---------- fixes from the independent UI audit ---------- */
+
+/* Tabs take the room that is left and scroll inside it; the toolbar next to them stays whole. */
+.topbar .tabs {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+@media (max-width: 1500px) {
+  .topbar > .search-button .search-label,
+  .topbar > .search-button kbd {
+    display: none;
+  }
+}
+
+/* Mission Control tools, the "More" menu and the small texts the audit measured under 12px. */
+.more-menu {
+  display: grid;
+  gap: 6px;
+  padding: 4px 18px 18px;
+}
+
+.more-menu button {
+  min-height: 44px;
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.avatar {
+  font-size: 11px;
+}
+
+.avatar.large {
+  font-size: 13px;
+}
+
+.avatar.anthropic {
+  background: #b0562d;
+}
+
+.avatar.openai {
+  background: #167a5e;
+}
+
+.trend-day,
+.trend-runs {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.journal-kind,
+.sidebar .sidebar-link .muted {
+  font-size: 12px;
+}
+
+.dependency-top {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.page.narrow {
+  margin-inline: auto;
+  width: 100%;
+}
+
+/* Fingers need 44 px; mouse users keep the compact controls. */
+@media (pointer: coarse), (max-width: 760px) {
+  button,
+  select,
+  input:not([type='checkbox']):not([type='radio']),
+  .tabs button {
+    min-height: 44px;
+  }
+  button.icon-button {
+    min-width: 44px;
+  }
+  .row-actions button,
+  .inbox-all {
+    min-height: 44px;
+  }
+}
+
+/* Below about 1280 px the toolbar and the tabs cannot share a row: the tabs get their own. */
+@media (max-width: 1280px) and (min-width: 761px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .topbar .tabs {
+    order: 10;
+    flex: 1 0 100%;
+  }
+  .topbar .spacer {
+    flex: 1;
+  }
+}
+
+.chart .tick {
+  font-size: var(--tick, 12px);
+}
+
+/* A wide child (a long placeholder, a code block) must not stretch the page's only column. */
+.page {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.page > * {
+  min-width: 0;
+}
+
+/* Fields in a row share the room instead of each insisting on its natural width. */
+.row > *,
+.form,
+.field {
+  min-width: 0;
+}
+
+.field input,
+.field select,
+.field textarea {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* A one-column grid is "auto" wide by default and grows to its widest unbreakable child. */
+.form,
+.section,
+.field {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Long switch labels wrap inside their block instead of running off the page. */
+.page .toggle {
+  max-width: 100%;
+}
+
+.page .toggle span {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* Tables directly on a page scroll inside themselves; rule rows wrap on narrow screens. */
+.page > table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.rules li {
+  flex-wrap: wrap;
+}
+
+
+/* ---------- design critique, round one: hierarchy and calmer type ---------- */
+
+/* Mission Control: the thing that needs you leads; the rest steps back. */
+.mc-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr));
+}
+
+@media (min-width: 1100px) {
+  .mc-grid {
+    grid-template-columns: 1.4fr 1fr;
+  }
+  .mc-grid > .panel:nth-child(2) {
+    order: -1;
+    grid-column: 1;
+  }
+}
+
+.mc .panel:has(#mc-inbox) {
+  border-top: 2px solid var(--bad);
+}
+
+.mc .panel .empty {
+  padding: 14px 12px 16px;
+  font-size: 13px;
+}
+
+.mc-since,
+.guard {
+  border-color: transparent;
+  background: var(--surface);
+  padding: 10px 14px;
+}
+
+/* A tile only shouts when its number is not zero. */
+.kpi.zero::before {
+  opacity: 0.25;
+}
+
+.kpi.zero .kpi-value {
+  color: var(--muted);
+}
+
+.kpi-value {
+  font-size: 26px;
+  font-weight: 600;
+}
+
+/* Headings: one weight and size family for every page title. */
+.mc-head h1,
+.page-head h2 {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.mc-head p,
+.page-head p {
+  font-size: 13px;
+}
+
+/* Board columns: one line, a quiet count, the sort control only when asked for. */
+.column > header h3,
+.column > header strong {
+  white-space: nowrap;
+}
+
+.column > header .count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.column > header .column-sort {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.column:hover > header .column-sort,
+.column > header .column-sort:focus-visible,
+.column > header .column-sort.changed {
+  opacity: 1;
+}
+
+.card {
+  border-color: color-mix(in srgb, var(--text) 8%, var(--border));
+}
+
+/* Agents: tiles fill the page, and a ghost tile invites the next one. */
+.page .grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.tile.add-tile {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 4px;
+  min-height: 120px;
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.tile.add-tile span {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.tile.add-tile:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Whatever the width, what needs the owner comes before what runs. */
+.mc-grid > .panel:nth-child(2) {
+  order: -1;
+}
+
+
+/* ---------- sidebar: one account entry instead of a list of footer links ---------- */
+.sidebar .account {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.account-avatar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.account-text {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  text-align: left;
+  line-height: 1.25;
+}
+
+.account-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+/* ---------- one active style in both themes ---------- */
+.sidebar li button.active,
+.sidebar .home-link.active {
+  background: var(--accent-soft);
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.sidebar li button:focus:not(:focus-visible),
+.sidebar .home-link:focus:not(:focus-visible) {
+  outline: none;
+}
+
+:root[data-theme='light'] .kpi,
+:root[data-theme='light'] .mc .panel,
+:root[data-theme='light'] button.fleet-card {
+  box-shadow: 0 1px 2px rgb(16 24 40 / 0.05);
+}
+
+/* ---------- loading: a quiet shimmer where numbers will appear ---------- */
+.mc[aria-busy='true'] .kpi-value {
+  color: transparent;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface-2), color-mix(in srgb, var(--surface-2) 60%, var(--border)), var(--surface-2)) 0 0 / 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  min-width: 3ch;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mc[aria-busy='true'] .kpi-value {
+    animation: none;
+  }
+}
+
+/* ---------- one tab family: the settings sub-tabs use the underline of the main tabs ---------- */
+.subnav {
+  gap: 2px;
+  padding-block: 0;
+}
+
+.subnav button {
+  position: relative;
+  border-radius: 0;
+  padding: 11px 14px;
+  background: none;
+}
+
+.subnav button.active {
+  background: none;
+  color: var(--text);
+}
+
+.subnav button.active::after {
+  content: '';
+  position: absolute;
+  inset: auto 10px -1px 10px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ---------- charts: the same data, a softer hand ---------- */
+.chart .grid {
+  stroke-dasharray: 2 4;
+}
+
+.chart rect {
+  rx: 3px;
+}
+
+
+/* ---------- design critique, round two ---------- */
+
+/* Statistics tiles go quiet at zero, like Mission Control's. */
+.stat.zero::before {
+  opacity: 0.25;
+}
+
+.stat.zero strong {
+  color: var(--muted);
+}
+
+/* Chart labels may reach past the plot, never past the svg: never clip them. */
+.chart svg {
+  overflow: visible;
+}
+
+/* The settings jump links: a solid bar, and a fade where the row continues. */
+.section-rail {
+  background: var(--bg);
+  mask-image: linear-gradient(90deg, #000 92%, transparent);
+}
+
+/* Board: in the light theme columns and cards need their own edge. */
+:root[data-theme='light'] .column {
+  background: var(--surface-2);
+}
+
+:root[data-theme='light'] .card {
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) .column {
+    background: var(--surface-2);
+  }
+  :root:not([data-theme='dark']) .card {
+    background: var(--surface);
+  }
+}
+
+/* Badges on a card wrap instead of running past its edge. */
+.card-top {
+  flex-wrap: wrap;
+}
+
+.git-summary li.zero,
+.dependency-summary li.zero {
+  border-left-color: var(--border);
+}
+
+.git-summary li.zero strong,
+.dependency-summary li.zero strong {
+  color: var(--muted);
+}
+
+
+/* The account menu opens as a popover beside the sidebar on wide screens. */
+@media (min-width: 761px) {
+  .overlay.popover {
+    background: transparent;
+    backdrop-filter: none;
+    place-items: end start;
+    padding: 0 0 64px 12px;
+  }
+  .overlay.popover .modal {
+    width: 260px;
+    max-width: 260px;
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.35);
+    animation: view-in 0.15s ease-out both;
+  }
+  .overlay.popover .modal header h2 {
+    font-size: 13px;
+  }
+}
+
+/* ---------- settings: loose controls read as rows of one family ---------- */
+.page.narrow .form > .row,
+.page.narrow .form > .toggle,
+.page.narrow .form > .field {
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.page.narrow .form > .toggle {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* ---------- usage and routing: budget forms fill their card, an odd field spans the width ---------- */
+.budget {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+}
+
+.budget > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+/* The MCP command on the settings page: one line that scrolls instead of breaking the layout. */
+.connect-command {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 8px 10px;
+}
+
+/* Arena on the issue page: one row per entry, the winner marked, the others quiet. */
+.arena-entries {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.arena-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.arena-entry .link-open {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex: 1;
+  min-width: 140px;
+  text-align: left;
+}
+
+.arena-state {
+  font-size: 12px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.arena-entry[data-state='working'] .arena-state {
+  color: var(--live);
+}
+
+.arena-entry[data-state='winner'] {
+  border-color: var(--good);
+}
+
+.arena-entry[data-state='winner'] .arena-state {
+  color: var(--good);
+}
+
+.arena-entry[data-state='lost'],
+.arena-entry[data-state='out'] {
+  opacity: 0.65;
+}
+
+.arena-spent {
+  font-variant-numeric: tabular-nums;
+}
+
+.arena-choice {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.arena-choice label {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+}

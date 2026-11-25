@@ -33,6 +33,7 @@ export const BLUEPRINT_GUIDE = `A blueprint is one JSON object that sets up (or 
       "name": "Backend-Dev",        // unique per project, used for assignment and handoffs
       "role": "Senior backend engineer",
       "provider": "anthropic",      // ${Object.keys(PROVIDERS).join(' | ')}
+      "provider_override": false,  // only true if this agent should prefer its own provider over the project order
       "model": "",                  // "" = CLI default
       "instructions": "How this agent should work.",
       "skills": ["testing"],        // skill names
@@ -64,8 +65,8 @@ settings (all optional): {
   "maxConcurrent": 3,
   "workspace": "issue",             // "issue": worktree per issue. "agent": one checkout per agent, keeps build caches
   "maxReviewRounds": 3,             // change requests before a human has to decide
-  "fallbackEnabled": true,
-  "fallback": ["anthropic", "openai", "deepseek"],          // routing order when the agent's own provider is below its threshold
+  "fallbackEnabled": true,                                  // whether explicit agent overrides may fall back
+  "fallback": ["anthropic", "openai", "deepseek"],          // project routing priority (first available provider wins)
   "budgets": { "openai": { "limit": 5000000, "unit": "tokens", "window": "week", "stopAtPct": 10, "scope": "global" } },
   "watchdog": { "enabled": true,
     "rules": [ { "type": "stall", "value": 10, "action": "stop" }, { "type": "runtime", "value": 60, "action": "stop" }, { "type": "attempts", "value": 3, "action": "block" } ],
@@ -168,23 +169,25 @@ export function applyBlueprint(bp: any) {
           .filter(Boolean),
       )
       const max = Math.max(1, Math.min(20, Number(a.max_instances) || 1))
-      const ex = get('SELECT id FROM agents WHERE project_id=? AND name=?', pid, name)
+      const ex = get('SELECT id, provider_override FROM agents WHERE project_id=? AND name=?', pid, name)
+      const override = typeof a.provider_override === 'boolean' ? Number(a.provider_override) : ex?.provider_override ?? 0
       if (ex)
         run(
-          'UPDATE agents SET role=?, provider=?, model=?, instructions=?, skill_ids=?, max_instances=? WHERE id=?',
+          'UPDATE agents SET role=?, provider=?, model=?, instructions=?, skill_ids=?, max_instances=?, provider_override=? WHERE id=?',
           str(a.role, 200),
           a.provider,
           model,
           str(a.instructions),
           skills,
           max,
+          override,
           ex.id,
         )
       const id =
         ex?.id ??
         Number(
           run(
-            'INSERT INTO agents (project_id, name, role, provider, model, instructions, skill_ids, max_instances) VALUES (?,?,?,?,?,?,?,?)',
+            'INSERT INTO agents (project_id, name, role, provider, model, instructions, skill_ids, max_instances, provider_override) VALUES (?,?,?,?,?,?,?,?,?)',
             pid,
             name,
             str(a.role, 200),
@@ -193,6 +196,7 @@ export function applyBlueprint(bp: any) {
             str(a.instructions),
             skills,
             max,
+            override,
           ).lastInsertRowid,
         )
       if (Array.isArray(a.mcp)) {

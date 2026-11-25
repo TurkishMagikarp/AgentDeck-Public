@@ -16,7 +16,10 @@ export function Skills() {
       <div class="page-head">
         <div>
           <h2>Skills</h2>
-          <p class="muted">Reusable knowledge. An agent only gets the skills assigned to it in its prompt.</p>
+          <p class="muted">
+            Reusable knowledge. An agent only gets the skills in its prompt that are assigned
+            to it.
+          </p>
         </div>
         <button class="primary" onClick={() => setEditing({ name: '', description: '', content: '' })}>
           Add skill
@@ -36,9 +39,7 @@ export function Skills() {
             >
               <strong>{skill.name}</strong>
               <p class="muted">{skill.description || 'No description'}</p>
-              <p>
-                {usedBy(skill.id)} {usedBy(skill.id) === 1 ? 'agent uses' : 'agents use'} this skill
-              </p>
+              <p>{usedBy(skill.id)} agents use this skill</p>
             </article>
           )}
         </For>

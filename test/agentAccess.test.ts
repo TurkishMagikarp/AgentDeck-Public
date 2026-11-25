@@ -61,7 +61,7 @@ describe('connection keys for agents', () => {
       setConnectionKey('pixellab', 'pl-key')
       const setup = prepareMcp(cli, [], 'run-1')
       assert.equal(setup.env.PIXELLAB_API_KEY, 'pl-key')
-      setup.cleanup()
+      assert.deepEqual(setup.files, [], 'no connection listed, no config file')
     })
   }
 

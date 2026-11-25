@@ -138,10 +138,17 @@ function storeCodexApiKey(key: string) {
 }
 
 /** Environment for an agent process of this provider. AgentDeck's own secrets never reach agents. */
-export function runEnv(provider: string, cli: string): NodeJS.ProcessEnv {
-  const env = { ...process.env }
+/** process.env without AgentDeck's own secrets. Use for every process that runs agent-controlled code. */
+export function safeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...extra }
   delete env.AGENTDECK_TOKEN
   delete env.AGENTDECK_SECRET
+  delete env.AGENTDECK_PROXY_SECRET
+  return env
+}
+
+export function runEnv(provider: string, cli: string): NodeJS.ProcessEnv {
+  const env = safeEnv()
 
   const access = getAccess(provider)
   const key = access.mode === 'apikey' ? apiKey(provider) : null
@@ -230,7 +237,7 @@ const LOGIN_COMMANDS: Record<LoginKind, [string, string[]]> = {
   codex: ['codex', ['login', '--device-auth']],
 }
 
-export function startLogin(provider: string) {
+export function startLogin(provider: string, onComplete = () => wakeProvider(provider)) {
   const kind = ACCESS[provider]?.login
   if (!kind) throw new Error('This provider has no login through AgentDeck')
   cancelLogin(provider)
@@ -261,7 +268,7 @@ export function startLogin(provider: string) {
   child.on('close', (exitCode) => {
     clearTimeout(login.timer)
     if (login.state === 'waiting') login.state = exitCode === 0 ? 'done' : 'failed'
-    if (login.state === 'done') wakeProvider(provider)
+    if (login.state === 'done') onComplete()
   })
   return loginView(provider)
 }

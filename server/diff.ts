@@ -1,17 +1,22 @@
 // What an issue changed in the code: the commits of its branch and the diff against the base
 // branch, file by file. While an agent still works in a per-issue worktree, its uncommitted
 // changes show up too, so the owner can watch the code grow without a terminal.
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { promisify } from 'node:util'
 import { DATA_DIR } from './db.ts'
+import { gitIn } from './sandbox.ts'
+import { Lru } from './lru.ts'
 
-const execFileAsync = promisify(execFile)
 
 /** Above this a file's patch is cut, the file list stays complete. */
 const MAX_PATCH_CHARS = 60_000
 const MAX_TOTAL_CHARS = 400_000
+
+// What a branch changed against the base, by the commit ids of both: those answers never change.
+// Each entry holds at most MAX_TOTAL_CHARS of patches.
+const committed = new Lru<{ commits: { hash: string; subject: string; at: number }[]; files: FileChange[] }>({
+  maxEntries: 150,
+})
 
 type Project = { key: string; repo_path: string; settings: { landing: { baseBranch: string } } }
 
@@ -25,7 +30,7 @@ export type FileChange = {
 }
 
 async function git(repo: string, ...args: string[]) {
-  const { stdout } = await execFileAsync('git', ['-C', repo, ...args], { maxBuffer: 64 * 1024 * 1024 })
+  const { stdout } = await gitIn(repo, args, { maxBuffer: 64 * 1024 * 1024 })
   return stdout
 }
 
@@ -82,26 +87,34 @@ export async function issueChanges(project: Project, issueNumber: number) {
 
   const base =
     project.settings.landing.baseBranch || (await git(repo, 'symbolic-ref', '--short', 'HEAD')).trim()
-  const hasBranch = await succeeds(git(repo, 'rev-parse', '--verify', `refs/heads/${branch}`))
+  const [branchSha, baseSha] = await Promise.all([
+    git(repo, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`).then((out) => out.trim(), () => ''),
+    git(repo, 'rev-parse', '--verify', `${base}^{commit}`).then((out) => out.trim(), () => ''),
+  ])
+  const hasBranch = !!branchSha
 
   let commits: { hash: string; subject: string; at: number }[] = []
   let files: FileChange[] = []
-  if (hasBranch) {
-    // Three dots: what the branch changed since it left the base, not what the base did meanwhile.
-    const range = `${base}...${branch}`
-    const [log, numstat, diff] = await Promise.all([
-      git(repo, 'log', '--format=%h%x09%ct%x09%s', `${base}..${branch}`),
-      git(repo, 'diff', '--numstat', range),
-      git(repo, 'diff', '--no-color', range),
-    ])
-    commits = log
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        const [hash, at, ...subject] = line.split('\t')
-        return { hash, at: Number(at) * 1000, subject: subject.join('\t') }
-      })
-    files = combine(numstat, diff)
+  if (hasBranch && baseSha) {
+    ;({ commits, files } = await committed.remember(`${repo}\0${baseSha}\0${branchSha}`, async () => {
+      // Three dots: what the branch changed since it left the base, not what the base did meanwhile.
+      const range = `${baseSha}...${branchSha}`
+      const [log, numstat, diff] = await Promise.all([
+        git(repo, 'log', '--format=%h%x09%ct%x09%s', `${baseSha}..${branchSha}`),
+        git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--numstat', range),
+        git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', range),
+      ])
+      return {
+        commits: log
+          .split('\n')
+          .filter(Boolean)
+          .map((line) => {
+            const [hash, at, ...subject] = line.split('\t')
+            return { hash, at: Number(at) * 1000, subject: subject.join('\t') }
+          }),
+        files: combine(numstat, diff),
+      }
+    }))
   }
 
   // Work in progress of the per-issue layout. The agent layout shares checkouts between issues.
@@ -109,8 +122,8 @@ export async function issueChanges(project: Project, issueNumber: number) {
   let uncommitted: FileChange[] = []
   if (existsSync(worktree) && (await succeeds(git(worktree, 'rev-parse', '--verify', 'HEAD')))) {
     const [numstat, diff] = await Promise.all([
-      git(worktree, 'diff', '--numstat', 'HEAD'),
-      git(worktree, 'diff', '--no-color', 'HEAD'),
+      git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--numstat', 'HEAD'),
+      git(worktree, 'diff', '--no-ext-diff', '--no-textconv', '--no-color', 'HEAD'),
     ])
     uncommitted = combine(numstat, diff)
   }

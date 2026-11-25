@@ -2,20 +2,19 @@
 //   issue: every issue has its own worktree. Nothing is shared, nothing has to be switched.
 //   agent: every agent keeps one checkout and switches to the issue's branch. Build caches that
 //          are expensive to recreate (an engine's asset import, node_modules) survive between issues.
-import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
-import { promisify } from 'node:util'
+import { basename, dirname, join, relative, resolve } from 'node:path'
 import { DATA_DIR } from './db.ts'
 import { oversized } from './housekeeping.ts'
-
-const execFileAsync = promisify(execFile)
+import type { EgressSettings } from './egress.ts'
+import { ensureEgress, ensureProject, gitIn, SANDBOX } from './sandbox.ts'
+import { egressStatus } from './egress.ts'
 
 export type Workdir = { cwd: string; branch?: string }
 
 type Request = {
-  project: { key: string; repo_path: string; settings: { workspace: 'issue' | 'agent' } }
+  project: { key: string; repo_path: string; settings: { workspace: 'issue' | 'agent'; egress?: EgressSettings } }
   issueNumber: number
   agentId: number
   /** Which parallel copy of the agent this is, starting at 0. */
@@ -24,7 +23,7 @@ type Request = {
   readOnly: boolean
 }
 
-const git = (repo: string, ...args: string[]) => execFileAsync('git', ['-C', repo, ...args])
+const git = (repo: string, ...args: string[]) => gitIn(repo, args)
 const succeeds = (command: Promise<unknown>) =>
   command.then(
     () => true,
@@ -68,6 +67,15 @@ export async function prepareWorkdir(request: Request): Promise<Workdir> {
   const { project } = request
   const base = project.repo_path || join(DATA_DIR, 'workspaces', project.key)
   await mkdir(base, { recursive: true })
+  // In the sandbox the project user takes over the repo before anything runs in it.
+  await ensureProject(project)
+  // An allowlist project starts no run before its firewall rules are in place, and none at all
+  // while they cannot be set: the proxy env alone is no barrier, an agent can unset it.
+  await ensureEgress(project)
+  if (SANDBOX && project.settings.egress?.mode === 'allowlist' && egressStatus(project.key).firewall !== 'active') {
+    const { error } = egressStatus(project.key)
+    throw new Error(`Network allowlist without a firewall, no run started${error ? `: ${error}` : ''}`)
+  }
   if (!(await hasCommits(base))) return { cwd: base } // no git repo or no commit yet: work in place
   await pullIfRemote(base)
 
@@ -98,6 +106,7 @@ async function agentCheckout(base: string, branch: string, request: Request): Pr
   }
 
   const branchExists = await succeeds(git(base, 'rev-parse', '--verify', `refs/heads/${branch}`))
+  if (branchExists && !request.readOnly) await takeBranchBack(base, branch, worktree)
   const checkout = request.readOnly
     ? ['checkout', '--detach', branchExists ? branch : 'HEAD']
     : branchExists
@@ -113,10 +122,37 @@ async function agentCheckout(base: string, branch: string, request: Request): Pr
 }
 
 /**
+ * A branch can be checked out in one worktree only. If another agent checkout still holds it (its
+ * release failed, or the server stopped mid-run), it lets go of it here. Only one run works on an
+ * issue at a time and reviewers never hold the branch, so the other checkout is not in use.
+ * Without this every run of the issue fails at the checkout, for hours.
+ * Uncommitted leftovers there go to a stash, as in agentCheckout.
+ */
+async function takeBranchBack(base: string, branch: string, worktree: string) {
+  const { stdout } = await git(base, 'worktree', 'list', '--porcelain')
+  for (const entry of stdout.split(/\r?\n\r?\n/)) {
+    const lines = entry.split(/\r?\n/)
+    if (!lines.includes(`branch refs/heads/${branch}`)) continue
+    const holder = resolve(lines[0].replace(/^worktree /, ''))
+    const isOtherAgentCheckout =
+      holder !== resolve(worktree) &&
+      dirname(holder) === resolve(dirname(worktree)) &&
+      basename(holder).startsWith('agent-')
+    if (!isOtherAgentCheckout) continue
+    await succeeds(git(holder, 'stash', 'push', '--include-untracked', '-m', `agentdeck: before releasing ${branch}`))
+    await git(holder, 'checkout', '--detach')
+    console.log(`workspace: ${basename(holder)} let go of ${branch} for ${basename(worktree)}`)
+  }
+}
+
+/**
  * In the agent layout a branch can be checked out in one place only. Letting go of it after
  * the run frees it for the next agent, usually the reviewer or the maker of the next round.
  */
 export async function releaseWorkdir(project: Request['project'], workdir: Workdir) {
   if (project.settings.workspace !== 'agent' || !workdir.branch) return
-  await succeeds(git(workdir.cwd, 'checkout', '--detach'))
+  // A branch that stays held makes the next run of the issue fail elsewhere, so say it.
+  await git(workdir.cwd, 'checkout', '--detach').catch((e) =>
+    console.error(`workspace: ${workdir.cwd} could not let go of ${workdir.branch}: ${e.message}`),
+  )
 }

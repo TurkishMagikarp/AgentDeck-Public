@@ -1,9 +1,9 @@
 import './setup.ts'
 import assert from 'node:assert/strict'
 import { beforeEach, describe, test } from 'node:test'
-import { claudeWindows, saveClaudeWindows, windowName } from '../server/claudeUsage.ts'
+import { claudeWindows, readClaudeUsage, saveClaudeWindows, windowName } from '../server/claudeUsage.ts'
 import { all } from '../server/db.ts'
-import { clearQuota, setQuota } from './helpers.ts'
+import { clearQuota, setMode, setQuota } from './helpers.ts'
 
 // Shortened answer of /api/oauth/usage as it came on 2026-11-22.
 const SAMPLE = {
@@ -61,6 +61,17 @@ describe('windowName', () => {
 })
 
 describe('claudeWindows', () => {
+  test('reads legacy weekly and Fable windows even without a limits array', () => {
+    const windows = claudeWindows({
+      five_hour: { utilization: 3, resets_at: null },
+      seven_day: { utilization: 98, resets_at: '2026-11-24T21:00:00Z' },
+      seven_day_fable: { utilization: 100, resets_at: '2026-11-24T21:00:00Z' },
+    })
+    assert.deepEqual(windows.map((w) => [w.window, w.utilization]), [
+      ['five_hour', 0.03], ['seven_day', 0.98], ['seven_day_fable', 1],
+    ])
+  })
+
   test('reads the weekly and the Fable limit', () => {
     const windows = claudeWindows(SAMPLE)
     assert.deepEqual(
@@ -142,4 +153,31 @@ describe('saveClaudeWindows', () => {
     saveClaudeWindows(claudeWindows(SAMPLE))
     assert.equal(rows().find((row) => row.window === 'seven_day')?.utilization, 0.72)
   })
+
+  test('a partial session reading preserves a known weekly window until reset', () => {
+    setQuota('anthropic', 'seven_day', 0.98)
+    saveClaudeWindows([{ window: 'five_hour', utilization: 0.1, resetsAt: null }])
+    assert.deepEqual(rows(), [
+      { window: 'five_hour', utilization: 0.1 },
+      { window: 'seven_day', utilization: 0.98 },
+    ])
+  })
+})
+
+test('a delayed old-account response does not replace quota after a login change', async (t) => {
+  setMode('anthropic', 'subscription')
+  const previous = process.env.CLAUDE_CODE_OAUTH_TOKEN
+  process.env.CLAUDE_CODE_OAUTH_TOKEN = 'fixture-old'
+  t.after(() => {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN
+    else process.env.CLAUDE_CODE_OAUTH_TOKEN = previous
+  })
+  t.mock.method(globalThis, 'fetch', async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = 'fixture-new'
+    return Response.json(SAMPLE)
+  })
+  await readClaudeUsage()
+  assert.equal(all('SELECT * FROM quota').length, 0)
+  await readClaudeUsage()
+  assert.equal(all('SELECT * FROM quota').length, 2)
 })

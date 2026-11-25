@@ -1,4 +1,4 @@
-// Issue search across all projects, for the search box. A key ("ABC-439") or a bare number finds
+// Issue search across all projects, for the search box. A key ("SHOP-439") or a bare number finds
 // that issue first; words find issues whose title or description contains all of them, title
 // hits first and open work before finished work.
 import { all } from './db.ts'

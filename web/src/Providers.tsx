@@ -135,9 +135,11 @@ function ProviderRow(props: { provider: ProviderAccess; onChange: () => void }) 
             <input
               type="password"
               autocomplete="off"
-              aria-label="API key"
+              aria-label="API-Key"
               placeholder={
-                provider().hasKey ? 'Key is stored. Enter a new key to replace it' : 'Paste API key'
+                provider().hasKey
+                  ? 'Key is stored. Enter a new key to replace it'
+                  : 'Paste API key'
               }
               value={key()}
               onInput={(e) => setKey(e.currentTarget.value)}
@@ -237,7 +239,7 @@ function ManagedSettings(props: {
           <input
             type="password"
             autocomplete="off"
-            aria-label="Environment key"
+            aria-label="Environment-Key"
             placeholder={
               props.managed.hasEnvironmentKey
                 ? 'Environment key is stored. Enter a new one to replace it'
@@ -334,8 +336,12 @@ function MailSettings() {
         <input
           type="password"
           autocomplete="off"
-          aria-label="AgentMail API key"
-          placeholder={mail()?.hasKey ? 'Key is stored. Enter a new key to replace it' : 'AgentMail API key'}
+          aria-label="AgentMail-API-Key"
+          placeholder={
+            mail()?.hasKey
+              ? 'Key is stored. Enter a new key to replace it'
+              : 'AgentMail API key'
+          }
           value={key()}
           onInput={(e) => setKey(e.currentTarget.value)}
         />
@@ -385,7 +391,9 @@ function ConnectionRow(props: { connection: McpConnection; onChange: () => void 
           autocomplete="off"
           aria-label={props.connection.keyLabel}
           placeholder={
-            props.connection.hasKey ? 'Stored. Enter a new value to replace it' : props.connection.keyLabel
+            props.connection.hasKey
+              ? 'Stored. Enter a new value to replace it'
+              : props.connection.keyLabel
           }
           value={key()}
           onInput={(e) => setKey(e.currentTarget.value)}

@@ -14,7 +14,7 @@ const HOUR = 3_600_000
 const SPEND_ABOVE = 0.3
 const SPEND_IF_RESET_WITHIN = HOUR
 
-/** A reading older than this no longer stops runs: only a run can bring a fresh one. */
+/** Without a reported reset, a reading cannot constrain routing indefinitely. */
 const STALE_AFTER = 6 * HOUR
 /**
  * Windows that do not stop every run. Extra usage on top of the plan, and the weekly limits of a
@@ -23,29 +23,35 @@ const STALE_AFTER = 6 * HOUR
  */
 const NOT_LIMITING = /overage|opus|sonnet|fable|haiku/i
 
+const MODEL_FAMILY = /opus|sonnet|fable|haiku/i
+
+/** Display and routing share the same interpretation of the provider's subscription windows. */
+export function quotaWindows(provider: string, now = Date.now()) {
+  return all<{ window: string; utilization: number; resets_at: number | null; updated_at: number }>(
+    'SELECT window, utilization, resets_at, updated_at FROM quota WHERE provider=? ORDER BY window',
+    provider,
+  ).filter((row) => row.resets_at == null || row.resets_at > now)
+    .map((row) => {
+      const stale = now - row.updated_at >= STALE_AFTER
+      const active = !stale || row.resets_at != null
+      return { ...row, stale, active, limiting: active && !NOT_LIMITING.test(row.window) }
+    })
+}
+
 /** True while the weekly limit of this model alone (e.g. Fable) is used up. */
 export function modelLimitReached(provider: string, model: string, now = Date.now()) {
-  const family = model.toLowerCase().match(/fable|opus|sonnet|haiku/)?.[0]
-  if (!family) return false
-  return all('SELECT window, utilization, resets_at FROM quota WHERE provider=?', provider).some(
+  const family = model.toLowerCase().match(MODEL_FAMILY)?.[0]
+  if (!family || getAccess(provider).mode !== 'subscription') return false
+  return quotaWindows(provider, now).some(
     (row) =>
       row.window.toLowerCase().includes(family) &&
-      row.utilization >= 0.98 &&
-      (!row.resets_at || row.resets_at > now),
+      !/overage/i.test(row.window) && row.active && row.utilization >= 0.98,
   )
 }
 
-/** The provider's windows that limit every run, have not reset yet and were read recently. */
+/** Known future resets keep their window in effect even if the last read is old. */
 export function limitingWindows(provider: string, now = Date.now()) {
-  return all(
-    'SELECT window, utilization, resets_at, updated_at FROM quota WHERE provider=?',
-    provider,
-  ).filter(
-    (row) =>
-      !NOT_LIMITING.test(row.window) &&
-      (!row.resets_at || row.resets_at > now) &&
-      now - row.updated_at < STALE_AFTER,
-  )
+  return quotaWindows(provider, now).filter((row) => row.limiting)
 }
 
 export function paceOf(provider: string, now = Date.now()): { pace: Pace; left: number; resetsAt?: number } {

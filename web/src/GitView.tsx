@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createResource, For, on, onCleanup, Show } from 'solid-js'
 import { api } from './api'
 import { board, openIssue } from './store'
+import { onActivateKey, timeAgo } from './ui'
 
 type Commit = { hash: string; at: number; subject: string }
 type Lane = {
@@ -140,6 +141,12 @@ export function GitView() {
     return { data, drawn, baseDots, width, height, nowX: x(nowColumn) }
   })
 
+  const lastActivity = (lane: Lane) => Math.max(lane.landedAt ?? 0, lane.commits.at(-1)?.at ?? 0, lane.fork.at)
+  const openLane = (number: number) => {
+    const id = issueId(number)
+    if (id) openIssue(id)
+  }
+
   const issueId = (number: number) => board.issues.find((issue) => issue.number === number)?.id
 
   // The newest work is on the right, so the graph opens scrolled there.
@@ -154,7 +161,7 @@ export function GitView() {
         <div>
           <h2>Git</h2>
           <p class="muted">
-            The base branch on top, one branch per issue below it. Color = agent, pulsing = working right now.
+            The base branch at the top, below it one branch per issue. Color = agent, pulsing = working right now.
           </p>
         </div>
       </div>
@@ -166,6 +173,25 @@ export function GitView() {
       <Show when={layout()}>
         {(view) => (
           <>
+            <ul class="git-summary" aria-label="Overview of the repository">
+              <li classList={{ zero: String(view().data.baseCommits.length) === '0' }}>
+                <strong>{view().data.baseCommits.length}</strong>
+                <span>commits on {view().data.base}</span>
+              </li>
+              <li classList={{ zero: String(view().data.branches.filter((lane) => !lane.landed).length) === '0' }}>
+                <strong>{view().data.branches.filter((lane) => !lane.landed).length}</strong>
+                <span>branches in progress</span>
+              </li>
+              <li classList={{ zero: String(view().data.branches.filter((lane) => lane.landed).length) === '0' }}>
+                <strong>{view().data.branches.filter((lane) => lane.landed).length}</strong>
+                <span>landed</span>
+              </li>
+              <li classList={{ zero: String(view().data.agents.filter((agent) => agent.working).length) === '0' }}>
+                <strong>{view().data.agents.filter((agent) => agent.working).length}</strong>
+                <span>agents working right now</span>
+              </li>
+            </ul>
+
             <ul class="git-agents">
               <For each={view().data.agents}>
                 {(agent) => (
@@ -174,7 +200,7 @@ export function GitView() {
                     <strong>{agent.name}</strong>
                     <span class="muted">
                       {agent.working
-                        ? `${agent.kind === 'review' ? 'reviewing' : 'working on'} ${agent.branch}`
+                        ? `${agent.kind === 'review' ? 'reviews' : 'works on'} ${agent.branch}`
                         : agent.branch
                           ? `has ${agent.branch} checked out`
                           : 'free'}
@@ -238,9 +264,7 @@ export function GitView() {
                           />
                           <circle cx={lane.nowX!} cy={lane.laneY} r={DOT + 2} class="git-now">
                             <title>
-                              {lane.lane.working
-                                .map((work) => `${work.agent} is working right now`)
-                                .join(', ')}
+                              {lane.lane.working.map((work) => `${work.agent} is working right now`).join(', ')}
                             </title>
                           </circle>
                         </Show>
@@ -269,8 +293,56 @@ export function GitView() {
                 </svg>
               </div>
             </div>
+            <Show when={view().data.branches.length}>
+              <h3 class="section-title">Branches</h3>
+              <div class="table-wrap git-table">
+                <table class="scores">
+                  <thead>
+                    <tr>
+                      <th scope="col">Issue</th>
+                      <th scope="col">By</th>
+                      <th scope="col">State</th>
+                      <th scope="col" class="num">Commits</th>
+                      <th scope="col" class="num">Last activity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For
+                      each={[...view().data.branches].sort(
+                        (a, b) => lastActivity(b) - lastActivity(a),
+                      )}
+                    >
+                      {(lane) => (
+                        <tr class="git-row" tabindex="0" onClick={() => openLane(lane.number)} onKeyDown={onActivateKey(() => openLane(lane.number))}>
+                          <th scope="row">
+                            <span class="mono">
+                              {board.project!.key}-{lane.number}
+                            </span>{' '}
+                            {lane.title}
+                          </th>
+                          <td>{lane.maker || '-'}</td>
+                          <td>
+                            <span class="chip" classList={{ live: lane.working.length > 0, good: lane.landed }}>
+                              {lane.working.length
+                                ? `${lane.working.map((work) => work.agent).join(', ')} working`
+                                : lane.landed
+                                  ? 'landed'
+                                  : (STATUS_LABEL[lane.status] ?? lane.status)}
+                            </span>
+                          </td>
+                          <td class="num">{lane.commits.length}</td>
+                          <td class="num">{timeAgo(lastActivity(lane))}</td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+            </Show>
             <Show when={!view().drawn.length}>
-              <p class="muted">No issue branches yet. They appear as soon as an agent works on an issue.</p>
+              <p class="muted">
+                No issue branches yet. They appear as soon as an agent works on an issue.
+              </p>
             </Show>
           </>
         )}

@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { saveQuota } from './adapters.ts'
 import { getAccess, getSecret, SUBSCRIPTION_TOKEN } from './auth.ts'
 import { all, run } from './db.ts'
+import { quotaWindows } from './pacing.ts'
 
 const PROVIDER = 'anthropic'
 const EVERY = 5 * 60_000
@@ -22,7 +23,7 @@ type Limit = {
 
 /** The token the CLI itself uses: the stored long-lived one, else the login in its config folder. */
 function subscriptionToken() {
-  const stored = getSecret(SUBSCRIPTION_TOKEN)
+  const stored = getSecret(SUBSCRIPTION_TOKEN) ?? process.env.CLAUDE_CODE_OAUTH_TOKEN
   if (stored) return stored
   const file = join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude'), '.credentials.json')
   if (!existsSync(file)) return null
@@ -53,35 +54,48 @@ export async function readClaudeUsage() {
     signal: AbortSignal.timeout(15_000),
   })
   if (!response.ok) return
-  saveClaudeWindows(claudeWindows(await response.json()))
+  const windows = claudeWindows(await response.json())
+  // A response requested before an access change must not overwrite the new login's reading.
+  if (getAccess(PROVIDER).mode === 'subscription' && subscriptionToken() === token)
+    saveClaudeWindows(windows)
 }
 
 type ClaudeWindow = { window: string; utilization: number; resetsAt: number | null }
 
 /** The windows in an answer of the usage endpoint. */
 export function claudeWindows(usage: any): ClaudeWindow[] {
-  const windows: ClaudeWindow[] = []
-  const add = (window: string, percent: number, resetsAt: string | null) =>
-    windows.push({ window, utilization: percent / 100, resetsAt: resetsAt ? Date.parse(resetsAt) : null })
-  for (const limit of (usage?.limits ?? []) as Limit[])
-    if (typeof limit.percent === 'number') add(windowName(limit), limit.percent, limit.resets_at)
-  const fiveHour = usage?.five_hour
-  if (typeof fiveHour?.utilization === 'number' && !windows.some((w) => w.window === 'five_hour'))
-    add('five_hour', fiveHour.utilization, fiveHour.resets_at)
-  return windows
+  const windows = new Map<string, ClaudeWindow>()
+  function add(window: string, percent: unknown, rawReset: unknown) {
+    if (typeof percent !== 'number' || !Number.isFinite(percent) || percent < 0) return
+    const reset = typeof rawReset === 'string' ? Date.parse(rawReset) : NaN
+    windows.set(window, { window, utilization: percent / 100, resetsAt: Number.isFinite(reset) ? reset : null })
+  }
+  for (const limit of (Array.isArray(usage?.limits) ? usage.limits : []) as Limit[])
+    if (typeof limit?.group === 'string' && limit.group) add(windowName(limit), limit.percent, limit.resets_at)
+  // Older/partial responses can carry the weekly and scoped windows only as top-level fields.
+  for (const [name, value] of Object.entries(usage ?? {})) {
+    if (windows.has(name) || !/^(five_hour|seven_day)(_[a-z0-9_]+)?$/.test(name)) continue
+    const window = value as { utilization?: unknown; resets_at?: unknown } | null
+    add(name, window?.utilization, window?.resets_at)
+  }
+  return [...windows.values()]
 }
 
 export function saveClaudeWindows(windows: ClaudeWindow[]) {
   if (!windows.length) return
+  // A partial read (e.g. only the session window) does not prove a weekly window reset early.
+  const known = new Set(quotaWindows(PROVIDER).filter((w) => w.limiting && w.resets_at != null).map((w) => w.window))
   for (const w of windows) saveQuota(PROVIDER, w.window, w.utilization, w.resetsAt)
   // Windows Anthropic no longer reports (extra usage, an ended promotion) would otherwise stay forever.
   const seen = new Set(windows.map((w) => w.window))
   for (const row of all('SELECT window FROM quota WHERE provider=?', PROVIDER))
-    if (!seen.has(row.window)) run('DELETE FROM quota WHERE provider=? AND window=?', PROVIDER, row.window)
+    if (!seen.has(row.window) && !known.has(row.window))
+      run('DELETE FROM quota WHERE provider=? AND window=?', PROVIDER, row.window)
 }
 
-export function startClaudeUsage() {
-  const read = () => readClaudeUsage().catch(() => {})
+/** `onRead` runs after each reading: new quota numbers can let waiting issues start. */
+export function startClaudeUsage(onRead: () => void = () => {}) {
+  const read = () => readClaudeUsage().then(onRead, () => {})
   read()
   setInterval(read, EVERY).unref()
 }

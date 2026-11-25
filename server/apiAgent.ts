@@ -1,15 +1,19 @@
 // A small coding agent for providers that only offer an OpenAI-compatible chat API (Deepseek).
 // The CLIs bring their own agent loop; here we run it ourselves: ask the model, execute the tools
 // it calls inside the issue's working directory, repeat until it answers without tool calls.
-import { spawn } from 'node:child_process'
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { join } from 'node:path'
+import { safeEnv } from './auth.ts'
+// @ts-ignore: plain ES module shared with the sandboxed process
+import { fileTool } from './agentFiles.mjs'
+import { ownerOf, SANDBOX, spawnIn, spawnShellIn, stopGroup } from './sandbox.ts'
 import type { RunHandle, RunOpts, RunResult, Usage } from './adapters.ts'
 import { connectionKeys } from './mcp.ts'
+import { rewriteCommand, rtkInstalled, RTK_INSTRUCTIONS } from './rtk.ts'
 
 const MAX_STEPS = 80
 const MAX_TOOL_OUTPUT = 12_000
 const COMMAND_TIMEOUT_MS = 120_000
+const AGENT_FILES = join(import.meta.dirname, 'agentFiles.mjs')
 
 type ToolCall = { id: string; function: { name: string; arguments: string } }
 type Message = { role: string; content: string | null; tool_calls?: ToolCall[]; tool_call_id?: string }
@@ -56,31 +60,43 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
   const abort = new AbortController()
   const usage: Usage = { input: 0, output: 0, cost: 0 }
 
-  /** File tools may not leave the working directory. */
-  function inside(path: string) {
-    const full = resolve(opts.cwd, path)
-    const rel = relative(opts.cwd, full)
-    if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('Path is outside the working directory')
-    return full
+  /** File tools stay inside the working directory; in the sandbox they run as the project user. */
+  function onFiles(tool: string, args: Record<string, string>): Promise<string> {
+    // A read-only question of the owner outside any project (blueprints) may read as the server.
+    const sandboxed = SANDBOX && (opts.autonomous || ownerOf(opts.cwd))
+    if (!sandboxed) return fileTool(opts.cwd, tool, args).catch((err: Error) => `Error: ${err.message}`)
+    return new Promise((done) => {
+      const child = spawnIn(opts.cwd, process.execPath, [AGENT_FILES, opts.cwd, tool], {}, true)
+      let output = ''
+      child.stdout!.on('data', (chunk) => (output += chunk))
+      child.on('error', (err) => done(`Error: ${err.message}`))
+      child.on('close', () => done(output))
+      child.stdin!.end(JSON.stringify(args))
+    })
   }
 
-  function runCommand(command: string) {
+  async function runCommand(command: string) {
+    const env = safeEnv({ ...connectionKeys(), ...opts.env })
+    const rewritten = await rewriteCommand(opts.cwd, command, env)
+    if (abort.signal.aborted) return 'Command canceled'
     return new Promise<string>((done) => {
-      const child = spawn(command, {
-        cwd: opts.cwd,
-        env: { ...process.env, ...connectionKeys(), ...opts.env },
-        shell: true,
+      const child = spawnShellIn(opts.cwd, rewritten, {
+        env,
         windowsHide: true,
-        signal: abort.signal,
+        // Its own process group, so a timeout or a stop ends what the command started too.
+        detached: process.platform !== 'win32',
       })
       let output = ''
       const collect = (chunk: Buffer) => (output = (output + chunk).slice(-MAX_TOOL_OUTPUT * 2))
-      child.stdout.on('data', collect)
-      child.stderr.on('data', collect)
-      const timer = setTimeout(() => child.kill(), COMMAND_TIMEOUT_MS)
+      child.stdout!.on('data', collect)
+      child.stderr!.on('data', collect)
+      const stop = () => stopGroup(child.pid)
+      const timer = setTimeout(stop, COMMAND_TIMEOUT_MS)
+      abort.signal.addEventListener('abort', stop, { once: true })
       child.on('error', (err) => done(`Command failed to start: ${err.message}`))
       child.on('close', (code) => {
         clearTimeout(timer)
+        abort.signal.removeEventListener('abort', stop)
         done(`${output.trim()}\n[exit code ${code}]`)
       })
     })
@@ -89,28 +105,10 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
   async function execute(name: string, args: Record<string, string>): Promise<string> {
     switch (name) {
       case 'read_file':
-        return readFile(inside(args.path), 'utf8')
-      case 'list_dir': {
-        const entries = await readdir(inside(args.path || '.'), { withFileTypes: true })
-        return entries.map((entry) => entry.name + (entry.isDirectory() ? sep : '')).join('\n') || '(empty)'
-      }
-      case 'write_file': {
-        const file = inside(args.path)
-        await mkdir(dirname(file), { recursive: true })
-        await writeFile(file, args.content ?? '')
-        return 'written'
-      }
-      case 'edit_file': {
-        const file = inside(args.path)
-        const before = await readFile(file, 'utf8')
-        const count = before.split(args.old_text).length - 1
-        if (count !== 1) return `old_text must match exactly once, it matches ${count} times`
-        await writeFile(
-          file,
-          before.replace(args.old_text, () => args.new_text),
-        )
-        return 'edited'
-      }
+      case 'list_dir':
+      case 'write_file':
+      case 'edit_file':
+        return onFiles(name, args)
       case 'run_command':
         return runCommand(args.command)
       default:
@@ -146,6 +144,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
           `You are a coding agent working in ${opts.cwd} on ${process.platform}. ` +
           'Use the tools to inspect files' +
           (opts.autonomous ? ', change them and run commands. ' : '. You cannot change anything. ') +
+          (opts.env?.RTK_DB_PATH && rtkInstalled() ? `${RTK_INSTRUCTIONS} ` : '') +
           'When the task is finished, reply with your final message and no tool call.',
       },
       { role: 'user', content: opts.prompt },
@@ -155,18 +154,25 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
       const reply = await ask(messages)
       if (!reply) throw new Error('The API returned no answer')
       messages.push(reply)
-      if (reply.content) opts.onActivity?.(reply.content)
+      if (reply.content) {
+        opts.onActivity?.(reply.content)
+        opts.onEvent?.({ kind: 'assistant', text: reply.content })
+      }
 
       if (!reply.tool_calls?.length) return { ok: true, text: reply.content ?? '', usage }
 
       for (const call of reply.tool_calls) {
         opts.onActivity?.(`${call.function.name}: ${call.function.arguments}`)
+        opts.onEvent?.({ kind: 'tool_call', name: call.function.name, text: call.function.arguments ?? '' })
         let result: string
+        let failed = false
         try {
           result = await execute(call.function.name, JSON.parse(call.function.arguments || '{}'))
         } catch (err: any) {
           result = `Error: ${err.message}`
+          failed = true
         }
+        opts.onEvent?.({ kind: failed ? 'error' : 'tool_result', name: call.function.name, text: result })
         messages.push({ role: 'tool', tool_call_id: call.id, content: clip(result) })
       }
     }

@@ -51,6 +51,11 @@ const commands = {
     console.log(`issue ${number} no longer waits for ${blocker}`)
   },
 
+  async install(names) {
+    const { output } = await call('POST', '/packages', { names: names.join(' ') })
+    console.log(output || 'installed')
+  },
+
   async learn(words) {
     await call('POST', '/lessons', { body: words.join(' ') })
     console.log('learned')

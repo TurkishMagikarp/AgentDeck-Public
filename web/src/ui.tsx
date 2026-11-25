@@ -2,14 +2,53 @@ import type { JSX, ParentProps } from 'solid-js'
 import { onCleanup, onMount, splitProps } from 'solid-js'
 import { Icon } from './icons'
 
-export function Modal(props: ParentProps<{ title: string; onClose: () => void; wide?: boolean }>) {
-  const onKey = (e: KeyboardEvent) => e.key === 'Escape' && props.onClose()
-  onMount(() => document.addEventListener('keydown', onKey))
-  onCleanup(() => document.removeEventListener('keydown', onKey))
+const FOCUSABLE =
+  'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+
+/** `popover` anchors the dialog next to the sidebar on wide screens, like a menu; phones keep it centred. */
+export function Modal(props: ParentProps<{ title: string; onClose: () => void; wide?: boolean; popover?: boolean }>) {
+  let dialog: HTMLDivElement | undefined
+  // The control that opened the dialog gets the focus back when it closes.
+  const opener = document.activeElement as HTMLElement | null
+
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') return props.onClose()
+    if (e.key !== 'Tab' || !dialog) return
+    // Tab stays inside the dialog: from the last control it wraps to the first, and back.
+    const controls = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null)
+    if (!controls.length) return
+    const first = controls[0]
+    const last = controls[controls.length - 1]
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+  onMount(() => {
+    document.addEventListener('keydown', onKey)
+    // Focus lands on the first field if there is one, otherwise on the dialog itself.
+    const field = dialog?.querySelector<HTMLElement>('input:not([type=hidden]), textarea, select')
+    ;(field ?? dialog)?.focus()
+  })
+  onCleanup(() => {
+    document.removeEventListener('keydown', onKey)
+    if (opener?.isConnected) opener.focus()
+  })
 
   return (
-    <div class="overlay" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="modal" classList={{ wide: props.wide }} role="dialog" aria-label={props.title}>
+    <div class="overlay" classList={{ popover: props.popover }} onClick={(e) => e.target === e.currentTarget && props.onClose()}>
+      <div
+        ref={dialog}
+        class="modal"
+        classList={{ wide: props.wide }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        tabindex="-1"
+      >
         <header>
           <h2>{props.title}</h2>
           <button class="ghost icon-button" onClick={props.onClose} aria-label="Close">

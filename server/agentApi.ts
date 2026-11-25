@@ -7,6 +7,7 @@ import { all, get, tx } from './db.ts'
 import { kick } from './engine.ts'
 import { addLesson } from './lessons.ts'
 import { runOfToken, type RunIdentity } from './runTokens.ts'
+import { installPackages } from './sandbox.ts'
 import { missingSections } from './ticket.ts'
 
 type Env = { Variables: { run: RunIdentity } }
@@ -92,6 +93,22 @@ agentApi.post('/issues/:number/comments', async (c) => {
   if (!body) return c.json({ error: 'Comment is empty' }, 400)
   addComment(issue.id, identity.agentName, 'agent', body)
   return c.json({ ok: true }, 201)
+})
+
+// Agents have no root in the sandbox. Debian packages come from the server, so a run that
+// needs a tool still goes on by itself. Each install is noted on the issue.
+agentApi.post('/packages', async (c) => {
+  const identity = c.get('run')
+  const names = String((await c.req.json().catch(() => ({}))).names ?? '')
+    .split(/[\s,]+/)
+    .filter(Boolean)
+  try {
+    const output = await installPackages(names)
+    addComment(identity.issueId, identity.agentName, 'agent', `System packages installed: ${names.join(', ')}`)
+    return c.json({ ok: true, output })
+  } catch (e: any) {
+    return c.json({ error: String(e.stderr || e.message).trim().slice(-2000) }, 400)
+  }
 })
 
 agentApi.post('/lessons', async (c) => {

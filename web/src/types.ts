@@ -14,15 +14,35 @@ export type WatchdogRule = {
   action: 'comment' | 'stop' | 'block'
 }
 
+export type JournalKind =
+  | 'landed'
+  | 'landingRed'
+  | 'precheckRed'
+  | 'approved'
+  | 'changes'
+  | 'partial'
+  | 'waits'
+  | 'escalated'
+  | 'watchdog'
+  | 'runFailed'
+
+/** One line of the project journal, see server/journal.ts. */
+export type JournalEntry = { at: number; issue: number; title: string; kind: JournalKind; text: string }
+
 export type WaitReason = {
-  kind: 'blocked' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'
+  kind: 'blocked' | 'merge' | 'landing' | 'retry' | 'agent' | 'full' | 'provider' | 'saving'
   text: string
 }
+
+export type WebhookEvent = 'review' | 'blocked' | 'done' | 'failed' | 'owner'
+/** The URL and secret stay on the server; the board only knows the host. */
+export type Webhook = { id: string; kind: 'slack' | 'generic'; host: string; events: WebhookEvent[] }
 
 export type Settings = {
   maxConcurrent: number
   adhd: boolean
   caveman: boolean
+  replay: boolean
   workspace: 'issue' | 'agent'
   maxReviewRounds: number
   checklists: { enabled: boolean; templates: string }
@@ -36,8 +56,10 @@ export type Settings = {
     githubTokenFile: string
     mergeMethod: 'merge' | 'squash' | 'rebase'
     evidence: { paths: string[]; markers: string[] }
+    approval: { merge: boolean; dependencies: boolean; infra: boolean; infraGlobs: string[] }
   }
   notifyOwner: boolean
+  webhooks: Webhook[]
   escalationAgentId: number
   openGroupsInOrder: boolean
   autonomous: boolean
@@ -45,11 +67,12 @@ export type Settings = {
   blockerBoost: boolean
   issueCap: { usd: number; tokens: number }
   showcase: { enabled: boolean; slug: string; titles: boolean }
+  intake: { enabled: boolean; repo: string; label: string; status: 'backlog' | 'todo' }
   preview: { command: string; path: string }
   budgets: Record<string, Budget>
   fallbackEnabled: boolean
   fallback: string[]
-  fallbackModels: Record<string, string>
+  modelTiers: Record<Tier, Record<string, string>>
   fallbackReviews: boolean
   fallbackReservePct: number
   watchdog: {
@@ -57,6 +80,7 @@ export type Settings = {
     rules: WatchdogRule[]
     llm: { enabled: boolean; provider: string; prompt: string; onFail: 'todo' | 'blocked' }
   }
+  egress: { mode: 'open' | 'allowlist'; allow: string[] }
 }
 
 export type Project = {
@@ -79,6 +103,7 @@ export type ProjectSummary = {
 }
 
 export type Agent = {
+  provider_override: boolean
   id: number
   name: string
   role: string
@@ -107,8 +132,10 @@ export type Issue = {
   /** -1 while the maker works, otherwise the position of the reviewer whose turn it is. */
   review_index: number
   grp: string
-  /** 'waiting' while a pull request is open and its checks run. */
+  /** 'waiting' while a pull request is open and its checks run, 'approval' while held at a gate. */
   landing: string
+  /** The commit held at an approval gate; only on the issue page. */
+  gate_sha?: string
   model?: string
   description?: string
   handoff?: string
@@ -118,6 +145,10 @@ export type Issue = {
   checklist_report?: string
   maker_id?: number | null
   created_by?: string
+  /** URL of the GitHub issue this one was taken from. */
+  source?: string
+  /** The issue this one is an arena entry for, 0 for every other issue. */
+  arena_of?: number
   created_at?: number
   updated_at?: number
   done_at?: number | null
@@ -168,6 +199,24 @@ export type IssueLink = {
   assignee_id: number | null
 }
 
+export type ArenaEntry = {
+  id: number
+  number: number
+  agent: string
+  status: Status
+  state: 'working' | 'handed-in' | 'out' | 'winner' | 'lost'
+  costUsd: number
+  minutes: number
+}
+
+/** Several agents on one issue, a jury picks (server/arena.ts). winnerId -1: ended without a winner. */
+export type ArenaView = {
+  parent: { id: number; number: number; title: string; status: Status }
+  entries: ArenaEntry[]
+  winnerId: number
+  phase: 'waiting' | 'judge' | 'empty' | 'closed'
+}
+
 export type IssueDetail = {
   issue: Issue
   comments: Comment[]
@@ -177,3 +226,7 @@ export type IssueDetail = {
 }
 
 export type Provider = { id: string; label: string }
+
+export const TIERS = ['strong', 'medium', 'light'] as const
+export type Tier = (typeof TIERS)[number]
+export const TIER_LABEL: Record<Tier, string> = { strong: 'Strong', medium: 'Medium', light: 'Light' }

@@ -150,7 +150,7 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
               </Field>
             }
           >
-            <Field label="Time" hint="Server time zone">
+            <Field label="Time" hint="Time zone of the server">
               <input type="time" value={draft.at} onInput={(e) => setDraft('at', e.currentTarget.value)} />
             </Field>
           </Show>

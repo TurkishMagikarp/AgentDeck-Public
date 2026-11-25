@@ -30,6 +30,48 @@ const COLUMNS: { status: Status; label: string; canAdd?: boolean }[] = [
 
 export const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent']
 
+type SortKey = 'priority' | 'newest' | 'oldest' | 'updated' | 'title' | 'assignee'
+
+const SORTS: [SortKey, string][] = [
+  ['priority', 'Priority'],
+  ['newest', 'Newest first'],
+  ['oldest', 'Oldest first'],
+  ['updated', 'Last changed'],
+  ['title', 'Title A–Z'],
+  ['assignee', 'Agent'],
+]
+
+/** Each column remembers its own order, per project and browser. */
+const sortStorageKey = (status: Status) => `agentdeck.sort.${board.project?.id}.${status}`
+
+function storedSort(status: Status): SortKey {
+  const stored = localStorage.getItem(sortStorageKey(status))
+  return SORTS.some(([key]) => key === stored) ? (stored as SortKey) : 'priority'
+}
+
+function compareBy(key: SortKey): (a: Issue, b: Issue) => number {
+  switch (key) {
+    case 'newest':
+      return (a, b) => b.number - a.number
+    case 'oldest':
+      return (a, b) => a.number - b.number
+    case 'updated':
+      return (a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0) || b.number - a.number
+    case 'title':
+      return (a, b) => a.title.localeCompare(b.title, 'en') || a.number - b.number
+    case 'assignee': {
+      // Unassigned issues go last.
+      const name = (issue: Issue) => agentById(issue.assignee_id)?.name ?? '￿'
+      return (a, b) => name(a).localeCompare(name(b), 'en') || b.priority - a.priority || a.number - b.number
+    }
+    default:
+      return (a, b) => {
+        const byWeight = board.project?.settings.blockerBoost ? byBlockerWeight(weights())(a, b) : 0
+        return byWeight || b.priority - a.priority || a.number - b.number
+      }
+  }
+}
+
 export function Board() {
   // In an autonomous project nothing waits for a person, so that column only shows up while
   // something is still in it (the server clears it within seconds).
@@ -97,15 +139,22 @@ export function Board() {
 function Column(props: { status: Status; label: string; canAdd?: boolean }) {
   const [dropTarget, setDropTarget] = createSignal(false)
   const [draft, setDraft] = createSignal('')
+  // Re-read when the project changes, so every project keeps its own order.
+  const [sortOverride, setSortOverride] = createSignal<{ project: number; key: SortKey } | null>(null)
+  const sort = () => {
+    const override = sortOverride()
+    return override && override.project === board.project?.id ? override.key : storedSort(props.status)
+  }
+  function changeSort(key: SortKey) {
+    localStorage.setItem(sortStorageKey(props.status), key)
+    setSortOverride({ project: board.project!.id, key })
+  }
 
   const issues = createMemo(() =>
     board.issues
       .filter((issue) => issue.status === props.status)
       .filter((issue) => !groupFilter() || issue.grp === groupFilter())
-      .sort((a, b) => {
-        const byWeight = board.project?.settings.blockerBoost ? byBlockerWeight(weights())(a, b) : 0
-        return byWeight || b.priority - a.priority || a.number - b.number
-      }),
+      .sort(compareBy(sort())),
   )
 
   function onDrop(e: DragEvent) {
@@ -130,6 +179,7 @@ function Column(props: { status: Status; label: string; canAdd?: boolean }) {
     <section
       id={`column-${props.status}`}
       class="column"
+      data-status={props.status}
       classList={{ 'drop-target': dropTarget() }}
       onDragOver={(e) => {
         e.preventDefault()
@@ -142,6 +192,21 @@ function Column(props: { status: Status; label: string; canAdd?: boolean }) {
         <span class={`status-dot ${props.status}`} />
         <h3>{props.label}</h3>
         <span class="count">{issues().length}</span>
+        <select
+          class="column-sort"
+          classList={{ changed: sort() !== 'priority' }}
+          aria-label={`Sort ${props.label}`}
+          title="Order of this column"
+          onChange={(e) => changeSort(e.currentTarget.value as SortKey)}
+        >
+          <For each={SORTS}>
+            {([key, label]) => (
+              <option value={key} selected={sort() === key}>
+                {label}
+              </option>
+            )}
+          </For>
+        </select>
       </header>
 
       <div class="cards">
@@ -223,6 +288,12 @@ function Card(props: { issue: Issue }) {
       <Show when={props.issue.landing === 'waiting'}>
         <p class="review-badge">Pull request waits for checks</p>
       </Show>
+      <Show when={props.issue.landing === 'approval'}>
+        <p class="review-badge">Landing waits for your approval</p>
+      </Show>
+      <Show when={props.issue.landing === 'arena'}>
+        <p class="review-badge">Arena: waits for the jury</p>
+      </Show>
       <Show when={props.issue.review_index >= 0}>
         <p class="review-badge">Review by {assignee()?.name ?? 'reviewer'}</p>
       </Show>
@@ -230,7 +301,7 @@ function Card(props: { issue: Issue }) {
       {/* Blockers already show as the marker in the top line. */}
       <Show when={!run() && waitReasons[props.issue.id]?.kind !== 'blocked' && waitReasons[props.issue.id]}>
         {(reason) => (
-          <p class="wait-reason" title={reason().text}>
+          <p class={`wait-reason ${reason().kind}`} title={reason().text}>
             <Icon name="clock" size={12} />
             {reason().text}
           </p>
@@ -258,6 +329,8 @@ function Card(props: { issue: Issue }) {
 
 const REASON_LABEL: Record<string, string> = {
   blocked: 'waiting on blockers',
+  merge: 'waiting for the merge of their blockers',
+  landing: 'approved, waiting for landing',
   retry: 'waiting for a retry',
   agent: 'waiting for their agent',
   full: 'waiting for a free slot',

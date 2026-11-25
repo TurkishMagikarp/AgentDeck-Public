@@ -46,9 +46,17 @@ type Stats = {
     usableRate: number
     costPerRun: number
   }[]
+  outcomeByProvider: {
+    provider: string
+    label: string
+    runs: number
+    usableRate: number
+    costPerRun: number
+    avgMs: number
+  }[]
 }
 
-const percent = (rate: number | null) => (rate === null ? '–' : `${Math.round(rate * 100)} %`)
+const percent = (rate: number | null) => (rate === null ? '–' : `${Math.round(rate * 100)}%`)
 const dollars = (value: number | null) => (value === null ? '–' : `$${value.toFixed(2)}`)
 
 const RANGES = [
@@ -107,8 +115,10 @@ export function Dashboard() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Dashboard</h2>
-          <p class="muted">What got done, who used how much, and how the quota is moving.</p>
+          <h2>Statistics</h2>
+          <p class="muted">
+            What got done, who used how much and how the quota moves.
+          </p>
         </div>
         <div class="segmented" role="group" aria-label="Time range">
           <For each={RANGES}>
@@ -133,7 +143,7 @@ export function Dashboard() {
               <Stat
                 value={
                   data().totals.runs
-                    ? `${Math.round((100 * data().totals.failedRuns) / data().totals.runs)}%`
+                    ? `${Math.round((100 * data().totals.failedRuns) / data().totals.runs)} %`
                     : '–'
                 }
                 label="Of those failed"
@@ -187,7 +197,7 @@ export function Dashboard() {
                     series={quotaSeries()}
                     label="Remaining quota per provider"
                     max={100}
-                    unit="%"
+                    unit=" %"
                   />
                 </Show>
               </section>
@@ -271,8 +281,32 @@ export function Dashboard() {
               </tbody>
             </table>
 
+            <h3>Providers compared</h3>
+            <div class="provider-compare">
+              <For each={data().outcomeByProvider} fallback={<p class="muted">No runs in this period.</p>}>
+                {(row) => (
+                  <article class="provider-card">
+                    <header>{row.label}</header>
+                    <div class="usable-ring" style={{ '--value': `${Math.round(row.usableRate * 100)}%` }}>
+                      <span>{percent(row.usableRate)}</span>
+                    </div>
+                    <dl>
+                      <dt>Runs</dt>
+                      <dd>{row.runs}</dd>
+                      <dt>Per run</dt>
+                      <dd>{dollars(row.costPerRun)}</dd>
+                      <dt>Duration</dt>
+                      <dd>{Math.round(row.avgMs / 60000)} min</dd>
+                    </dl>
+                  </article>
+                )}
+              </For>
+            </div>
+
             <h3>Outcomes per model</h3>
-            <p class="muted">Usable: the run delivered a result, a handoff or a verdict.</p>
+            <p class="muted">
+              Usable: the run delivered a result, a handoff or a verdict.
+            </p>
             <table>
               <thead>
                 <tr>
@@ -308,7 +342,7 @@ export function Dashboard() {
 
 function Stat(props: { value: number | string; label: string }) {
   return (
-    <div class="stat">
+    <div classList={{ stat: true, zero: props.value === 0 || props.value === '0 %' }}>
       <strong>{typeof props.value === 'number' ? props.value.toLocaleString('en-US') : props.value}</strong>
       <span>{props.label}</span>
     </div>

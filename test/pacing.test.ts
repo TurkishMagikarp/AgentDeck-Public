@@ -35,9 +35,14 @@ describe('limitingWindows', () => {
     )
   })
 
-  test('ignores readings older than six hours', () => {
-    setQuota('anthropic', 'seven_day', 0.93, { age: 7 * HOUR })
+  test('ignores old readings only when no reset is known', () => {
+    setQuota('anthropic', 'seven_day', 0.93, { age: 7 * HOUR, resetsIn: null })
     assert.equal(limitingWindows('anthropic').length, 0)
+  })
+
+  test('retains an old reading until its reported reset', () => {
+    setQuota('anthropic', 'seven_day', 0.98, { age: 7 * HOUR })
+    assert.equal(limitingWindows('anthropic')[0]?.stale, true)
   })
 
   test('keeps a reading younger than six hours', () => {
@@ -102,6 +107,12 @@ describe('paceOf', () => {
 })
 
 describe('modelLimitReached', () => {
+  test('a subscription model limit does not affect API-key runs', () => {
+    setMode('anthropic', 'apikey')
+    setQuota('anthropic', 'seven_day_fable', 1)
+    assert.equal(modelLimitReached('anthropic', 'claude-fable-5-2'), false)
+  })
+
   test('is true for a model whose own limit is used up', () => {
     setQuota('anthropic', 'seven_day_fable', 1)
     assert.equal(modelLimitReached('anthropic', 'claude-fable-5-2'), true)

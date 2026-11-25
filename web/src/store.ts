@@ -44,6 +44,15 @@ export function onRunOutput(runId: number, listener: OutputListener) {
 export const [groupFilter, setGroupFilter] = createSignal('')
 export const [error, setError] = createSignal('')
 
+/** A short confirmation ("SHOP-17 created") shown as a toast, gone after a few seconds. */
+export const [info, setInfo] = createSignal('')
+let infoTimer: number | undefined
+export function say(text: string) {
+  setInfo(text)
+  clearTimeout(infoTimer)
+  infoTimer = window.setTimeout(() => setInfo(''), 3500)
+}
+
 let events: EventSource | null = null
 
 export function fail(e: unknown) {
@@ -244,10 +253,15 @@ export const weights = createRoot(() => createMemo(() => blockerWeights(board.is
 export function saveSettings(change: (settings: Settings) => void) {
   const project = board.project
   if (!project) return
-  const settings = structuredClone(unwrap(project.settings))
+  const before = structuredClone(unwrap(project.settings))
+  const settings = structuredClone(before)
   change(settings)
   setBoard('project', 'settings', reconcile(settings))
-  return api.patch(`/projects/${project.id}`, { settings }).catch(fail)
+  // A refused change (wrong token, dialog closed) must not stay on screen as if it were saved.
+  return api.patch(`/projects/${project.id}`, { settings }).catch((err) => {
+    if (board.project?.id === project.id) setBoard('project', 'settings', reconcile(before))
+    fail(err)
+  })
 }
 
 export const agentById = (id: number | null) => board.agents.find((a) => a.id === id)
