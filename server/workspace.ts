@@ -2,7 +2,7 @@
 //   issue: every issue has its own worktree. Nothing is shared, nothing has to be switched.
 //   agent: every agent keeps one checkout and switches to the issue's branch. Build caches that
 //          are expensive to recreate (an engine's asset import, node_modules) survive between issues.
-import { existsSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { mkdir } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { DATA_DIR } from './db.ts'
@@ -42,13 +42,26 @@ async function hasCommits(base: string) {
 }
 
 /**
+ * The one spelling of a path. Git prints the long form of a Windows path while a temp folder often
+ * comes in its short form ("RUNNER~1"), and a link can stand for a folder: compared as text, the
+ * same place would look like two.
+ */
+function realPath(path: string) {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return resolve(path)
+  }
+}
+
+/**
  * A plain folder that merely sits inside some other repository is not a repo of its own. Without
  * this check git would answer for the surrounding repository, and branches would land there.
  */
 async function isRepoRoot(base: string) {
   try {
     const { stdout } = await git(base, 'rev-parse', '--show-toplevel')
-    return relative(resolve(stdout.trim()), resolve(base)) === ''
+    return relative(realPath(stdout.trim()), realPath(base)) === ''
   } catch {
     return false
   }
@@ -133,10 +146,10 @@ async function takeBranchBack(base: string, branch: string, worktree: string) {
   for (const entry of stdout.split(/\r?\n\r?\n/)) {
     const lines = entry.split(/\r?\n/)
     if (!lines.includes(`branch refs/heads/${branch}`)) continue
-    const holder = resolve(lines[0].replace(/^worktree /, ''))
+    const holder = realPath(lines[0].replace(/^worktree /, ''))
     const isOtherAgentCheckout =
-      holder !== resolve(worktree) &&
-      dirname(holder) === resolve(dirname(worktree)) &&
+      holder !== realPath(worktree) &&
+      dirname(holder) === realPath(dirname(worktree)) &&
       basename(holder).startsWith('agent-')
     if (!isOtherAgentCheckout) continue
     await succeeds(git(holder, 'stash', 'push', '--include-untracked', '-m', `agentdeck: before releasing ${branch}`))
