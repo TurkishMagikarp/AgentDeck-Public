@@ -1,7 +1,8 @@
 import { createResource, createSignal, For, Match, Show, Switch } from 'solid-js'
 import { api } from './api'
-import { fail, loadProjects, openProject, providers } from './store'
+import { fail, loadProjects, openProject, projects, providers } from './store'
 import { Field, Modal } from './ui'
+import { language, t } from './i18n'
 
 type ApplyResult = { projectId: number; agents: number; skills: number; issues: number }
 
@@ -15,16 +16,16 @@ export function NewProject(props: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="New project" onClose={props.onClose} wide>
+    <Modal title={t('Neues Projekt')} onClose={props.onClose} wide>
       <div class="tabs small">
         <button classList={{ active: mode() === 'ai' }} onClick={() => setMode('ai')}>
-          Let the AI set it up
+          {t('Von der KI aufbauen lassen')}
         </button>
         <button classList={{ active: mode() === 'template' }} onClick={() => setMode('template')}>
-          From a template
+          {t('Aus Vorlage')}
         </button>
         <button classList={{ active: mode() === 'manual' }} onClick={() => setMode('manual')}>
-          Empty project
+          {t('Leeres Projekt')}
         </button>
       </div>
       <Switch>
@@ -63,6 +64,7 @@ function ManualSetup(props: { onDone: (projectId: number) => void }) {
         key: key() || suggestedKey(),
         repo_path: repoPath(),
         description: description(),
+        settings: { language: language() },
       })
       props.onDone(project.id)
     } catch (err) {
@@ -73,10 +75,10 @@ function ManualSetup(props: { onDone: (projectId: number) => void }) {
   return (
     <form class="form" onSubmit={create}>
       <div class="row">
-        <Field label="Name">
+        <Field label={t('Name')}>
           <input required value={name()} onInput={(e) => setName(e.currentTarget.value)} />
         </Field>
-        <Field label="Key" hint="Issue prefix, e.g. SHOP-12">
+        <Field label={t('Kürzel')} hint={t('Präfix der Issues, z. B. SHOP-12')}>
           <input
             placeholder={suggestedKey()}
             maxLength={8}
@@ -86,22 +88,22 @@ function ManualSetup(props: { onDone: (projectId: number) => void }) {
         </Field>
       </div>
       <Field
-        label="Git repository on the server"
-        hint="Absolute path. Leave empty and AgentDeck creates a checkout."
+        label={t('Git-Repository auf dem Server')}
+        hint={t('Absoluter Pfad. Leer = AgentDeck legt einen Arbeitsordner an.')}
       >
         <input
-          placeholder="/srv/repos/my-project"
+          placeholder={t('/srv/repos/mein-projekt')}
           value={repoPath()}
           onInput={(e) => setRepoPath(e.currentTarget.value)}
         />
       </Field>
-      <Field label="Context for all agents">
+      <Field label={t('Kontext für alle Agenten')}>
         <textarea rows="4" value={description()} onInput={(e) => setDescription(e.currentTarget.value)} />
       </Field>
       <footer>
         <span class="spacer" />
         <button class="primary" type="submit">
-          Create project
+          {t('Projekt anlegen')}
         </button>
       </footer>
     </form>
@@ -129,7 +131,13 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
 
   async function apply() {
     try {
-      const result = await api.post<ApplyResult>('/blueprint', JSON.parse(blueprint()))
+      const plan = JSON.parse(blueprint())
+      // A new project works in the language of the person who creates it, unless the plan names one.
+      // A plan for an existing key extends that project and leaves its language alone.
+      const key = String(plan?.project?.key ?? '').toUpperCase()
+      if (plan?.project && !projects().some((project) => project.key === key))
+        plan.project.settings = { language: language(), ...plan.project.settings }
+      const result = await api.post<ApplyResult>('/blueprint', plan)
       props.onDone(result.projectId)
     } catch (err) {
       fail(err)
@@ -142,13 +150,13 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
       fallback={
         <form class="form" onSubmit={generate}>
           <Field
-            label="What should be built?"
-            hint="The AI suggests agents, skills and issues. You see the proposal before anything is created."
+            label={t('Was soll gebaut werden?')}
+            hint={t('Die KI schlägt Agenten, Skills und Issues vor. Du siehst den Vorschlag, bevor etwas angelegt wird.')}
           >
             <textarea
               rows="8"
               required
-              placeholder="Build an online shop with Next.js and Stripe. An architect plans, two developers build, a reviewer checks…"
+              placeholder={t('Baue einen Webshop mit Next.js und Stripe. Ein Architekt plant, zwei Entwickler setzen um, ein Reviewer prüft…')}
               value={wish()}
               onInput={(e) => setWish(e.currentTarget.value)}
             />
@@ -165,14 +173,14 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
             </select>
             <span class="spacer" />
             <button class="primary" type="submit" disabled={busy()}>
-              {busy() ? 'AI is planning…' : 'Create proposal'}
+              {busy() ? t('KI plant…') : t('Vorschlag erstellen')}
             </button>
           </footer>
         </form>
       }
     >
       <div class="form">
-        <Field label="Proposal (editable)">
+        <Field label={t('Vorschlag (bearbeitbar)')}>
           <textarea
             rows="20"
             class="mono"
@@ -181,10 +189,10 @@ function AiSetup(props: { onDone: (projectId: number) => void }) {
           />
         </Field>
         <footer>
-          <button onClick={() => setBlueprint('')}>Back</button>
+          <button onClick={() => setBlueprint('')}>{t('Zurück')}</button>
           <span class="spacer" />
           <button class="primary" onClick={apply}>
-            Create as shown
+            {t('So anlegen')}
           </button>
         </footer>
       </div>
@@ -214,6 +222,7 @@ function TemplateSetup(props: { onDone: (projectId: number) => void }) {
         name: name(),
         key: key() || suggestedKey(),
         repo_path: repoPath(),
+        settings: { language: language() },
       })
       props.onDone(result.projectId)
     } catch (err) {
@@ -235,7 +244,7 @@ function TemplateSetup(props: { onDone: (projectId: number) => void }) {
               <strong>{template.name}</strong>
               <span>{template.summary}</span>
               <small class="muted">
-                {template.agents.join(', ')} · {template.issues} Start-Issues
+                {template.agents.join(', ')} · {t('{n} Start-Issues', { n: template.issues })}
               </small>
             </button>
           )}
@@ -243,10 +252,10 @@ function TemplateSetup(props: { onDone: (projectId: number) => void }) {
       </div>
       <Show when={chosen()}>
         <div class="row">
-          <Field label="Name">
+          <Field label={t('Name')}>
             <input required value={name()} onInput={(e) => setName(e.currentTarget.value)} />
           </Field>
-          <Field label="Key" hint="Issue prefix, e.g. SHOP-12">
+          <Field label={t('Kürzel')} hint={t('Präfix der Issues, z. B. SHOP-12')}>
             <input
               placeholder={suggestedKey()}
               maxLength={8}
@@ -255,21 +264,21 @@ function TemplateSetup(props: { onDone: (projectId: number) => void }) {
             />
           </Field>
         </div>
-        <Field label="Git repository on the server" hint="Empty = AgentDeck creates a working folder.">
+        <Field label={t('Git-Repository auf dem Server')} hint={t('Leer = AgentDeck legt einen Arbeitsordner an.')}>
           <input
-            placeholder="/repos/my-project"
+            placeholder={t('/repos/mein-projekt')}
             value={repoPath()}
             onInput={(e) => setRepoPath(e.currentTarget.value)}
           />
         </Field>
         <p class="muted">
-          The project is fully autonomous and starts paused: check agents and providers, then press "Resume".
+          {t('Das Projekt ist vollautonom und startet pausiert: Prüf Agenten und Anbieter, dann „Fortsetzen“.')}
         </p>
       </Show>
       <footer>
         <span class="spacer" />
         <button class="primary" type="submit" disabled={!chosen()}>
-          Create project
+          {t('Projekt anlegen')}
         </button>
       </footer>
     </form>

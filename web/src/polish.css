@@ -504,6 +504,19 @@ table.scores tbody th .mono {
   min-width: 0;
 }
 
+/* Desktop: the tabs ask for their full width. When it does not fit next to the toolbar, they
+   move to a row of their own, at any window width and any zoom, instead of being cut off. */
+@media (min-width: 761px) {
+  .topbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .topbar .tabs {
+    flex: 1 1 auto;
+    min-width: min(100%, max-content);
+  }
+}
+
 @media (max-width: 1500px) {
   .topbar > .search-button .search-label,
   .topbar > .search-button kbd {
@@ -511,7 +524,7 @@ table.scores tbody th .mono {
   }
 }
 
-/* Mission Control tools, the "More" menu and the small texts the audit measured under 12px. */
+/* Mission Control tools, the "Mehr" menu and the small texts the audit measured under 12px. */
 .more-menu {
   display: grid;
   gap: 6px;
@@ -604,6 +617,56 @@ table.scores tbody th .mono {
 
 .page > * {
   min-width: 0;
+}
+
+/* Rows size to their content. Without this, a table (display: block, overflow-x: auto) is squeezed
+   to its border by the fixed-height page and its rows vanish. */
+.page {
+  grid-auto-rows: max-content;
+}
+
+.page > table {
+  min-height: min-content;
+}
+
+/* The top bar and the tabs never give up height, whatever the page below needs. */
+.topbar {
+  flex: none;
+}
+
+/* Statistics: custom range, agent rows split by model. */
+.range-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px 14px;
+}
+
+.range-form label {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.range-form button.active {
+  border-color: var(--accent);
+}
+
+tr.agent-total td {
+  font-weight: 600;
+}
+
+tr.agent-model td {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* The issue sidebar is sticky: when it is taller than the window it scrolls inside itself. */
+.issue-side {
+  max-height: calc(100vh - 80px);
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
 }
 
 /* Fields in a row share the room instead of each insisting on its natural width. */

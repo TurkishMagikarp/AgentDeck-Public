@@ -1,11 +1,12 @@
 import { createEffect, createResource, For, on, onCleanup, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { api } from './api'
+import { t, locale } from './i18n'
 import { onRunOutput } from './store'
 
 type Line = { at: number; text: string }
 
-const clock = (at: number) => new Date(at).toLocaleTimeString('en-US')
+const clock = (at: number) => new Date(at).toLocaleTimeString(locale())
 
 /**
  * What an agent printed during one run: its messages and every tool call. For a running agent
@@ -37,8 +38,8 @@ export function RunLog(props: { runId: number; live?: boolean }) {
 
   return (
     <div class="run-log" ref={box}>
-      <Show when={!loaded.loading} fallback={<p class="muted">Loading output…</p>}>
-        <For each={lines} fallback={<p class="muted">No output yet.</p>}>
+      <Show when={!loaded.loading} fallback={<p class="muted">{t('Lade Ausgabe…')}</p>}>
+        <For each={lines} fallback={<p class="muted">{t('Noch keine Ausgabe.')}</p>}>
           {(line) => (
             <p>
               <time>{clock(line.at)}</time>

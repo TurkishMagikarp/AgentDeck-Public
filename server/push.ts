@@ -3,6 +3,7 @@
 import webpush from 'web-push'
 import { getSecret, setSecret } from './auth.ts'
 import { all, run } from './db.ts'
+import { t } from './i18n.ts'
 
 const SECRET = 'vapid'
 const SUBJECT = process.env.AGENTDECK_PUBLIC_URL || 'https://localhost'
@@ -25,7 +26,7 @@ export function subscribe(subscription: Subscription, device: string) {
     !subscription.keys?.p256dh ||
     !subscription.keys?.auth
   ) {
-    throw new Error('Invalid push subscription')
+    throw new Error(t('Ungültiges Push-Abo'))
   }
   run(
     'INSERT OR REPLACE INTO push_subscriptions (endpoint, keys, device, created_at) VALUES (?,?,?,?)',

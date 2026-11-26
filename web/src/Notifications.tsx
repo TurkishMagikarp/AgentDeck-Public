@@ -1,5 +1,6 @@
 import { createResource, createSignal, Show } from 'solid-js'
 import { api } from './api'
+import { t } from './i18n'
 import { fail } from './store'
 
 type PushInfo = { publicKey: string; devices: number }
@@ -30,7 +31,7 @@ export function PushSettings() {
     setBusy(true)
     try {
       if ((await Notification.requestPermission()) !== 'granted')
-        throw new Error('Notifications are blocked in the browser')
+        throw new Error(t('Benachrichtigungen sind im Browser blockiert'))
       const { registration } = await currentSubscription()
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
@@ -69,30 +70,30 @@ export function PushSettings() {
         when={pushSupported()}
         fallback={
           <p class="muted">
-            This browser cannot receive push notifications. On an iPhone, use "Add to Home Screen" first.
+            {t('Dieser Browser kann keine Push-Nachrichten empfangen. Auf dem iPhone erst „Zum Home-Bildschirm“.')}
           </p>
         }
       >
         <div class="key-form">
           <span class="grow">
             {here()
-              ? 'This device gets push messages.'
-              : 'This device gets no push messages.'}{' '}
-            <span class="muted">Devices in total: {info()?.devices ?? 0}</span>
+              ? t('Dieses Gerät bekommt Push-Nachrichten.')
+              : t('Dieses Gerät bekommt keine Push-Nachrichten.')}{' '}
+            <span class="muted">{t('Geräte insgesamt: {n}', { n: info()?.devices ?? 0 })}</span>
           </span>
           <Show
             when={here()}
             fallback={
               <button class="primary" disabled={busy() || !info()} onClick={turnOn}>
-                Turn on push
+                {t('Push aktivieren')}
               </button>
             }
           >
             <button disabled={busy()} onClick={() => api.post('/push/test').catch(fail)}>
-              Test-Push
+              {t('Test-Push')}
             </button>
             <button class="ghost" disabled={busy()} onClick={turnOff}>
-              Unsubscribe
+              {t('Abmelden')}
             </button>
           </Show>
         </div>
@@ -121,14 +122,14 @@ export function ReportSettings() {
     <section class="provider">
       <div class="key-form">
         <label class="grow">
-          Morning report at{' '}
+          {t('Morgenbericht um')}{' '}
           <input type="time" value={report()?.at ?? ''} onChange={(e) => save(e.currentTarget.value)} />
-          <span class="muted"> {report()?.at ? '' : '(off)'}</span>
+          <span class="muted"> {report()?.at ? '' : t('(aus)')}</span>
         </label>
         <button class="ghost" onClick={() => setShowPreview(!showPreview())}>
-          {showPreview() ? 'Close preview' : 'Preview'}
+          {showPreview() ? t('Vorschau schließen') : t('Vorschau')}
         </button>
-        <button onClick={sendNow}>{sent() ? 'Sent' : 'Send now'}</button>
+        <button onClick={sendNow}>{sent() ? t('Gesendet') : t('Jetzt senden')}</button>
       </div>
       <Show when={showPreview()}>
         <pre class="report-preview">{report()?.preview}</pre>

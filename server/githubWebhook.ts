@@ -6,6 +6,7 @@
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { createHmac, timingSafeEqual } from 'node:crypto'
+import { t } from './i18n.ts'
 import { takeGithubIssue } from './intake.ts'
 import { nudgePullRequests, waitingIssuesFor, webhookArrived } from './landing.ts'
 
@@ -116,11 +117,11 @@ export function webhookApp(
   app.post(
     '/webhook',
     async (c, next) => {
-      if (!secret) return c.json({ error: 'Webhook not set up' }, 404)
-      if (limiter.blocked(addressOf(c))) return c.json({ error: 'too many invalid requests' }, 429)
+      if (!secret) return c.json({ error: t('Webhook nicht eingerichtet') }, 404)
+      if (limiter.blocked(addressOf(c))) return c.json({ error: t('zu viele ungültige Anfragen') }, 429)
       return next()
     },
-    bodyLimit({ maxSize: MAX_BODY, onError: (c) => c.json({ error: 'too large' }, 413) }),
+    bodyLimit({ maxSize: MAX_BODY, onError: (c) => c.json({ error: t('zu groß') }, 413) }),
     async (c) => {
       const raw = new Uint8Array(await c.req.arrayBuffer())
       if (!verifySignature(secret, raw, c.req.header('x-hub-signature-256'))) {
@@ -132,7 +133,7 @@ export function webhookApp(
       try {
         payload = JSON.parse(Buffer.from(raw).toString('utf8'))
       } catch {
-        return c.json({ error: 'JSON expected' }, 400)
+        return c.json({ error: t('JSON erwartet') }, 400)
       }
       if (event === 'issues') {
         takeIssue(payload)
@@ -151,7 +152,7 @@ export function webhookApp(
 /** The secret from the environment; too short a secret is refused, as for the proxy secret. */
 export function webhookSecret(value = process.env.AGENTDECK_GITHUB_WEBHOOK_SECRET ?? '') {
   if (value && value.length < 16) {
-    console.error('AGENTDECK_GITHUB_WEBHOOK_SECRET is shorter than 16 characters, GitHub webhooks stay off.')
+    console.error('AGENTDECK_GITHUB_WEBHOOK_SECRET ist kürzer als 16 Zeichen, GitHub-Webhooks bleiben aus.')
     return ''
   }
   return value

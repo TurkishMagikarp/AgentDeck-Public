@@ -4,6 +4,7 @@
 //   Lines          one line per series over the days
 // All share one frame (axis, grid, hover band, tooltip), so they line up when stacked on a page.
 import { createMemo, createSignal, For, Show, type JSX } from 'solid-js'
+import { locale, t } from './i18n'
 
 export type Series = { name: string; color: string; values: (number | null)[] }
 
@@ -26,10 +27,15 @@ function niceMax(value: number) {
 export function compact(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value >= 10_000_000 ? 0 : 1)} M`
   if (value >= 10_000) return `${Math.round(value / 1000)} k`
-  return value.toLocaleString('en-US')
+  return value.toLocaleString(locale())
 }
 
-const shortDay = (day: string) => `${day.slice(8, 10)}.${day.slice(5, 7)}.`
+// 26.11. in German, 26/11 in English.
+const shortDay = (day: string) =>
+  new Date(Number(day.slice(0, 4)), Number(day.slice(5, 7)) - 1, Number(day.slice(8, 10))).toLocaleDateString(
+    locale(),
+    { day: '2-digit', month: '2-digit' },
+  )
 
 /** Axis, grid, day labels, the hover band and the tooltip. The marks come in as children. */
 function Frame(props: {
@@ -209,7 +215,7 @@ export function StackedColumns(props: { days: string[]; series: Series[]; label:
               color: series.color,
               value: compact(series.values[index]!),
             })),
-          { name: 'total', color: 'transparent', value: compact(totals()[index]) },
+          { name: t('gesamt'), color: 'transparent', value: compact(totals()[index]) },
         ]}
       >
         {(hovered) => (

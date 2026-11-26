@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { api } from './api'
+import { t } from './i18n'
 import { board, fail } from './store'
 import type { Skill } from './types'
 import { Field, Modal, onActivateKey } from './ui'
@@ -17,29 +18,32 @@ export function Skills() {
         <div>
           <h2>Skills</h2>
           <p class="muted">
-            Reusable knowledge. An agent only gets the skills in its prompt that are assigned
-            to it.
+            {t('Wiederverwendbares Wissen. Ein Agent bekommt nur die Skills in den Prompt, die ihm zugewiesen sind.')}
           </p>
         </div>
         <button class="primary" onClick={() => setEditing({ name: '', description: '', content: '' })}>
-          Add skill
+          {t('Skill hinzufügen')}
         </button>
       </div>
 
       <div class="grid">
-        <For each={board.skills} fallback={<p class="muted">No skills yet.</p>}>
+        <For each={board.skills} fallback={<p class="muted">{t('Noch keine Skills.')}</p>}>
           {(skill) => (
             <article
               class="tile"
               role="button"
               tabIndex={0}
-              aria-label={`Edit skill ${skill.name}`}
+              aria-label={t('Skill {name} bearbeiten', { name: skill.name })}
               onClick={() => setEditing({ ...skill })}
               onKeyDown={onActivateKey(() => setEditing({ ...skill }))}
             >
               <strong>{skill.name}</strong>
-              <p class="muted">{skill.description || 'No description'}</p>
-              <p>{usedBy(skill.id)} agents use this skill</p>
+              <p class="muted">{skill.description || t('Keine Beschreibung')}</p>
+              <p>
+                {usedBy(skill.id) === 1
+                  ? t('1 Agent nutzt diesen Skill')
+                  : t('{n} Agenten nutzen diesen Skill', { n: usedBy(skill.id) })}
+              </p>
             </article>
           )}
         </For>
@@ -67,26 +71,26 @@ function SkillForm(props: { draft: Draft; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Delete skill "${draft.name}"?`)) return
+    if (!confirm(t('Skill "{name}" löschen?', { name: draft.name }))) return
     await api.del(`/skills/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Edit skill' : 'New skill'} onClose={props.onClose} wide>
+    <Modal title={draft.id ? t('Skill bearbeiten') : t('Neuer Skill')} onClose={props.onClose} wide>
       <form class="form" onSubmit={save}>
         <div class="row">
-          <Field label="Name">
+          <Field label={t('Name')}>
             <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
           </Field>
-          <Field label="Short description">
+          <Field label={t('Kurzbeschreibung')}>
             <input
               value={draft.description}
               onInput={(e) => setDraft('description', e.currentTarget.value)}
             />
           </Field>
         </div>
-        <Field label="Content (Markdown)">
+        <Field label={t('Inhalt (Markdown)')}>
           <textarea
             rows="16"
             class="mono"
@@ -97,15 +101,15 @@ function SkillForm(props: { draft: Draft; onClose: () => void }) {
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Delete
+              {t('Löschen')}
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Cancel
+            {t('Abbrechen')}
           </button>
           <button class="primary" type="submit">
-            Save
+            {t('Speichern')}
           </button>
         </footer>
       </form>

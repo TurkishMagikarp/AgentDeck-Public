@@ -135,7 +135,7 @@ test('a viewer reads through MCP but cannot write', async () => {
   assert.equal((await tool('get_board', { project: 'MCP' }, user.token)).isError, false)
   const refused = await tool('create_issue', { project: 'MCP', title: 'Not allowed' }, user.token)
   assert.ok(refused.isError)
-  assert.match(refused.value, /permission/)
+  assert.match(refused.value, /Berechtigung/)
 })
 
 test('the MCP client of the SDK connects, lists the tools and calls one', async () => {

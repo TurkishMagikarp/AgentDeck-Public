@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from 'solid-js'
 import { api } from './api'
 import { Icon } from './icons'
+import { t } from './i18n'
 import { fail, showIssuePage } from './store'
 
 type Hit = {
@@ -15,7 +16,7 @@ type Hit = {
   excerpt: string
 }
 
-/** An action offered next to the issues: "Mission Control", "New project", switch project … */
+/** An action offered next to the issues: "Mission Control", "Neues Projekt", switch project … */
 export type Command = { id: string; label: string; hint?: string; run: () => void }
 
 type Entry = { kind: 'command'; command: Command } | { kind: 'issue'; hit: Hit } | { kind: 'create'; title: string }
@@ -26,10 +27,10 @@ export type Capture = { project: string; create: (title: string) => void }
 const STATUS_LABEL: Record<string, string> = {
   backlog: 'Backlog',
   todo: 'To Do',
-  in_progress: 'In progress',
+  in_progress: 'In Arbeit',
   review: 'Review',
-  blocked: 'Waiting',
-  done: 'Done',
+  blocked: 'Wartet',
+  done: 'Fertig',
 }
 
 const RECENT_KEY = 'agentdeck.recentIssues'
@@ -144,7 +145,7 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
 
   return (
     <div class="overlay palette-overlay" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
-      <div class="palette" role="dialog" aria-modal="true" aria-label="Search and actions">
+      <div class="palette" role="dialog" aria-modal="true" aria-label={t('Suchen und Aktionen')}>
         <div class="palette-input">
           <Icon name="search" size={18} />
           <input
@@ -153,13 +154,13 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
             aria-expanded={entries().length > 0}
             aria-controls="palette-results"
             aria-activedescendant={entries().length ? `palette-hit-${active()}` : undefined}
-            placeholder="Search issues: ABC-439, title or text from the description"
+            placeholder={t('Issue suchen (SHOP-439, Titel, Text) oder Aktion ausführen')}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
             onKeyDown={onKey}
           />
           <Show when={loading()}>
-            <span class="muted palette-loading">searching…</span>
+            <span class="muted palette-loading">{t('sucht…')}</span>
           </Show>
           <kbd>Esc</kbd>
         </div>
@@ -180,8 +181,8 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
                     <span class="palette-action" aria-hidden="true">
                       <Icon name="plus" size={13} />
                     </span>
-                    <span class="palette-title">Create issue: {entry.title}</span>
-                    <span class="muted palette-meta">in {props.capture?.project}</span>
+                    <span class="palette-title">{t('Issue anlegen: {title}', { title: entry.title })}</span>
+                    <span class="muted palette-meta">{t('in {project}', { project: props.capture?.project ?? '' })}</span>
                   </>
                 ) : entry.kind === 'command' ? (
                   <>
@@ -189,7 +190,7 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
                       <Icon name="bolt" size={13} />
                     </span>
                     <span class="palette-title">{entry.command.label}</span>
-                    <span class="muted palette-meta">{entry.command.hint ?? 'Action'}</span>
+                    <span class="muted palette-meta">{entry.command.hint ?? t('Aktion')}</span>
                   </>
                 ) : (
                   <>
@@ -202,7 +203,7 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
                       </Show>
                     </span>
                     <span class="muted palette-meta">
-                      {STATUS_LABEL[entry.hit.status] ?? entry.hit.status}
+                      {STATUS_LABEL[entry.hit.status] ? t(STATUS_LABEL[entry.hit.status]) : entry.hit.status}
                       {entry.hit.assignee ? ` · ${entry.hit.assignee}` : ''}
                     </span>
                   </>
@@ -214,23 +215,24 @@ export function SearchPalette(props: { onClose: () => void; commands?: Command[]
 
         <Show when={query().trim() && !loading() && !entries().length}>
           <div class="palette-empty">
-            <p>Nothing found for “{query().trim()}”.</p>
+            <p>{t('Nichts gefunden für „{query}“.', { query: query().trim() })}</p>
             <p class="muted">
-              Try an issue number like ABC-439, a single word from the title, or fewer words. The search
-              covers all projects, in title and description.
+              {t(
+                'Versuch eine Issue-Nummer wie SHOP-439, ein einzelnes Wort aus dem Titel oder weniger Wörter. Gesucht wird in allen Projekten, in Titel und Beschreibung.',
+              )}
             </p>
           </div>
         </Show>
 
         <footer class="palette-help muted">
           <span>
-            <kbd>↑</kbd> <kbd>↓</kbd> select
+            <kbd>↑</kbd> <kbd>↓</kbd> {t('wählen')}
           </span>
           <span>
-            <kbd>Enter</kbd> open
+            <kbd>Enter</kbd> {t('öffnen')}
           </span>
           <span>
-            <kbd>Ctrl</kbd> <kbd>K</kbd> anywhere
+            <kbd>{t('Strg')}</kbd> <kbd>K</kbd> {t('überall')}
           </span>
         </footer>
       </div>

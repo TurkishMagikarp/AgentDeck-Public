@@ -18,26 +18,27 @@ import {
 import type { Issue, Status } from './types'
 import { Icon } from './icons'
 import { initials } from './ui'
+import { t, locale } from './i18n'
 
 const COLUMNS: { status: Status; label: string; canAdd?: boolean }[] = [
   { status: 'backlog', label: 'Backlog', canAdd: true },
   { status: 'todo', label: 'To Do', canAdd: true },
-  { status: 'in_progress', label: 'In progress' },
+  { status: 'in_progress', label: 'In Arbeit' },
   { status: 'review', label: 'Review' },
-  { status: 'blocked', label: 'Waits for a human' },
-  { status: 'done', label: 'Done' },
+  { status: 'blocked', label: 'Wartet auf Mensch' },
+  { status: 'done', label: 'Fertig' },
 ]
 
-export const PRIORITIES = ['Low', 'Normal', 'High', 'Urgent']
+export const PRIORITIES = ['Niedrig', 'Normal', 'Hoch', 'Dringend']
 
 type SortKey = 'priority' | 'newest' | 'oldest' | 'updated' | 'title' | 'assignee'
 
 const SORTS: [SortKey, string][] = [
-  ['priority', 'Priority'],
-  ['newest', 'Newest first'],
-  ['oldest', 'Oldest first'],
-  ['updated', 'Last changed'],
-  ['title', 'Title A–Z'],
+  ['priority', 'Priorität'],
+  ['newest', 'Neueste zuerst'],
+  ['oldest', 'Älteste zuerst'],
+  ['updated', 'Zuletzt geändert'],
+  ['title', 'Titel A–Z'],
   ['assignee', 'Agent'],
 ]
 
@@ -58,11 +59,11 @@ function compareBy(key: SortKey): (a: Issue, b: Issue) => number {
     case 'updated':
       return (a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0) || b.number - a.number
     case 'title':
-      return (a, b) => a.title.localeCompare(b.title, 'en') || a.number - b.number
+      return (a, b) => a.title.localeCompare(b.title, locale()) || a.number - b.number
     case 'assignee': {
       // Unassigned issues go last.
       const name = (issue: Issue) => agentById(issue.assignee_id)?.name ?? '￿'
-      return (a, b) => name(a).localeCompare(name(b), 'en') || b.priority - a.priority || a.number - b.number
+      return (a, b) => name(a).localeCompare(name(b), locale()) || b.priority - a.priority || a.number - b.number
     }
     default:
       return (a, b) => {
@@ -105,7 +106,7 @@ export function Board() {
       <Show when={groups().length}>
         <div class="board-filter">
           <button classList={{ active: groupFilter() === '' }} onClick={() => setGroupFilter('')}>
-            All
+            {t('Alle')}
           </button>
           <For each={groups()}>
             {(group) => (
@@ -118,12 +119,12 @@ export function Board() {
       </Show>
       <QueueSummary />
       {/* Phones show one column at a time; this bar says how much is where and jumps there. */}
-      <nav class="board-jump" aria-label="Jump to column">
+      <nav class="board-jump" aria-label={t('Zur Spalte springen')}>
         <For each={visibleColumns()}>
           {(column) => (
             <button onClick={() => showColumn(column.status)}>
               <span class={`status-dot ${column.status}`} />
-              {column.label}
+              {t(column.label)}
               <strong>{countByStatus()[column.status] ?? 0}</strong>
             </button>
           )}
@@ -190,19 +191,19 @@ function Column(props: { status: Status; label: string; canAdd?: boolean }) {
     >
       <header>
         <span class={`status-dot ${props.status}`} />
-        <h3>{props.label}</h3>
+        <h3>{t(props.label)}</h3>
         <span class="count">{issues().length}</span>
         <select
           class="column-sort"
           classList={{ changed: sort() !== 'priority' }}
-          aria-label={`Sort ${props.label}`}
-          title="Order of this column"
+          aria-label={t('{label} sortieren', { label: t(props.label) })}
+          title={t('Sortierung dieser Spalte')}
           onChange={(e) => changeSort(e.currentTarget.value as SortKey)}
         >
           <For each={SORTS}>
             {([key, label]) => (
               <option value={key} selected={sort() === key}>
-                {label}
+                {t(label)}
               </option>
             )}
           </For>
@@ -216,8 +217,8 @@ function Column(props: { status: Status; label: string; canAdd?: boolean }) {
       <Show when={props.canAdd}>
         <form class="quick-add" onSubmit={addIssue}>
           <input
-            placeholder="+ New issue"
-            aria-label="Create a new issue"
+            placeholder={t('+ Issue anlegen')}
+            aria-label={t('Neues Issue anlegen')}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
           />
@@ -260,21 +261,21 @@ function Card(props: { issue: Issue }) {
         <Show when={shownPriority() >= 2}>
           <span
             class={`priority p${shownPriority()}`}
-            title={raised() ? `Raised because ${weight()!.blocks} issues wait on it` : undefined}
+            title={raised() ? t('Angehoben, weil {n} Issues darauf warten', { n: weight()!.blocks }) : undefined}
           >
             <Show when={raised()}>
               <Icon name="arrowUp" size={11} />
             </Show>
-            {PRIORITIES[shownPriority()]}
+            {t(PRIORITIES[shownPriority()])}
           </span>
         </Show>
         <Show when={weight()?.blocks}>
-          <span class="holds" title={`Holds up ${weight()!.blocks} issues`}>
-            holds up {weight()!.blocks}
+          <span class="holds" title={t('Hält {n} Issues auf', { n: weight()!.blocks })}>
+            {t('hält {n} auf', { n: weight()!.blocks })}
           </span>
         </Show>
         <Show when={waitingOn().length}>
-          <span class="waiting" title="Waiting on these issues">
+          <span class="waiting" title={t('Wartet auf diese Issues')}>
             <Icon name="clock" size={11} />
             {waitingOn()
               .map((n) => `${board.project?.key}-${n}`)
@@ -286,16 +287,16 @@ function Card(props: { issue: Issue }) {
       <p class="card-title">{props.issue.title}</p>
 
       <Show when={props.issue.landing === 'waiting'}>
-        <p class="review-badge">Pull request waits for checks</p>
+        <p class="review-badge">{t('Pull Request wartet auf Checks')}</p>
       </Show>
       <Show when={props.issue.landing === 'approval'}>
-        <p class="review-badge">Landing waits for your approval</p>
+        <p class="review-badge">{t('Landung wartet auf deine Freigabe')}</p>
       </Show>
       <Show when={props.issue.landing === 'arena'}>
-        <p class="review-badge">Arena: waits for the jury</p>
+        <p class="review-badge">{t('Arena: wartet auf die Jury')}</p>
       </Show>
       <Show when={props.issue.review_index >= 0}>
-        <p class="review-badge">Review by {assignee()?.name ?? 'reviewer'}</p>
+        <p class="review-badge">{t('Prüfung durch {name}', { name: assignee()?.name ?? t('Reviewer') })}</p>
       </Show>
 
       {/* Blockers already show as the marker in the top line. */}
@@ -311,7 +312,7 @@ function Card(props: { issue: Issue }) {
       <Show when={run()}>
         <p class="live-line">
           <span class="pulse" />
-          {liveLine[props.issue.id] ?? 'starting…'}
+          {liveLine[props.issue.id] ?? t('startet…')}
         </p>
       </Show>
 
@@ -328,14 +329,14 @@ function Card(props: { issue: Issue }) {
 }
 
 const REASON_LABEL: Record<string, string> = {
-  blocked: 'waiting on blockers',
-  merge: 'waiting for the merge of their blockers',
-  landing: 'approved, waiting for landing',
-  retry: 'waiting for a retry',
-  agent: 'waiting for their agent',
-  full: 'waiting for a free slot',
-  provider: 'waiting for a provider',
-  saving: 'waiting to save quota',
+  blocked: 'warten auf Blocker',
+  merge: 'warten auf den Merge ihrer Blocker',
+  landing: 'freigegeben, warten auf Landung',
+  retry: 'warten auf einen neuen Versuch',
+  agent: 'warten auf ihren Agenten',
+  full: 'warten auf einen freien Platz',
+  provider: 'warten auf einen Anbieter',
+  saving: 'warten, weil Kontingent gespart wird',
 }
 
 /**
@@ -356,9 +357,9 @@ function QueueSummary() {
       <div class="queue-summary">
         <Show
           when={!board.project?.paused}
-          fallback={<span>Project paused: nothing starts until you press "Resume".</span>}
+          fallback={<span>{t('Projekt pausiert: Es startet nichts, bis du „Fortsetzen“ drückst.')}</span>}
         >
-          <span class="muted">Queue:</span>
+          <span class="muted">{t('Warteschlange:')}</span>
           <For each={groups()}>
             {([kind, ids]) => (
               <button
@@ -366,7 +367,7 @@ function QueueSummary() {
                 title={waitReasons[ids[0]]?.text}
                 onClick={() => openIssue(ids[0]).catch(fail)}
               >
-                <strong>{ids.length}</strong> {REASON_LABEL[kind] ?? kind}
+                <strong>{ids.length}</strong> {REASON_LABEL[kind] ? t(REASON_LABEL[kind]) : kind}
               </button>
             )}
           </For>

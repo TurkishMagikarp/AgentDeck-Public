@@ -3,6 +3,7 @@
 // of the branch when it was held), so anything pushed after that needs a new approval.
 //
 // Only pure helpers and the git reads for the dependency check live here; landing.ts decides.
+import { t } from './i18n.ts'
 import { gitIn } from './sandbox.ts'
 
 export type ApprovalSettings = {
@@ -107,7 +108,7 @@ export function addedDependencies(file: string, before: string, after: string): 
   try {
     now = parse(after)
   } catch {
-    return [`${file} (not readable)`]
+    return [t('{file} (nicht lesbar)', { file })]
   }
   let old = new Set<string>()
   try {
@@ -311,18 +312,18 @@ export async function gateReasons(
   protectedFiles: string[],
 ): Promise<string[]> {
   const reasons: string[] = []
-  if (protectedFiles.length) reasons.push(`protected files: ${list(protectedFiles)}`)
+  if (protectedFiles.length) reasons.push(t('geschützte Dateien: {files}', { files: list(protectedFiles) }))
   if (settings.infra) {
     const infra = infraFiles(files, settings.infraGlobs)
-    if (infra.length) reasons.push(`infrastructure files: ${list(infra)}`)
+    if (infra.length) reasons.push(t('Infrastruktur-Dateien: {files}', { files: list(infra) }))
   }
   if (settings.dependencies) {
     const deps = await newDependencies(repo, forkPoint, tip, files)
-    if (deps.length) reasons.push(`new dependencies: ${list(deps)}`)
+    if (deps.length) reasons.push(t('neue Abhängigkeiten: {names}', { names: list(deps) }))
   }
-  if (settings.merge && !reasons.length) reasons.push('every landing needs your approval')
+  if (settings.merge && !reasons.length) reasons.push(t('jede Landung braucht deine Freigabe'))
   return reasons
 }
 
 const list = (items: string[]) =>
-  items.slice(0, 5).join(', ') + (items.length > 5 ? ` and ${items.length - 5} more` : '')
+  items.slice(0, 5).join(', ') + (items.length > 5 ? t(' und {n} weitere', { n: items.length - 5 }) : '')

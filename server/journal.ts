@@ -2,6 +2,7 @@
 // anyway (the server's own comments, review verdicts, failed runs), so nothing new is recorded and
 // older history shows up too. The rules that turn a comment into a line are pure functions.
 import { all } from './db.ts'
+import { t, variants } from './i18n.ts'
 
 export type JournalKind =
   | 'landed' // in the base branch
@@ -35,35 +36,56 @@ function firstFailure(text: string) {
   return line ? firstSentence(line.replace(/^FAIL\s+/, ''), 110) : ''
 }
 
+const starts = (body: string, text: string) => variants(text).some((form) => body.startsWith(form))
+const has = (body: string, text: string) => variants(text).some((form) => body.includes(form))
+
+/**
+ * Finds a server comment written from `text`, in the language the project had back then.
+ * Each {placeholder} becomes a named group that takes `value`.
+ */
+function written(body: string, text: string, value: string, anchor = '') {
+  for (const form of variants(text)) {
+    const pattern = form.replace(/[.*+?^$()|[\]\\]/g, '\\$&').replace(/\{(\w+)\}/g, `(?<$1>${value})`)
+    const match = body.match(new RegExp(anchor + pattern))
+    if (match) return match.groups ?? {}
+  }
+  return null
+}
+
 /** One journal line for a comment, or null when the comment is not worth one. */
 export function journalLine(comment: Comment): { kind: JournalKind; text: string } | null {
   const { author, body } = comment
   if (comment.kind === 'review') {
-    if (/^\s*changes\s*:/i.test(body))
-      return { kind: 'changes', text: `${author} asks for changes: ${firstSentence(body.replace(/^\s*\S+\s*:\s*/, ''))}` }
+    if (/^\s*(ändern|changes?)\s*:/i.test(body)) {
+      const reason = firstSentence(body.replace(/^\s*\S+\s*:\s*/, ''))
+      return { kind: 'changes', text: t('{author} verlangt Änderungen: {reason}', { author, reason }) }
+    }
     return null
   }
   if (author === 'Watchdog') return { kind: 'watchdog', text: firstSentence(body) }
-  if (author === 'Precheck') {
-    if (/^Precheck passed/.test(body)) return null
-    const failure = firstFailure(body)
-    return { kind: 'precheckRed', text: failure ? `Precheck red: ${failure}` : `Precheck red: ${firstSentence(body)}` }
+  if (author === 'Vorcheck') {
+    if (starts(body, 'Vorcheck bestanden')) return null
+    const failure = firstFailure(body) || firstSentence(body)
+    return { kind: 'precheckRed', text: t('Vorcheck rot: {failure}', { failure }) }
   }
   if (author !== 'System') return null
 
-  const landed = body.match(/^Landed in (\S+) \((\w+)/)
-  if (landed) return { kind: 'landed', text: `Landed in ${landed[1]} (${landed[2]})` }
-  if (/(failed \(exit code [^)]*\)|was stopped after \d+ minutes) on the merged state/.test(body) && !/ to decide:/.test(body)) {
+  const landed = body.match(/^In (\S+) gelandet \((\w+)/) ?? body.match(/^Landed in (\S+) \((\w+)/)
+  if (landed) return { kind: 'landed', text: t('Gelandet in {base} ({commit})', { base: landed[1], commit: landed[2] }) }
+  if (/auf dem gemergten Stand (fehlgeschlagen|nach)|on the merged state/.test(body) && !has(body, 'zur Entscheidung')) {
     const failure = firstFailure(body)
-    return { kind: 'landingRed', text: failure ? `Landing red: ${failure}` : 'Landing red, back to the maker' }
+    return {
+      kind: 'landingRed',
+      text: failure ? t('Landung rot: {failure}', { failure }) : t('Landung rot, zurück an den Maker'),
+    }
   }
-  if (/ to decide:|Waits for a human|Parked/.test(body))
+  if (has(body, 'zur Entscheidung') || has(body, 'Wartet auf Mensch') || has(body, 'Geparkt'))
     return { kind: 'escalated', text: firstSentence(body.replace(/\n[\s\S]*$/, '')) }
-  const waits = body.match(/Now waits for ([^.]+?) and carries on/)
-  if (waits) return { kind: 'waits', text: `Waits for ${waits[1]}` }
-  if (/^Partial handoff/.test(body)) return { kind: 'partial', text: firstSentence(body) }
-  const approved = body.match(/^(\S+) approved\./)
-  if (approved) return { kind: 'approved', text: `Approved by ${approved[1]}` }
+  const waits = written(body, 'Wartet jetzt auf {issues} und geht', '[^.]+?')
+  if (waits) return { kind: 'waits', text: t('Wartet auf {issues}', waits) }
+  if (starts(body, 'Teilabgabe')) return { kind: 'partial', text: firstSentence(body) }
+  const approved = written(body, '{name} hat freigegeben.', '\\S+', '^')
+  if (approved) return { kind: 'approved', text: t('Freigegeben von {name}', approved) }
   return null
 }
 
@@ -73,7 +95,7 @@ export function journal(projectId: number, before = Number.MAX_SAFE_INTEGER, lim
     `SELECT c.created_at AS at, c.author, c.kind, c.body, i.number, i.title FROM comments c
      JOIN issues i ON i.id = c.issue_id
      WHERE i.project_id=? AND c.created_at < ?
-       AND (c.author IN ('System','Precheck','Watchdog') OR c.kind='review')
+       AND (c.author IN ('System','Vorcheck','Watchdog') OR c.kind='review')
      ORDER BY c.created_at DESC LIMIT ?`,
     projectId,
     before,
@@ -101,7 +123,7 @@ export function journal(projectId: number, before = Number.MAX_SAFE_INTEGER, lim
       issue: r.number,
       title: r.title,
       kind: 'runFailed',
-      text: `Run of ${r.agent_name} failed (${r.failure})${why}`,
+      text: t('Lauf von {agent} fehlgeschlagen ({failure})', { agent: r.agent_name, failure: r.failure }) + why,
     })
   }
   return entries.sort((a, b) => b.at - a.at).slice(0, limit)

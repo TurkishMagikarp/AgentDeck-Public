@@ -17,7 +17,7 @@ describe('opencode login status', () => {
   test('one stored credential counts as logged in', () => {
     assert.deepEqual(readStatus('opencode', list(1, ['OpenCode Go']), 0), {
       loggedIn: true,
-      detail: '1 credentials stored',
+      detail: '1 Zugänge hinterlegt',
     })
   })
 
@@ -28,7 +28,7 @@ describe('opencode login status', () => {
   test('several credentials are counted', () => {
     assert.equal(
       readStatus('opencode', list(2, ['OpenCode Go', 'OpenCode']), 0).detail,
-      '2 credentials stored',
+      '2 Zugänge hinterlegt',
     )
   })
 

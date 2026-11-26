@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 export type Status = 'backlog' | 'todo' | 'in_progress' | 'review' | 'blocked' | 'done'
 
 export type Budget = {
@@ -42,7 +44,9 @@ export type Settings = {
   maxConcurrent: number
   adhd: boolean
   caveman: boolean
+  language: 'de' | 'en'
   replay: boolean
+  mcpOnDemand: boolean
   workspace: 'issue' | 'agent'
   maxReviewRounds: number
   checklists: { enabled: boolean; templates: string }
@@ -229,4 +233,6 @@ export type Provider = { id: string; label: string }
 
 export const TIERS = ['strong', 'medium', 'light'] as const
 export type Tier = (typeof TIERS)[number]
-export const TIER_LABEL: Record<Tier, string> = { strong: 'Strong', medium: 'Medium', light: 'Light' }
+export const TIER_LABEL: Record<Tier, string> = { strong: 'Stark', medium: 'Mittel', light: 'Leicht' }
+/** Translated at render time; TIER_LABEL keeps the German keys. */
+export const tierLabel = (tier: Tier) => t(TIER_LABEL[tier])

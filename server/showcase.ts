@@ -4,6 +4,7 @@
 import { randomBytes } from 'node:crypto'
 import { activity, PROVIDERS, versionOf } from './core.ts'
 import { all, get } from './db.ts'
+import { langOf, t, withLang, type Lang } from './i18n.ts'
 
 export const newShowcaseSlug = () => randomBytes(9).toString('base64url')
 
@@ -88,14 +89,42 @@ export function showcaseData(slug: string) {
   }
 }
 
-/** The page itself. It polls the public endpoint, so it works without the board's login and SSE. */
-export const showcasePage = (slug: string, nonce: string) => `<!doctype html>
-<html lang="de">
+/** What the page's script shows; {n} and the like are filled in by the browser. */
+const scriptTexts = () => ({
+  now: t('gerade eben'),
+  minutes: t('vor {n} min'),
+  hours: t('vor {n} h'),
+  notFound: t('Nicht gefunden'),
+  paused: t('Pausiert.'),
+  working: t('{n} von {all} Agenten arbeiten gerade.'),
+  doneToday: t('heute erledigt'),
+  doneWeek: t('in 7 Tagen'),
+  doneAll: t('insgesamt'),
+  open: t('offen'),
+  runsToday: t('Läufe heute'),
+  workingOn: t('arbeitet an {issue}'),
+  waiting: t('wartet'),
+  nothing: t('Noch nichts.'),
+})
+
+const forScript = (value: unknown) => JSON.stringify(value).replace(/</g, '\\u003c')
+
+/**
+ * The page itself, in the language of its project. It polls the public endpoint, so it works
+ * without the board's login and SSE.
+ */
+export function showcasePage(slug: string, nonce: string) {
+  const lang = langOf(projectBySlug(slug))
+  return withLang(lang, () => page(slug, nonce, lang))
+}
+
+const page = (slug: string, nonce: string, lang: Lang) => `<!doctype html>
+<html lang="${lang}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
-<title>AgentDeck Showcase</title>
+<title>${t('AgentDeck Schaufenster')}</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml" />
 <style nonce="${nonce}">
   :root { --bg: #f6f7f9; --surface: #fff; --border: #e1e4ea; --text: #1b1f27; --muted: #677083; --good: #1f9d61; --accent: #3e63dd; }
@@ -124,35 +153,37 @@ export const showcasePage = (slug: string, nonce: string) => `<!doctype html>
 <body>
 <main>
   <h1 id="name">…</h1>
-  <div class="muted" id="state">A team of AI agents, live.</div>
+  <div class="muted" id="state">${t('Ein Team aus KI-Agenten, live.')}</div>
   <section class="stats" id="stats"></section>
-  <h2>Agents</h2>
+  <h2>${t('Agenten')}</h2>
   <section class="agents" id="agents"></section>
-  <h2>Recently done</h2>
+  <h2>${t('Zuletzt erledigt')}</h2>
   <ol id="recent"></ol>
-  <footer class="muted">Runs on AgentDeck. Refreshes every 10 seconds.</footer>
+  <footer class="muted">${t('Läuft mit AgentDeck. Aktualisiert sich alle 10 Sekunden.')}</footer>
 </main>
 <script nonce="${nonce}">
-const slug = ${JSON.stringify(slug).replace(/</g, '\\u003c')}
+const slug = ${forScript(slug)}
+const text = ${forScript(scriptTexts())}
+const fill = (template, values) => template.replace(/\\{(\\w+)\\}/g, (_, name) => values[name])
 const esc = (text) => String(text).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-const ago = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago' }
+const ago = (at) => { const m = Math.round((Date.now() - at) / 60000); return m < 1 ? text.now : m < 60 ? fill(text.minutes, { n: m }) : fill(text.hours, { n: Math.round(m / 60) }) }
 async function load() {
   const res = await fetch('/api/public/' + slug)
-  if (!res.ok) { document.getElementById('name').textContent = 'Not found'; return }
+  if (!res.ok) { document.getElementById('name').textContent = text.notFound; return }
   const data = await res.json()
   document.title = data.name + ' · AgentDeck'
   document.getElementById('name').textContent = data.name
   const working = data.agents.filter((a) => a.working).length
-  document.getElementById('state').textContent = data.paused ? 'Paused.' : working + ' of ' + data.agents.length + ' agents are working right now.'
+  document.getElementById('state').textContent = data.paused ? text.paused : fill(text.working, { n: working, all: data.agents.length })
   const c = data.counts
-  document.getElementById('stats').innerHTML = [[c.doneToday, 'done today'], [c.doneWeek, 'in 7 days'], [c.doneAll, 'in total'], [c.open, 'open'], [c.runsToday, 'runs today']]
+  document.getElementById('stats').innerHTML = [[c.doneToday, text.doneToday], [c.doneWeek, text.doneWeek], [c.doneAll, text.doneAll], [c.open, text.open], [c.runsToday, text.runsToday]]
     .map(([v, l]) => '<div class="stat"><strong>' + v + '</strong><span class="muted">' + l + '</span></div>').join('')
   document.getElementById('agents').innerHTML = data.agents.map((a) =>
     '<article class="agent' + (a.working ? ' working' : '') + '"><header><span class="dot"></span><strong>' + esc(a.name) + '</strong></header>' +
     '<p class="muted">' + esc(a.role || a.provider) + '</p>' +
-    '<p>' + (a.working ? 'working on ' + esc(a.on) + (a.since ? ' · ' + ago(a.since) : '') : 'waiting') + '</p></article>').join('')
+    '<p>' + (a.working ? fill(text.workingOn, { issue: esc(a.on) }) + (a.since ? ' · ' + ago(a.since) : '') : text.waiting) + '</p></article>').join('')
   document.getElementById('recent').innerHTML = data.recent.map((i) =>
-    '<li><strong>' + esc(i.key) + '</strong> ' + esc(i.title) + ' <span class="muted">' + ago(i.at) + '</span></li>').join('') || '<li class="muted">Nothing yet.</li>'
+    '<li><strong>' + esc(i.key) + '</strong> ' + esc(i.title) + ' <span class="muted">' + ago(i.at) + '</span></li>').join('') || '<li class="muted">' + text.nothing + '</li>'
 }
 load()
 setInterval(load, 10000)

@@ -3,6 +3,7 @@
 // session cookie the login form sets (the cookie holds that hash, never the token).
 import { createHash, randomBytes } from 'node:crypto'
 import { all, get, run } from './db.ts'
+import { t } from './i18n.ts'
 import { isRole, type Role } from './roles.ts'
 
 export type User = { id: number; name: string; role: Role }
@@ -51,11 +52,11 @@ const NAME = /^[\p{L}\p{N}][\p{L}\p{N} ._@-]{0,59}$/u
 
 export function createUser(name: string, role: unknown) {
   const clean = name.trim()
-  if (!NAME.test(clean)) throw new Error('Name: 1–60 characters, letters, digits, spaces, . _ @ -')
-  if (!isRole(role)) throw new Error('Unknown role')
+  if (!NAME.test(clean)) throw new Error(t('Name: 1–60 Zeichen, Buchstaben, Ziffern, Leerzeichen, . _ @ -'))
+  if (!isRole(role)) throw new Error(t('Unbekannte Rolle'))
   // These names label actions of the owner and the system in comments and the audit log.
-  if (/^(owner|watchdog|system|spend limit)$/i.test(clean)) throw new Error('This name is reserved for the system')
-  if (userByName(clean)) throw new Error('This name already exists')
+  if (/^(owner|watchdog|system|ausgabenlimit)$/i.test(clean)) throw new Error(t('Dieser Name ist für das System reserviert'))
+  if (userByName(clean)) throw new Error(t('Diesen Namen gibt es schon'))
   const token = 'adu_' + randomBytes(32).toString('base64url')
   const result = run(
     'INSERT INTO users (name, role, token_hash, session_hash, created_at) VALUES (?,?,?,?,?)',
@@ -70,7 +71,7 @@ export function createUser(name: string, role: unknown) {
 }
 
 export function setUserRole(id: number, role: unknown) {
-  if (!isRole(role)) throw new Error('Unknown role')
+  if (!isRole(role)) throw new Error(t('Unbekannte Rolle'))
   const result = run('UPDATE users SET role=? WHERE id=?', role, id)
   forget()
   return result.changes > 0

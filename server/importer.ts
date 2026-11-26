@@ -10,6 +10,7 @@ import {
   STATUSES,
 } from './core.ts'
 import { get, run, tx } from './db.ts'
+import { t } from './i18n.ts'
 import { CONNECTIONS } from './mcp.ts'
 import { createRoutine } from './routines.ts'
 
@@ -18,8 +19,8 @@ const time = (value: unknown) => new Date(String(value ?? '')).getTime() || Date
 
 export function importProject(data: any) {
   const key = text(data?.project?.key, 8).toUpperCase()
-  if (!/^[A-Z][A-Z0-9]{1,7}$/.test(key)) throw new Error('project.key: 2-8 characters, A-Z/0-9')
-  if (get('SELECT 1 FROM projects WHERE key=?', key)) throw new Error(`Project ${key} already exists`)
+  if (!/^[A-Z][A-Z0-9]{1,7}$/.test(key)) throw new Error(t('project.key: 2-8 Zeichen, A-Z/0-9'))
+  if (get('SELECT 1 FROM projects WHERE key=?', key)) throw new Error(t('Projekt {key} existiert bereits', { key }))
 
   return tx(() => {
     const project = data.project
@@ -40,9 +41,11 @@ export function importProject(data: any) {
     const agentIds = new Map<string, number>()
     for (const agent of data.agents ?? []) {
       if (!PROVIDERS[agent.provider])
-        throw new Error(`Agent ${agent.name}: unknown provider "${agent.provider}"`)
+        throw new Error(
+          t('Agent {name}: unbekannter Anbieter "{provider}"', { name: agent.name, provider: agent.provider }),
+        )
       const model = text(agent.model, 80)
-      if (!MODEL_RE.test(model)) throw new Error(`Agent ${agent.name}: invalid model name`)
+      if (!MODEL_RE.test(model)) throw new Error(t('Agent {name}: ungültiger Modellname', { name: agent.name }))
       const inserted = run(
         `INSERT INTO agents (project_id, name, role, provider, model, instructions, max_instances, effort, mcp_ids, provider_override)
          VALUES (?,?,?,?,?,?,?,?,?,?)`,
@@ -65,7 +68,7 @@ export function importProject(data: any) {
     let comments = 0
     for (const issue of data.issues ?? []) {
       const number = Math.floor(Number(issue.number))
-      if (!(number > 0)) throw new Error(`Issue without a valid number: ${text(issue.title, 60)}`)
+      if (!(number > 0)) throw new Error(t('Issue ohne gültige Nummer: {title}', { title: text(issue.title, 60) }))
       highest = Math.max(highest, number)
 
       const created = time(issue.created_at)
@@ -104,7 +107,7 @@ export function importProject(data: any) {
         run(
           'INSERT INTO comments (issue_id, author, kind, body, created_at) VALUES (?,?,?,?,?)',
           issueId,
-          text(comment.author || 'Unknown', 60),
+          text(comment.author || t('Unbekannt'), 60),
           ['comment', 'agent', 'review', 'system'].includes(comment.kind) ? comment.kind : 'comment',
           text(comment.body),
           time(comment.created_at),

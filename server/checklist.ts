@@ -5,16 +5,18 @@
 // An issue's list is its "Done when" from the description, split into single items, plus the
 // project's templates. Templates are plain text in the project settings:
 //
-//   ## Map
-//   Agents: World builder
-//   Title: map, route
-//   - Every map view captured again, no single-color image.
+//   ## Karte
+//   Agenten: World builder
+//   Titel: map, route, karte
+//   - Jede Kartenansicht neu aufgenommen, kein Bild einfarbig.
 //
-//   ## All
-//   - Only files changed that the issue asks for.
+//   ## Alle
+//   - Nur Dateien geändert, die das Issue verlangt.
 //
-// A section with "Agents" and/or "Title" applies when the issue's agent and/or a title word
+// A section with "Agenten" and/or "Titel" applies when the issue's agent and/or a title word
 // match; only the first such section is used. A section without either applies to every issue.
+import { t } from './i18n.ts'
+import { prompts } from './prompts/index.ts'
 
 const MAX_ITEMS = 16
 const MAX_ITEM_LENGTH = 300
@@ -85,7 +87,7 @@ const cleanItem = (item: string) =>
  */
 export function doneWhenItems(description: string): string[] {
   const found = description.match(
-    /(?:\*\*)?(?:done when|fertig wenn)\s*:?\s*(?:\*\*)?\s*:?\s*([\s\S]*?)(?:\n\s*\n|\n\s*\*\*[^*\n]+:\*\*|$)/i,
+    /(?:\*\*)?(?:done when|fertig,?\s+wenn)\s*:?\s*(?:\*\*)?\s*:?\s*([\s\S]*?)(?:\n\s*\n|\n\s*\*\*[^*\n]+:\*\*|$)/i,
   )
   const text = found?.[1].trim() ?? ''
   if (!text) return []
@@ -104,10 +106,9 @@ export function doneWhenItems(description: string): string[] {
     sentences.length <= MAX_SPLIT_SENTENCES && sentences.every((s) => s.length >= MIN_SENTENCE_LENGTH)
   if (splits) return sentences
   // The description is in every prompt, so a long text is pointed to rather than copied and cut.
-  return text.length > MAX_DONE_WHEN_LENGTH ? [WHOLE_DONE_WHEN] : [cleanItem(text)]
+  if (text.length <= MAX_DONE_WHEN_LENGTH) return [cleanItem(text)]
+  return [t('Jeder Teil von „Done when“ in der Beschreibung ist erfüllt und einzeln belegt')]
 }
-
-const WHOLE_DONE_WHEN = 'Every part of "Done when" in the description is met and proven on its own'
 
 /** The checklist an issue gets when it has none yet, and the template it came from. */
 export function checklistFor(
@@ -177,35 +178,14 @@ export function proofPaths(proof: string): string[] {
 
 export function checklistSection(items: string[]) {
   if (!items.length) return ''
-  return `## Acceptance checklist
-The issue is done when every item holds. Reviewers judge against exactly this list.
-${items.map((item, index) => `${index + 1}. ${item}`).join('\n')}`
+  return prompts().checklistSection(items.map((item, index) => `${index + 1}. ${item}`).join('\n'))
 }
 
-export const MAKER_RULES = `- With status review or done, put this block before <summary>, one line per checklist item:
-<checklist>
-1. ok: the proof
-2. open: what is still missing
-</checklist>
-An item that does not apply to this issue at all is "n/a: why".
-"ok" needs concrete proof: a committed file (screenshot, protocol, sheet) by its path in the repo, or a command with its result line. Before any reviewer sees the work, the server merges the base branch into your branch, runs the project's check and verifies that every file you name exists in your commit. If that fails, the issue comes straight back to you.
-Items marked open make it a partial delivery: only the first reviewer looks at the pieces so far, then the issue comes back to you to go on.`
+/** What a maker is told about reporting on the checklist, in the language of the run. */
+export const MAKER_RULES = () => prompts().makerRules
 
 export function reviewSection(items: string[], report: string, interim: boolean) {
   const list = items.map((item, index) => `${index + 1}. ${item}`).join('\n')
-  const judging = `## How to judge
-- Judge against the checklist. Ask for changes only for: an item that does not hold (name its number), a defect (something broken, a failing check, a rule of the repo's docs broken), or changes outside the issue's scope.
-- Something you would like that is none of these: approve anyway. If it matters, file it as a new issue with the board commands. If makers keep missing the same thing, record it with \`learn\` so every later run knows it.
-- The server already merged the base branch and ran the project's check on this commit. Do not repeat that unless you have a reason to doubt it.`
-  const interimNote = interim
-    ? `\n\n## Interim check
-This is a partial delivery: items marked open are not done yet, on purpose. Judge only the pieces delivered so far. "approve" sends the issue back to the maker to go on; "changes" names what must change in the delivered pieces.`
-    : ''
-  return `## Acceptance checklist
-${list}
-
-## The maker's report on it
-${report || '(no report)'}
-
-${judging}${interimNote}`
+  const text = prompts()
+  return text.reviewSection({ list, report: report || text.noReport, interim })
 }

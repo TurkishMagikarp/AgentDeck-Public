@@ -1,11 +1,12 @@
 import { createSignal, For, Show } from 'solid-js'
 import { Modal } from './ui'
+import { t } from './i18n'
 
 /** Names of the settings the server runs as shell commands, as the settings page calls them. */
 const FIELD_LABELS: Record<string, string> = {
-  'precheck.command': 'Check command',
-  'precheck.quickCommand': 'Quick check command',
-  'preview.command': 'Start command of the preview',
+  'precheck.command': 'Prüfbefehl',
+  'precheck.quickCommand': 'Schneller Prüfbefehl',
+  'preview.command': 'Startbefehl der Vorschau',
 }
 
 type Pending = { message: string; fields: string[]; resolve: (token: string | null) => void }
@@ -34,7 +35,7 @@ export function ConfirmToken() {
   return (
     <Show when={pending()}>
       {(current) => (
-        <Modal title="Confirm change" onClose={() => finish(null)}>
+        <Modal title={t('Änderung bestätigen')} onClose={() => finish(null)}>
           <form
             class="form"
             onSubmit={(e) => {
@@ -45,12 +46,12 @@ export function ConfirmToken() {
             <p>{current().message}</p>
             <Show when={current().fields.length}>
               <p class="muted">
-                Affected:{' '}
+                {t('Betroffen:')}{' '}
                 <For each={current().fields}>
                   {(field, index) => (
                     <>
                       {index() ? ', ' : ''}
-                      {FIELD_LABELS[field] ?? field}
+                      {FIELD_LABELS[field] ? t(FIELD_LABELS[field]) : field}
                     </>
                   )}
                 </For>
@@ -60,17 +61,17 @@ export function ConfirmToken() {
               type="password"
               autocomplete="current-password"
               autofocus
-              placeholder="Access token (AGENTDECK_TOKEN)"
+              placeholder={t('Zugangs-Token (AGENTDECK_TOKEN)')}
               value={token()}
               onInput={(e) => setToken(e.currentTarget.value)}
             />
             <footer>
               <span class="spacer" />
               <button type="button" onClick={() => finish(null)}>
-                Cancel
+                {t('Abbrechen')}
               </button>
               <button class="primary" type="submit" disabled={!token()}>
-                Confirm
+                {t('Bestätigen')}
               </button>
             </footer>
           </form>

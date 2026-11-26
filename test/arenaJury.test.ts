@@ -2,6 +2,7 @@ import './setup.ts'
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { juryPrompt, labelled, parseVerdict } from '../server/arena.ts'
+import { withLang } from '../server/i18n.ts'
 
 const file = (path: string, patch: string) => ({
   path,
@@ -20,10 +21,8 @@ describe('the jury question', () => {
     summary: `Summary of ${label}`,
     files: [file(`src/${label}.ts`, `+const from${label} = true`)],
   }))
-  const prompt = juryPrompt(
-    { title: 'Cart survives a reload', description: 'Keep it.', checklist: ['Test is green'] },
-    entries,
-  )
+  const parent = { title: 'Cart survives a reload', description: 'Keep it.', checklist: ['Test is green'] }
+  const prompt = withLang('en', () => juryPrompt(parent, entries))
 
   test('shows task, checklist and every entry under a neutral label', () => {
     assert.match(prompt, /Cart survives a reload/)
@@ -33,27 +32,41 @@ describe('the jury question', () => {
     assert.match(prompt, /<winner>one of: A, B<\/winner>/)
   })
 
+  test('a German project gets the question in German, with the same blocks', () => {
+    const german = withLang('de', () => juryPrompt(parent, entries))
+    assert.match(german, /Du bist die Jury/)
+    assert.match(german, /## Beitrag A[^]*Summary of A[^]*fromA/)
+    assert.match(german, /<winner>einer von: A, B<.winner>/)
+    assert.match(german, /<reason>zwei bis vier Sätze auf Deutsch/)
+    assert.match(prompt, /<reason>two to four sentences in English/)
+  })
+
   test('a huge diff is cut, an empty branch says so', () => {
-    const big = juryPrompt({ title: 't', description: '' }, [
+    const huge = [
       { ...entries[0], files: [file('a.ts', 'x'.repeat(20_000)), file('b.ts', 'y'.repeat(20_000))] },
       { ...entries[1], files: [] },
-    ])
+    ]
+    const big = juryPrompt({ title: 't', description: '' }, huge)
     assert.ok(big.length < 30_000)
-    assert.match(big, /further changes cut/)
-    assert.match(big, /no changes in the branch/)
+    assert.match(big, /weitere Änderungen gekürzt/)
+    assert.match(big, /keine Änderungen im Branch/)
+    const english = withLang('en', () => juryPrompt({ title: 't', description: '' }, huge))
+    assert.match(english, /more changes cut/)
+    assert.match(english, /no changes in the branch/)
   })
 })
 
 describe('the verdict', () => {
   test('names an entry that took part, with its reason', () => {
     assert.deepEqual(
-      parseVerdict('<winner>B</winner>\n<reason> Smaller and tested. </reason>', ['A', 'B']),
+      parseVerdict('<winner>B</winner>\n<reason> Kleiner und getestet. </reason>', ['A', 'B']),
       {
         label: 'B',
-        reason: 'Smaller and tested.',
+        reason: 'Kleiner und getestet.',
       },
     )
     assert.equal(parseVerdict('<winner>Entry a</winner>', ['A', 'B'])?.label, 'A')
+    assert.equal(parseVerdict('<winner>Beitrag B</winner>', ['A', 'B'])?.label, 'B')
   })
 
   test('anything else is no verdict', () => {

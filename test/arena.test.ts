@@ -125,7 +125,7 @@ describe('an arena from start to winner', () => {
     )
     assert.ok(arena.entries.every((entry: any) => entry.status === 'done'))
     assert.ok(done.runs.some((run: any) => run.agent_name === 'Jury' && run.verdict === 'arena'))
-    assert.ok(done.comments.some((comment: any) => /The jury decided/.test(comment.body)))
+    assert.ok(done.comments.some((comment: any) => /Die Jury hat entschieden/.test(comment.body)))
 
     // Every entry worked once, and none of them was reviewed or run again after the decision.
     for (const entry of arena.entries) {

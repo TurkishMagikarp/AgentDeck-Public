@@ -7,6 +7,7 @@ import { mkdir } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import { DATA_DIR } from './db.ts'
 import { oversized } from './housekeeping.ts'
+import { t } from './i18n.ts'
 import type { EgressSettings } from './egress.ts'
 import { ensureEgress, ensureProject, gitIn, SANDBOX } from './sandbox.ts'
 import { egressStatus } from './egress.ts'
@@ -87,7 +88,11 @@ export async function prepareWorkdir(request: Request): Promise<Workdir> {
   await ensureEgress(project)
   if (SANDBOX && project.settings.egress?.mode === 'allowlist' && egressStatus(project.key).firewall !== 'active') {
     const { error } = egressStatus(project.key)
-    throw new Error(`Network allowlist without a firewall, no run started${error ? `: ${error}` : ''}`)
+    throw new Error(
+      error
+        ? t('Netzwerk-Allowlist ohne Firewall, kein Lauf gestartet: {error}', { error })
+        : t('Netzwerk-Allowlist ohne Firewall, kein Lauf gestartet'),
+    )
   }
   if (!(await hasCommits(base))) return { cwd: base } // no git repo or no commit yet: work in place
   await pullIfRemote(base)
@@ -138,7 +143,7 @@ async function agentCheckout(base: string, branch: string, request: Request): Pr
  * A branch can be checked out in one worktree only. If another agent checkout still holds it (its
  * release failed, or the server stopped mid-run), it lets go of it here. Only one run works on an
  * issue at a time and reviewers never hold the branch, so the other checkout is not in use.
- * Without this every run of the issue fails at the checkout, for hours.
+ * Without this every run of the issue fails at the checkout, on 2026-11-23 for eleven hours.
  * Uncommitted leftovers there go to a stash, as in agentCheckout.
  */
 async function takeBranchBack(base: string, branch: string, worktree: string) {

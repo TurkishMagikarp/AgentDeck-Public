@@ -1,18 +1,19 @@
 import { createMemo, createResource, createSignal, For, Show } from 'solid-js'
 import { api } from './api'
+import { t, locale } from './i18n'
 
 type Kind = 'prompt' | 'assistant' | 'tool_call' | 'tool_result' | 'error' | 'changes' | 'end'
 type Step = { seq: number; at: number; kind: Kind; name: string; payload: string; size: number }
 type Replay = { run: { id: number; started_at: number; ended_at: number | null; status: string }; events: Step[] }
 
 const KINDS: [Kind, string][] = [
-  ['prompt', 'Prompt'],
-  ['assistant', 'Answers'],
-  ['tool_call', 'Tools'],
-  ['tool_result', 'Results'],
-  ['error', 'Error'],
-  ['changes', 'Changes'],
-  ['end', 'End'],
+  ['prompt', 'Auftrag'],
+  ['assistant', 'Antworten'],
+  ['tool_call', 'Werkzeuge'],
+  ['tool_result', 'Ergebnisse'],
+  ['error', 'Fehler'],
+  ['changes', 'Änderungen'],
+  ['end', 'Ende'],
 ]
 const LABEL = Object.fromEntries(KINDS) as Record<Kind, string>
 
@@ -64,9 +65,9 @@ export function RunReplay(props: { runId: number }) {
 
   return (
     <div class="replay">
-      <Show when={!data.loading || data()} fallback={<p class="muted">Loading history…</p>}>
-        <Show when={!data.error} fallback={<p class="muted">History could not be loaded: {String(data.error?.message ?? '')}</p>}>
-          <div class="replay-filter" role="group" aria-label="Filter steps">
+      <Show when={!data.loading || data()} fallback={<p class="muted">{t('Lade Verlauf…')}</p>}>
+        <Show when={!data.error} fallback={<p class="muted">{t('Verlauf nicht ladbar: {error}', { error: String(data.error?.message ?? '') })}</p>}>
+          <div class="replay-filter" role="group" aria-label={t('Schritte filtern')}>
             <For each={KINDS.filter(([kind]) => counts()[kind])}>
               {([kind, label]) => (
                 <button
@@ -75,12 +76,12 @@ export function RunReplay(props: { runId: number }) {
                   aria-pressed={shown().has(kind)}
                   onClick={() => toggleKind(kind)}
                 >
-                  {label} {counts()[kind]}
+                  {t(label)} {counts()[kind]}
                 </button>
               )}
             </For>
             <button class="link" onClick={() => refetch()}>
-              Refresh
+              {t('Aktualisieren')}
             </button>
           </div>
           <ol class="replay-steps">
@@ -88,7 +89,7 @@ export function RunReplay(props: { runId: number }) {
               each={steps()}
               fallback={
                 <li class="muted">
-                  {data()?.events.length ? 'No step of this kind.' : 'There is no recording for this run.'}
+                  {data()?.events.length ? t('Kein Schritt dieser Art.') : t('Für diesen Lauf gibt es keine Aufzeichnung.')}
                 </li>
               }
             >
@@ -99,10 +100,10 @@ export function RunReplay(props: { runId: number }) {
                     aria-expanded={open().has(step.seq)}
                     onClick={() => toggleStep(step.seq)}
                   >
-                    <time title={new Date(step.at).toLocaleString('en-US')}>
+                    <time title={new Date(step.at).toLocaleString(locale())}>
                       {offset(step.at - (data()?.run.started_at ?? step.at))}
                     </time>
-                    <span class="replay-kind">{LABEL[step.kind] ?? step.kind}</span>
+                    <span class="replay-kind">{LABEL[step.kind] ? t(LABEL[step.kind]) : step.kind}</span>
                     <Show when={step.name}>
                       <code>{step.name}</code>
                     </Show>
@@ -112,8 +113,10 @@ export function RunReplay(props: { runId: number }) {
                     <pre class="replay-payload">{step.payload}</pre>
                     <Show when={step.size > step.payload.length}>
                       <p class="muted">
-                        Shortened: {step.payload.length.toLocaleString('en-US')} of {step.size.toLocaleString('en-US')}{' '}
-                        characters stored.
+                        {t('Gekürzt: {shown} von {total} Zeichen gespeichert.', {
+                          shown: step.payload.length.toLocaleString(locale()),
+                          total: step.size.toLocaleString(locale()),
+                        })}
                       </p>
                     </Show>
                   </Show>

@@ -2,6 +2,7 @@ import { createEffect, createMemo, createResource, For, on, onCleanup, Show } fr
 import { api } from './api'
 import { board, openIssue } from './store'
 import { onActivateKey, timeAgo } from './ui'
+import { t, locale } from './i18n'
 
 type Commit = { hash: string; at: number; subject: string }
 type Lane = {
@@ -39,14 +40,14 @@ const SLOTS = [1, 2, 3, 4, 5, 6].map((slot) => `var(--series-${slot})`)
 const STATUS_LABEL: Record<string, string> = {
   backlog: 'Backlog',
   todo: 'To Do',
-  in_progress: 'In progress',
+  in_progress: 'In Arbeit',
   review: 'Review',
-  blocked: 'Waiting',
-  done: 'Done',
+  blocked: 'Wartet',
+  done: 'Fertig',
 }
 
 const when = (at: number) =>
-  new Date(at).toLocaleString('en-US', {
+  new Date(at).toLocaleString(locale(), {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',
@@ -161,34 +162,34 @@ export function GitView() {
         <div>
           <h2>Git</h2>
           <p class="muted">
-            The base branch at the top, below it one branch per issue. Color = agent, pulsing = working right now.
+            {t('Oben der Basis-Branch, darunter ein Branch pro Issue. Farbe = Agent, pulsierend = arbeitet gerade.')}
           </p>
         </div>
       </div>
 
       <Show when={graph()?.repo === false}>
-        <p class="muted">This project has no git repository with commits yet.</p>
+        <p class="muted">{t('Dieses Projekt hat noch kein Git-Repository mit Commits.')}</p>
       </Show>
 
       <Show when={layout()}>
         {(view) => (
           <>
-            <ul class="git-summary" aria-label="Overview of the repository">
+            <ul class="git-summary" aria-label={t('Überblick über das Repository')}>
               <li classList={{ zero: String(view().data.baseCommits.length) === '0' }}>
                 <strong>{view().data.baseCommits.length}</strong>
-                <span>commits on {view().data.base}</span>
+                <span>{t('Commits auf {branch}', { branch: view().data.base })}</span>
               </li>
               <li classList={{ zero: String(view().data.branches.filter((lane) => !lane.landed).length) === '0' }}>
                 <strong>{view().data.branches.filter((lane) => !lane.landed).length}</strong>
-                <span>branches in progress</span>
+                <span>{t('Branches in Arbeit')}</span>
               </li>
               <li classList={{ zero: String(view().data.branches.filter((lane) => lane.landed).length) === '0' }}>
                 <strong>{view().data.branches.filter((lane) => lane.landed).length}</strong>
-                <span>landed</span>
+                <span>{t('gelandet')}</span>
               </li>
               <li classList={{ zero: String(view().data.agents.filter((agent) => agent.working).length) === '0' }}>
                 <strong>{view().data.agents.filter((agent) => agent.working).length}</strong>
-                <span>agents working right now</span>
+                <span>{t('Agenten arbeiten gerade')}</span>
               </li>
             </ul>
 
@@ -200,10 +201,12 @@ export function GitView() {
                     <strong>{agent.name}</strong>
                     <span class="muted">
                       {agent.working
-                        ? `${agent.kind === 'review' ? 'reviews' : 'works on'} ${agent.branch}`
+                        ? agent.kind === 'review'
+                          ? t('prüft {branch}', { branch: agent.branch })
+                          : t('arbeitet auf {branch}', { branch: agent.branch })
                         : agent.branch
-                          ? `has ${agent.branch} checked out`
-                          : 'free'}
+                          ? t('hat {branch} ausgecheckt', { branch: agent.branch })
+                          : t('frei')}
                     </span>
                   </li>
                 )}
@@ -234,8 +237,10 @@ export function GitView() {
                         {lane.lane.working.length
                           ? lane.lane.working.map((work) => work.agent).join(', ')
                           : lane.lane.landed
-                            ? 'landed'
-                            : (STATUS_LABEL[lane.lane.status] ?? lane.lane.status)}
+                            ? t('gelandet')
+                            : STATUS_LABEL[lane.lane.status]
+                              ? t(STATUS_LABEL[lane.lane.status])
+                              : lane.lane.status}
                       </span>
                     </button>
                   )}
@@ -247,7 +252,7 @@ export function GitView() {
                   width={view().width}
                   height={view().height}
                   role="img"
-                  aria-label="Git graph of the agents"
+                  aria-label={t('Git-Graph der Agenten')}
                 >
                   <line x1={PAD / 2} x2={view().nowX} y1={PAD} y2={PAD} class="git-base-line" />
                   <For each={view().drawn}>
@@ -264,7 +269,7 @@ export function GitView() {
                           />
                           <circle cx={lane.nowX!} cy={lane.laneY} r={DOT + 2} class="git-now">
                             <title>
-                              {lane.lane.working.map((work) => `${work.agent} is working right now`).join(', ')}
+                              {lane.lane.working.map((work) => t('{agent} arbeitet gerade', { agent: work.agent })).join(', ')}
                             </title>
                           </circle>
                         </Show>
@@ -277,7 +282,7 @@ export function GitView() {
                         </For>
                         <Show when={lane.mergeX !== null}>
                           <circle cx={lane.mergeX!} cy={PAD} r={DOT - 1} class="git-merge">
-                            <title>{`${board.project!.key}-${lane.lane.number} landed`}</title>
+                            <title>{t('{issue} gelandet', { issue: `${board.project!.key}-${lane.lane.number}` })}</title>
                           </circle>
                         </Show>
                       </g>
@@ -294,16 +299,16 @@ export function GitView() {
               </div>
             </div>
             <Show when={view().data.branches.length}>
-              <h3 class="section-title">Branches</h3>
+              <h3 class="section-title">{t('Branches')}</h3>
               <div class="table-wrap git-table">
                 <table class="scores">
                   <thead>
                     <tr>
-                      <th scope="col">Issue</th>
-                      <th scope="col">By</th>
-                      <th scope="col">State</th>
-                      <th scope="col" class="num">Commits</th>
-                      <th scope="col" class="num">Last activity</th>
+                      <th scope="col">{t('Issue')}</th>
+                      <th scope="col">{t('Von||Autor')}</th>
+                      <th scope="col">{t('Stand')}</th>
+                      <th scope="col" class="num">{t('Commits')}</th>
+                      <th scope="col" class="num">{t('Letzte Aktivität')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -324,10 +329,12 @@ export function GitView() {
                           <td>
                             <span class="chip" classList={{ live: lane.working.length > 0, good: lane.landed }}>
                               {lane.working.length
-                                ? `${lane.working.map((work) => work.agent).join(', ')} working`
+                                ? t('{agent} arbeitet', { agent: lane.working.map((work) => work.agent).join(', ') })
                                 : lane.landed
-                                  ? 'landed'
-                                  : (STATUS_LABEL[lane.status] ?? lane.status)}
+                                  ? t('gelandet')
+                                  : STATUS_LABEL[lane.status]
+                                    ? t(STATUS_LABEL[lane.status])
+                                    : lane.status}
                             </span>
                           </td>
                           <td class="num">{lane.commits.length}</td>
@@ -341,7 +348,7 @@ export function GitView() {
             </Show>
             <Show when={!view().drawn.length}>
               <p class="muted">
-                No issue branches yet. They appear as soon as an agent works on an issue.
+                {t('Noch keine Issue-Branches. Sie entstehen, sobald ein Agent an einem Issue arbeitet.')}
               </p>
             </Show>
           </>

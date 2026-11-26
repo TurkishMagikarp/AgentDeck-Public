@@ -210,6 +210,8 @@ addColumn('issues', 'arena_of', 'INTEGER NOT NULL DEFAULT 0')
 addColumn('issues', 'arena_winner', 'INTEGER NOT NULL DEFAULT 0')
 // Where an issue came from when it was not filed here: the URL of the GitHub issue (intake.ts).
 addColumn('issues', 'source', "TEXT NOT NULL DEFAULT ''")
+// On-demand MCP connections an agent asked for on this issue (mcp.ts, connectionsFor).
+addColumn('issues', 'mcp_wanted', "TEXT NOT NULL DEFAULT '[]'")
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS quota_history (
@@ -283,12 +285,22 @@ CREATE TABLE IF NOT EXISTS run_events (
   size INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (run_id, seq)
 );
+-- What the server did while landing an issue (landingTrace.ts).
+CREATE TABLE IF NOT EXISTS landing_trace (
+  id INTEGER PRIMARY KEY,
+  issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  at INTEGER NOT NULL,
+  step TEXT NOT NULL,
+  level TEXT NOT NULL DEFAULT 'info',
+  text TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS landing_trace_issue ON landing_trace(issue_id);
 
 `)
 
 /**
  * Clean-up that is only right when the server itself starts: nothing can be running then.
- * It must never happen just because some other process opened the database. Once a
+ * It must never happen just because some other process opened the database. On 21 Nov 2026 a
  * check script imported this module while agents were working, and their live runs were marked
  * as failed.
  */
@@ -299,7 +311,7 @@ export function recoverAfterRestart() {
   db.prepare('DELETE FROM run_log WHERE at < ?').run(Date.now() - 30 * 86_400_000)
   // Runs that were alive when the process died can never finish.
   db.exec(
-    "UPDATE runs SET status='failed', ended_at=started_at, note='Server restarted' WHERE status='running'",
+    "UPDATE runs SET status='failed', ended_at=started_at, note='Server neu gestartet' WHERE status='running'",
   )
   db.exec("UPDATE issues SET status='todo' WHERE status='in_progress'")
 }

@@ -7,6 +7,7 @@ import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { DATA_DIR } from './db.ts'
 import { safeEnv } from './auth.ts'
+import { t } from './i18n.ts'
 import { execIn, ownerOf, spawnShellIn, stopGroup } from './sandbox.ts'
 const PLAYWRIGHT = 'playwright@1.65.0'
 const START_TIMEOUT_MS = 90_000
@@ -39,7 +40,7 @@ function freePort(): Promise<number> {
 async function waitUntilServing(url: string, exited: () => boolean) {
   const deadline = Date.now() + START_TIMEOUT_MS
   while (Date.now() < deadline) {
-    if (exited()) throw new Error('The preview command exited before the app answered')
+    if (exited()) throw new Error(t('Der Vorschau-Befehl hat sich beendet, bevor die App antwortete'))
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(3000) })
       if (res.status < 500) return
@@ -48,7 +49,7 @@ async function waitUntilServing(url: string, exited: () => boolean) {
     }
     await new Promise((resolve) => setTimeout(resolve, 1000))
   }
-  throw new Error(`The app did not answer within ${START_TIMEOUT_MS / 1000} s`)
+  throw new Error(t('Die App antwortete nicht innerhalb von {seconds} s', { seconds: START_TIMEOUT_MS / 1000 }))
 }
 
 /**
@@ -120,7 +121,9 @@ export async function capturePreview(input: {
     const output = String(error.stderr || error.message)
     if (/playwright install/i.test(output)) {
       throw new Error(
-        `The browser for Playwright is missing. Run \`npx ${ownPlaywright ? 'playwright' : PLAYWRIGHT} install chromium\` once in the project.`,
+        t('Der Browser für Playwright fehlt. Einmal `npx {playwright} install chromium` im Projekt ausführen.', {
+          playwright: ownPlaywright ? 'playwright' : PLAYWRIGHT,
+        }),
       )
     }
     const reason = output.trim().split('\n').slice(-2).join(' ')

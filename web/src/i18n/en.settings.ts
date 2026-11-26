@@ -1,0 +1,182 @@
+export const en_settings: Record<string, string> = {
+  'Abschnitte dieser Seite': 'Sections on this page',
+  'Projekt "{name}" mit allen Issues, Agenten und Läufen löschen?': 'Delete project "{name}" with all its issues, agents and runs?',
+  'Projekt': 'Project',
+  'Gleichzeitige Agenten': 'Concurrent agents',
+  'Obergrenze für das ganze Projekt': 'Limit for the whole project',
+  'Arbeitsordner': 'Workspace',
+  'Pro Agent: ein fester Checkout je Agent, Build-Caches (Asset-Import, node_modules) bleiben erhalten.':
+    'Per agent: one fixed checkout per agent, build caches (asset import, node_modules) are kept.',
+  'Änderungsrunden im Review': 'Change rounds in review',
+  'Danach entscheidet ein Mensch': 'After that a human decides',
+  'Git-Repository auf dem Server': 'Git repository on the server',
+  'Jedes Issue bekommt einen eigenen Worktree und Branch agentdeck/KEY-n.':
+    'Every issue gets its own worktree and branch agentdeck/KEY-n.',
+  'Sprache der Agenten': 'Language of the agents',
+  'In dieser Sprache bekommen die Agenten ihre Aufträge und schreibt der Server seine Notizen.':
+    'The agents get their tasks in this language and the server writes its notes in it.',
+  '## Oberfläche\nAgenten: Frontend\nTitel: seite, ansicht\n- Screenshot vorher und nachher im Repo\n- Tastaturbedienung geprüft\n\n## Alle\n- Nur Dateien geändert, die das Issue verlangt':
+    '## UI\nAgents: Frontend\nTitle: page, view\n- Screenshot before and after in the repo\n- Keyboard use checked\n\n## All\n- Only changed files the issue asks for',
+  'Screenshot:\nOberfläche unverändert': 'Screenshot:\nUI unchanged',
+  '/srv/repos/mein-projekt': '/srv/repos/my-project',
+  '/repos/mein-projekt': '/repos/my-project',
+  'Verlauf der Läufe aufzeichnen': 'Record run history',
+  'Speichert je Lauf Auftrag, Werkzeugaufrufe, Ergebnisse, Antworten und die Änderungen, gekürzt und ohne erkannte Geheimnisse. Zu sehen unter „Verlauf zeigen“ bei jedem Lauf, 30 Tage lang.':
+    'Stores the task, tool calls, results, replies and changes of each run, shortened and without detected secrets. Shown under “Show history” on every run, for 30 days.',
+  'Große MCP-Verbindungen nur bei Bedarf': 'Large MCP connections only on demand',
+  'Die Werkzeuge von PixelLab kosten in jedem Schritt etwa 90.000 Tokens. Ein Lauf bekommt sie nur, wenn das Issue PixelLab nennt oder der Agent sie mit „connect“ anfordert. Die API-Keys sind immer gesetzt.':
+    'The PixelLab tools cost about 90,000 tokens in every step. A run gets them only when the issue names PixelLab or the agent asks for them with “connect”. The API keys are always set.',
+  'Abnahme': 'Acceptance',
+  'Jedes Issue bekommt eine Checkliste: sein „Done when“ plus die passende Vorlage. Der Agent meldet jeden Punkt mit Nachweis, die Prüfer urteilen nur danach. Fehlt noch etwas, prüft nur der erste Prüfer den Zwischenstand.':
+    'Every issue gets a checklist: its “Done when” plus the matching template. The agent reports each item with evidence, and the reviewers judge only by that. If something is still missing, only the first reviewer checks the interim state.',
+  'Abnahme-Checklisten': 'Acceptance checklists',
+  'Nach Änderungswunsch beim selben Prüfer weitermachen': 'Continue with the same reviewer after a change request',
+  'Vorlagen': 'Templates',
+  '„## Name“ beginnt eine Vorlage. „Agenten:“ und „Titel:“ (kommagetrennt) sagen, wofür sie gilt; die erste passende wird genommen. Eine Vorlage ohne beides gilt für jedes Issue. Punkte beginnen mit „- “.':
+    '“## Name” starts a template. “Agenten:” and “Titel:” (comma-separated) say what it applies to; the first match is used. A template with neither applies to every issue. Items start with “- ”.',
+  'Vorcheck vor jedem Review': 'Pre-check before every review',
+  'Bevor ein Prüfer die Arbeit sieht: Nachweis-Dateien vorhanden, alles committet, Basis-Branch konfliktfrei eingemergt, Prüfbefehl grün. Sonst geht das Issue ohne Review-Lauf zurück.':
+    'Before a reviewer sees the work: evidence files present, everything committed, base branch merged in without conflicts, check command green. Otherwise the issue goes back without a review run.',
+  'Prüfbefehl': 'Check command',
+  'Läuft im Checkout des Agenten. Leer = nur Nachweise und Merge.':
+    "Runs in the agent's checkout. Empty = evidence and merge only.",
+  'Zeitlimit (Minuten)': 'Time limit (minutes)',
+  'Prüfbefehl erst vor dem Landen': 'Run check command only before landing',
+  'An: Die Prüfer sehen die Arbeit sofort. Der Prüfbefehl läuft einmal nach der letzten Freigabe auf dem gemergten Stand, gepusht wird nur bei Grün. Rot geht mit der Ausgabe an den Ersteller zurück. Agenten führen die volle Testsuite dann nicht selbst aus. Nur bei Landung „Merge“.':
+    'On: the reviewers see the work right away. The check command runs once after the last approval on the merged state, and it is pushed only if green. Red goes back to the creator with the output. Agents then do not run the full test suite themselves. Only for landing “Merge”.',
+  'Landung': 'Landing',
+  'Nach der letzten Freigabe bringt AgentDeck den Branch des Issues in den Basis-Branch. Agenten landen nie selbst.':
+    "After the last approval, AgentDeck brings the issue's branch into the base branch. Agents never land on their own.",
+  'Basis-Branch': 'Base branch',
+  'Leer = der im Repository ausgecheckte Branch': 'Empty = the branch checked out in the repository',
+  'Nach dem Merge pushen': 'Push after merge',
+  'Merge-Art': 'Merge method',
+  'Geschützte Pfade': 'Protected paths',
+  'Ein Pfad pro Zeile. Ändert ein Branch etwas darunter, landet er nicht automatisch, sondern wartet auf deine Freigabe.':
+    'One path per line. If a branch changes anything below one, it does not land automatically but waits for your approval.',
+  'Freigabe vor der Landung': 'Approval before landing',
+  'Was hier zutrifft, landet nicht automatisch, sondern wartet auf „Landung freigeben“ im Issue. Die Freigabe gilt für genau einen Stand des Branches; ändert er sich danach, braucht er eine neue.':
+    'Whatever matches here does not land automatically but waits for “Approve landing” in the issue. The approval applies to exactly one state of the branch; if it changes afterwards, it needs a new one.',
+  'Jede Landung': 'Every landing',
+  'Neue Abhängigkeiten': 'New dependencies',
+  'package.json, requirements*.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile, composer.json: neue Pakete, nicht reine Versionswechsel':
+    'package.json, requirements*.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile, composer.json: new packages, not pure version changes',
+  'Infrastruktur-Dateien': 'Infrastructure files',
+  'Infrastruktur-Muster': 'Infrastructure patterns',
+  'Ein Muster pro Zeile. Ohne „/“ gilt es für den Dateinamen in jedem Ordner (*.tf), mit „/“ ab der Wurzel des Repositorys (docker/**). ** umfasst Unterordner.':
+    'One pattern per line. Without “/” it applies to the file name in any folder (*.tf), with “/” from the repository root (docker/**). ** includes subfolders.',
+  'Nachweis nötig für': 'Evidence required for',
+  'Pfade, einer pro Zeile. Ändert ein Branch etwas darunter, muss die Zusammenfassung des Agenten einen der Nachweise rechts enthalten, sonst geht das Issue an ihn zurück.':
+    "Paths, one per line. If a branch changes anything below one, the agent's summary must contain one of the evidence lines on the right, otherwise the issue goes back to it.",
+  'Nachweis-Zeilen': 'Evidence lines',
+  'Text, einer pro Zeile, z. B. „Screenshot:“.': 'Text, one per line, e.g. “Screenshot:”.',
+  'GitHub-Token-Datei': 'GitHub token file',
+  'Optional. Pfad im Container zu einem Token nur für dieses Projekt, etwa einem GitHub-App-Token, das ein Host-Job erneuert. Die Agenten bekommen es als GH_TOKEN, gelandet wird damit. Leer = GitHub-Verbindung oder gh-Login.':
+    'Optional. Path in the container to a token for this project only, such as a GitHub App token that a host job renews. The agents get it as GH_TOKEN, and landing uses it. Empty = GitHub connection or gh login.',
+  'Vollautonom: nichts wartet auf einen Menschen': 'Fully autonomous: nothing waits for a human',
+  'Blockierte Issues und offene Prüfungen entscheidet der Agent unten. Was auch er nicht klären kann, wird ins Backlog geparkt und später erneut versucht.':
+    'Blocked issues and open reviews are decided by the agent below. Whatever it cannot resolve either is parked in the backlog and tried again later.',
+  'Blockierte Issues gehen zuerst an': 'Blocked issues go to first',
+  'Dieser Agent entscheidet einmal, wie es weitergeht. Erst was er nicht klären kann, landet bei dir.':
+    'This agent decides once how to proceed. Only what it cannot resolve reaches you.',
+  'direkt an mich': 'straight to me',
+  'Gruppen nacheinander öffnen': 'Open groups one after another',
+  'Ist nichts mehr offen, wandert das Backlog der nächsten Gruppe (nach Name sortiert) auf To Do':
+    'When nothing is open any more, the backlog of the next group (sorted by name) moves to To Do',
+  'Mail an mich, wenn ein Issue auf mich wartet': 'Email me when an issue is waiting for me',
+  'Postfach und Empfänger stehen unter „Anbieter und Zugänge“': 'Mailbox and recipient are under “Providers and access”',
+  'Kosten-Deckel pro Issue': 'Cost cap per issue',
+  'Verbraucht ein Issue mehr, wird es nach dem laufenden Lauf geparkt und du bekommst Bescheid. Mit „Weitere Runde freigeben“ darf es noch einmal so viel verbrauchen. 0 = kein Deckel.':
+    'If an issue uses more, it is parked after the current run and you are notified. With “Approve another round” it may use that much again. 0 = no cap.',
+  'Dollar': 'Dollars',
+  'Wie vom Anbieter gemeldet, auch im Abo': 'As reported by the provider, also on a subscription',
+  'Tausend Tokens': 'Thousand tokens',
+  'Neue Tokens, ohne Cache': 'New tokens, without cache',
+  'Vorschau mit Screenshots': 'Preview with screenshots',
+  'Geht Arbeit ins Review, startet AgentDeck die App aus dem Branch, macht einen Desktop- und einen Handy-Screenshot und beendet sie wieder. Die Bilder stehen im Issue, der Prüfer bekommt sie mit.':
+    'When work goes into review, AgentDeck starts the app from the branch, takes a desktop and a phone screenshot and stops it again. The images appear in the issue and the reviewer gets them too.',
+  'Startbefehl': 'Start command',
+  '$PORT wird durch einen freien Port ersetzt. Leer = aus.': '$PORT is replaced by a free port. Empty = off.',
+  'Seite': 'Page',
+  'Pfad, der fotografiert wird': 'Path that is photographed',
+  'Schaufenster': 'Showcase',
+  'Öffentliche Seite': 'Public page',
+  'Eine Seite ohne Login, die zeigt, welche Agenten gerade arbeiten und was erledigt wurde. Kein Code, keine Kommentare, keine Kosten. Wer den Link kennt, kann sie sehen.':
+    'A page without login that shows which agents are working right now and what has been done. No code, no comments, no costs. Anyone who knows the link can see it.',
+  'Der alte Link funktioniert danach nicht mehr': 'The old link stops working afterwards',
+  'Neuer Link': 'New link',
+  'Issue-Titel zeigen': 'Show issue titles',
+  'Kontext für alle Agenten': 'Context for all agents',
+  'Projekt löschen': 'Delete project',
+  'Erst das Repository als owner/name eintragen.': 'Enter the repository as owner/name first.',
+  'GitHub-Issues übernehmen': 'Import GitHub issues',
+  'Issues mit Label übernehmen': 'Import issues with label',
+  'Bekommt ein Issue im Repository das Label, legt AgentDeck es hier an und die Agenten übernehmen. Ein Label setzen darf auf GitHub nur, wer im Repository mitarbeitet: Fremde können ein Issue schreiben, aber nicht an die Agenten geben. Der Text kommt trotzdem von außen, darum ist das Backlog die Vorgabe.':
+    'When an issue in the repository gets the label, AgentDeck creates it here and the agents take over. On GitHub only people who work in the repository can set a label: outsiders can write an issue but cannot hand it to the agents. The text still comes from outside, so the backlog is the default.',
+  'owner/name, wie in der Adresse auf GitHub': 'owner/name, as in the address on GitHub',
+  'Landet in': 'Lands in',
+  'Braucht den GitHub-Webhook dieses Servers (': "Needs this server's GitHub webhook (",
+  ') mit dem Event „Issues“. Einrichtung: README, „Freigaben und GitHub-Webhooks“.':
+    ') with the “Issues” event. Setup: README, “Approvals and GitHub webhooks”.',
+  'Von außen steuern': 'Control from outside',
+  'AgentDeck ist selbst ein MCP-Server. Claude Code, Codex, Cursor oder eine Chat-App lesen darüber die Boards, legen Issues an, kommentieren, verschieben und stoppen sie, mit den Rechten des verwendeten Tokens. Gilt für alle Projekte.':
+    'AgentDeck is an MCP server itself. Claude Code, Codex, Cursor or a chat app can read the boards through it, create issues, comment on, move and stop them, with the rights of the token used. Applies to all projects.',
+  'Kopiert': 'Copied',
+  'Kopieren': 'Copy',
+  'Zahlen für Prometheus und Grafana (Issues, Läufe, Kosten, Tokens, Kontingente):':
+    'Figures for Prometheus and Grafana (issues, runs, costs, tokens, quotas):',
+  ', ebenfalls mit Bearer-Token.': ', also with a bearer token.',
+  'Webhook an {host} löschen?': 'Delete webhook to {host}?',
+  '{host}: angekommen (HTTP {status})': '{host}: delivered (HTTP {status})',
+  'Meldet Statuswechsel an Slack oder einen eigenen Endpunkt. Nur https, keine Adressen im privaten Netz. Gesendet werden Projekt, Issue-Nummer, Titel und Status, nie Code oder Kommentare. Allgemeine Webhooks sind mit HMAC-SHA256 signiert (Header X-AgentDeck-Signature).':
+    'Reports status changes to Slack or your own endpoint. https only, no addresses in private networks. Sent are project, issue number, title and status, never code or comments. Generic webhooks are signed with HMAC-SHA256 (header X-AgentDeck-Signature).',
+  'Noch keine Webhooks.': 'No webhooks yet.',
+  'Allgemein': 'Generic',
+  'Testen': 'Test',
+  'Webhook löschen': 'Delete webhook',
+  'Signatur-Secret, wird nur jetzt angezeigt:': 'Signing secret, shown only now:',
+  'Notiert': 'Noted',
+  'Webhook-Adresse': 'Webhook URL',
+  'Art': 'Type',
+  'Hinzufügen': 'Add',
+  'Keine Sandbox: die Einstellung wirkt nur im Container.': 'No sandbox: this setting only works in the container.',
+  'Offen: die Agenten erreichen jeden Host.': 'Open: the agents can reach any host.',
+  'Firewall aktiv: andere Ziele und DNS sind gesperrt.': 'Firewall active: other destinations and DNS are blocked.',
+  'Firewall nicht verfügbar, das Projekt ist offen ({error}). Der Container braucht iptables und NET_ADMIN, siehe README.':
+    'Firewall unavailable, the project is open ({error}). The container needs iptables and NET_ADMIN, see README.',
+  'Fehler||Status': 'error',
+  'Firewall wird eingerichtet …': 'Setting up firewall …',
+  'Netzwerk der Agenten': 'Agent network',
+  'Mit Allowlist erreichen die Agenten dieses Projekts nur die eingetragenen Hosts, über einen Proxy in AgentDeck. Alles andere sperrt die Firewall des Containers, auch DNS. Git über SSH geht dann nicht, Git über HTTPS schon. AgentDeck selbst (Board, API) bleibt erreichbar.':
+    "With an allowlist, this project's agents reach only the listed hosts, through a proxy in AgentDeck. The container's firewall blocks everything else, DNS included. Git over SSH then does not work, Git over HTTPS does. AgentDeck itself (board, API) stays reachable.",
+  'Ausgehende Verbindungen': 'Outgoing connections',
+  'Erlaubte Hosts': 'Allowed hosts',
+  'Ein Eintrag pro Zeile: github.com, *.example.com (nur Subdomains), host:8443, 192.0.2.7. Ohne Port gelten 80 und 443. Ungültige Einträge fallen weg.':
+    'One entry per line: github.com, *.example.com (subdomains only), host:8443, 192.0.2.7. Without a port, 80 and 443 apply. Invalid entries are dropped.',
+  'Zuletzt blockiert:': 'Recently blocked:',
+  'Auf die Allowlist setzen': 'Add to the allowlist',
+  '{target} erlauben': 'Allow {target}',
+  'Gelerntes': 'Lessons learned',
+  'Jeder Lauf liest die neuesten 15 Notizen. Agenten schreiben sie selbst, wenn sie etwas herausfinden, das nicht im Repository steht.':
+    'Every run reads the latest 15 notes. Agents write them themselves when they find out something that is not in the repository.',
+  'Noch nichts gelernt.': 'Nothing learned yet.',
+  'Notiz löschen': 'Delete note',
+  'z. B. Tests laufen mit „npm test -- --run“': 'e.g. tests run with “npm test -- --run”',
+  'Neue Notiz': 'New note',
+  'Aus': 'Off',
+  'Direkt mergen': 'Merge directly',
+  'Pull Request, Merge nach grünen Checks': 'Pull request, merge after green checks',
+  'Merge-Commit': 'Merge commit',
+  'Offen': 'Open',
+  'Nur erlaubte Hosts': 'Allowed hosts only',
+  'Pro Issue ein Worktree': 'One worktree per issue',
+  'Pro Agent ein Checkout': 'One checkout per agent',
+  'Backlog: erst ansehen': 'Backlog: review first',
+  'To do: Agenten starten sofort': 'To do: agents start right away',
+  'Zur Prüfung': 'For review',
+  'Blockiert': 'Blocked',
+  'Erledigt': 'Done',
+  'Lauf fehlgeschlagen': 'Run failed',
+  'Wartet auf dich': 'Waiting for you',
+  'Allgemein (JSON, signiert)': 'Generic (JSON, signed)',
+}

@@ -1,7 +1,9 @@
 // The morning report: one look at what happened in the last 24 hours across all projects.
 // One line per project, at most two bullets below it, nothing else. Sent by mail and push.
+// It covers every project, so it is written in the language of the instance.
 import { PROVIDERS } from './core.ts'
 import { all, get, run } from './db.ts'
+import { instanceLang, t, variants, withLang } from './i18n.ts'
 import { mailSettings, sendMail } from './notify.ts'
 import { sendPush } from './push.ts'
 import { clock, restOf } from './recovery.ts'
@@ -16,7 +18,7 @@ export const reportSettings = () => ({ at: setting('report.at') })
 
 export function saveReportSettings(input: { at?: string }) {
   const at = String(input.at ?? '').trim()
-  if (at && !/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error('Time in the format HH:MM')
+  if (at && !/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error(t('Uhrzeit im Format HH:MM'))
   saveSetting('report.at', at)
   return reportSettings()
 }
@@ -36,12 +38,16 @@ function projectLines(project: any, since: number) {
     "SELECT COUNT(*) AS count FROM issues WHERE project_id=? AND status IN ('todo','in_progress','review','blocked')",
     project.id,
   )!.count as number
+  // The note may have been written while the project spoke the other language, so both forms count.
+  const parkedNotes = variants('Geparkt:')
   const parked = all(
     `SELECT DISTINCT i.number, i.title FROM comments c JOIN issues i ON i.id = c.issue_id
-     WHERE i.project_id=? AND c.created_at>=? AND c.kind='watchdog' AND c.body LIKE 'Parked:%'
+     WHERE i.project_id=? AND c.created_at>=? AND c.kind='watchdog'
+       AND (${parkedNotes.map(() => 'c.body LIKE ?').join(' OR ')})
        AND i.status='backlog'`,
     project.id,
     since,
+    ...parkedNotes.map((start) => `${start}%`),
   )
   const finished = all(
     'SELECT number, title FROM issues WHERE project_id=? AND done_at>=? ORDER BY done_at DESC LIMIT 2',
@@ -49,23 +55,27 @@ function projectLines(project: any, since: number) {
     since,
   )
 
-  const facts = [`${done} done`, `${open} open`]
-  if (parked.length) facts.push(`${parked.length} parked`)
-  if (failed) facts.push(`${failed} ${failed === 1 ? 'failed run' : 'failed runs'}`)
+  const facts = [t('{n} erledigt', { n: done }), t('{n} offen', { n: open })]
+  if (parked.length) facts.push(t('{n} geparkt', { n: parked.length }))
+  if (failed) facts.push(failed === 1 ? t('1 Fehllauf') : t('{n} Fehlläufe', { n: failed }))
   if (cost >= 0.01) facts.push(`$${cost.toFixed(2)}`)
-  const head = `${project.key}${project.paused ? ' (paused)' : ''}: ${facts.join(', ')}`
+  const name = project.paused ? t('{key} (pausiert)', { key: project.key }) : project.key
+  const head = `${name}: ${facts.join(', ')}`
 
   // Parked work needs the owner's eye more than finished work, so it comes first.
+  const titleOf = (issue: any) => `${project.key}-${issue.number} ${issue.title}`
   const bullets = [
-    ...parked.map((issue) => `Parked: ${project.key}-${issue.number} ${issue.title}`),
-    ...finished.map((issue) => `Done: ${project.key}-${issue.number} ${issue.title}`),
+    ...parked.map((issue) => t('Geparkt: {issue}', { issue: titleOf(issue) })),
+    ...finished.map((issue) => t('Fertig: {issue}', { issue: titleOf(issue) })),
   ]
     .slice(0, 2)
     .map((text) => `  - ${text.slice(0, 90)}`)
   return { head, bullets, done, parked: parked.length, active: done + open + failed > 0 }
 }
 
-export function buildReport(now = Date.now()) {
+export const buildReport = (now = Date.now()) => withLang(instanceLang(), () => compose(now))
+
+function compose(now: number) {
   const since = now - DAY_MS
   const projects = all('SELECT id, key, name, paused FROM projects ORDER BY key')
   const sections = projects.map((project) => projectLines(project, since))
@@ -75,9 +85,16 @@ export function buildReport(now = Date.now()) {
   const resting = Object.keys(PROVIDERS)
     .map((provider) => ({ provider, rest: restOf(provider) }))
     .filter((entry) => entry.rest)
-    .map((entry) => `${PROVIDERS[entry.provider].label} paused until ${clock(entry.rest!.until)}`)
+    .map((entry) =>
+      t('{provider} pausiert bis {time}', {
+        provider: PROVIDERS[entry.provider].label,
+        time: clock(entry.rest!.until),
+      }),
+    )
 
-  const summary = `Last 24 h: ${done} done${parked ? `, ${parked} parked` : ''}.`
+  const summary = parked
+    ? t('Letzte 24 h: {done} erledigt, {parked} geparkt.', { done, parked })
+    : t('Letzte 24 h: {done} erledigt.', { done })
   const lines = [
     summary,
     '',
@@ -89,14 +106,18 @@ export function buildReport(now = Date.now()) {
   return { summary, text: lines.join('\n') }
 }
 
-export async function sendReport() {
-  const report = buildReport()
-  const { inbox, to, hasKey } = mailSettings()
-  const jobs: Promise<unknown>[] = [sendPush('AgentDeck: Morning report', report.summary, '/')]
-  if (inbox && to && hasKey) jobs.push(sendMail(`[AgentDeck] Morning report: ${report.summary}`, report.text))
-  await Promise.all(jobs)
-  return report
-}
+export const sendReport = () =>
+  withLang(instanceLang(), async () => {
+    const report = buildReport()
+    const { inbox, to, hasKey } = mailSettings()
+    const jobs: Promise<unknown>[] = [sendPush(t('AgentDeck: Morgenbericht'), report.summary, '/')]
+    if (inbox && to && hasKey) {
+      const subject = t('[AgentDeck] Morgenbericht: {summary}', { summary: report.summary })
+      jobs.push(sendMail(subject, report.text))
+    }
+    await Promise.all(jobs)
+    return report
+  })
 
 /** Sends once a day when the clock passes the set time. The server's time zone applies (TZ). */
 function sendIfDue(now = new Date()) {

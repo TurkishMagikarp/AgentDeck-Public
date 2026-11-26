@@ -1,5 +1,6 @@
 import { createMemo, For } from 'solid-js'
 import { models } from './store'
+import { t } from './i18n'
 
 /**
  * Model picker for one provider. The list comes from the server; a model that is set but no
@@ -19,7 +20,7 @@ export function ModelSelect(props: {
   return (
     <select onChange={(e) => props.onChange(e.currentTarget.value)}>
       <option value="" selected={!props.value}>
-        {props.emptyLabel ?? "Provider's default"}
+        {props.emptyLabel ?? t('Standard des Anbieters')}
       </option>
       <For each={options()}>
         {(model) => (

@@ -1,5 +1,6 @@
 import { createSignal } from 'solid-js'
 import { askConfirmToken } from './Confirm'
+import { language, t } from './i18n'
 
 /** True once the server answered "unauthorized": the app then shows the login form. */
 export const [needsLogin, setNeedsLogin] = createSignal(false)
@@ -9,7 +10,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   for (;;) {
     const res = await fetch('/api' + path, {
       method,
-      headers: sent === undefined ? undefined : { 'content-type': 'application/json' },
+      headers: {
+        'x-agentdeck-lang': language(),
+        ...(sent === undefined ? {} : { 'content-type': 'application/json' }),
+      },
       body: sent === undefined ? undefined : JSON.stringify(sent),
     })
     const data = await res.json().catch(() => ({}))
@@ -18,7 +22,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     // with it. A wrong token comes back the same way, with the reason in the message.
     if (res.status === 403 && data.confirm && sent && typeof sent === 'object') {
       const token = await askConfirmToken(data.error ?? '', data.fields ?? [])
-      if (!token) throw new Error('Not saved: confirmation canceled.')
+      if (!token) throw new Error(t('Nicht gespeichert: Bestätigung abgebrochen.'))
       sent = { ...sent, confirmToken: token }
       continue
     }

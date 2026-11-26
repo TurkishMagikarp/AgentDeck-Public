@@ -5,6 +5,8 @@
 //             agents, skills, routines, webhooks, providers and logins, keys, mail, users, audit.
 // The rules sit in one table instead of on each route, so a new route is never left open by
 // accident: an unlisted GET needs viewer, any other unlisted method needs operator.
+import { t } from './i18n.ts'
+
 export const ROLES = ['viewer', 'operator', 'admin'] as const
 export type Role = (typeof ROLES)[number]
 
@@ -82,4 +84,6 @@ export function hasOddNumber(path: string) {
   })
 }
 
-export const ROLE_LABELS: Record<Role, string> = { viewer: 'Viewer', operator: 'Operator', admin: 'Admin' }
+/** What a role is called in the language of the person asking. */
+export const roleLabel = (role: Role) =>
+  ({ viewer: t('Lesen'), operator: t('Bedienen'), admin: t('Verwalten') })[role]

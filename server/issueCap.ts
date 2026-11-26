@@ -3,6 +3,7 @@
 // every start, so an issue goes over its cap by at most one run. The owner can grant another
 // round of the same size; then the issue goes on where it stopped.
 import { get } from './db.ts'
+import { currentLang, t } from './i18n.ts'
 
 export type IssueCap = { usd: number; tokens: number }
 
@@ -27,10 +28,11 @@ export function overCap(projectCap: IssueCap, issue: { id: number; cap_factor: n
   const limit = capOf(projectCap, Math.max(1, issue.cap_factor))
   const spent = spentOn(issue.id)
   if (limit.usd && spent.usd >= limit.usd)
-    return `$${spent.usd.toFixed(2)} of $${limit.usd.toFixed(2)} used`
+    return t('${spent} von ${limit} verbraucht', { spent: spent.usd.toFixed(2), limit: limit.usd.toFixed(2) })
   if (limit.tokens && spent.tokens >= limit.tokens) {
-    const k = (value: number) => `${Math.round(value / 1000).toLocaleString('en-US')}k`
-    return `${k(spent.tokens)} of ${k(limit.tokens)} tokens used`
+    const locale = currentLang() === 'en' ? 'en-US' : 'de-DE'
+    const k = (value: number) => `${Math.round(value / 1000).toLocaleString(locale)}k`
+    return t('{spent} von {limit} Tokens verbraucht', { spent: k(spent.tokens), limit: k(limit.tokens) })
   }
   return ''
 }

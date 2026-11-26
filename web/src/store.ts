@@ -1,6 +1,7 @@
 import { createMemo, createRoot, createSignal } from 'solid-js'
 import { createStore, produce, reconcile, unwrap } from 'solid-js/store'
 import { api } from './api'
+import { language } from './i18n'
 import { blockerWeights } from '../../server/blockers.ts'
 import type {
   Agent,
@@ -44,7 +45,7 @@ export function onRunOutput(runId: number, listener: OutputListener) {
 export const [groupFilter, setGroupFilter] = createSignal('')
 export const [error, setError] = createSignal('')
 
-/** A short confirmation ("SHOP-17 created") shown as a toast, gone after a few seconds. */
+/** A short confirmation ("SHOP-17 angelegt") shown as a toast, gone after a few seconds. */
 export const [info, setInfo] = createSignal('')
 let infoTimer: number | undefined
 export function say(text: string) {
@@ -109,7 +110,8 @@ export async function openProject(projectId: number) {
 
   // Listen first and load after, so no change can slip between the board and the first event.
   // Events that arrive before the board wait for it.
-  const source = new EventSource(`/api/events?project=${projectId}`)
+  // An EventSource cannot send the language header, so the stream gets the language in its address.
+  const source = new EventSource(`/api/events?project=${projectId}&lang=${language()}`)
   events = source
   let waiting: any[] | null = []
   source.onmessage = (msg) => {

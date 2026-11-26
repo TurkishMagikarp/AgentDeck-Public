@@ -14,6 +14,7 @@ import { homedir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { promisify } from 'node:util'
 import { configureEgress, EGRESS_PORT, egressEnv, keyOfUser, setFirewall, startEgressProxy, uidOfPeer, type EgressSettings } from './egress.ts'
+import { langOf, t } from './i18n.ts'
 
 export const SANDBOX = process.platform === 'linux' && process.env.AGENTDECK_SANDBOX === '1'
 const HELPER = '/usr/local/sbin/agentdeck-sandbox'
@@ -53,7 +54,7 @@ export function ownerOf(dir: string): ProjectUser | null {
 /** Refuses to start agent code as the server. A project directory without its user is a setup error. */
 export function ownerRequired(dir: string) {
   const owner = ownerOf(dir)
-  if (SANDBOX && !owner) throw new Error(`Sandbox: ${dir} belongs to no project user, the run does not start`)
+  if (SANDBOX && !owner) throw new Error(t('Sandbox: {dir} gehört keinem Projektnutzer, der Lauf startet nicht', { dir }))
   return owner
 }
 
@@ -205,7 +206,9 @@ export function ensureProject(project: { key: string; repo_path?: string }) {
       },
       (error) => {
         ensured.delete(id)
-        throw new Error(`Sandbox for ${project.key}: ${String(error.stderr || error.message).trim()}`)
+        throw new Error(
+          t('Sandbox für {key}: {error}', { key: project.key, error: String(error.stderr || error.message).trim() }),
+        )
       },
     )
     ensured.set(id, done)
@@ -223,12 +226,16 @@ const egressApplied = new Map<string, { mode: string; done: Promise<void> }>()
  * iptables or NET_ADMIN the project stays open apart from the proxy env, and the settings page
  * says so.
  */
-export function ensureEgress(project: { key: string; repo_path?: string; settings: { egress?: EgressSettings } }) {
+export function ensureEgress(project: {
+  key: string
+  repo_path?: string
+  settings: { egress?: EgressSettings; language?: unknown }
+}) {
   const { key } = project
   const egress = project.settings.egress
   if (!egress) return Promise.resolve()
   const { mode } = egress
-  configureEgress(key, egress)
+  configureEgress(key, egress, langOf(project))
   if (!SANDBOX) return Promise.resolve()
   const previous = egressApplied.get(key)
   if (previous?.mode === mode) return previous.done
@@ -337,9 +344,9 @@ async function seedHome(user: ProjectUser) {
 
 /** Debian packages for the agents, installed by the helper. The names are checked there again. */
 export async function installPackages(names: string[]) {
-  if (!SANDBOX) throw new Error('AgentDeck installs packages only in the container')
+  if (!SANDBOX) throw new Error(t('Pakete installiert AgentDeck nur im Container'))
   if (!names.length || names.some((name) => !/^[a-z0-9][a-z0-9+.-]{0,62}$/.test(name)))
-    throw new Error('Invalid package name')
+    throw new Error(t('Ungültiger Paketname'))
   const { stdout, stderr } = await execFileAsync('sudo', ['-n', HELPER, 'install', ...names], {
     timeout: 15 * 60_000,
     maxBuffer: 8 * 1024 * 1024,
@@ -482,9 +489,9 @@ export async function loginsOut(cwd: string) {
 /** Writes a private file (0600) into the home of the user that owns `cwd`. Returns nothing. */
 export async function placeInHome(cwd: string, file: string, content: string) {
   const user = ownerOf(cwd)
-  if (!user) throw new Error('no project user')
+  if (!user) throw new Error(t('kein Projektnutzer'))
   const path = relative(user.home, file)
-  if (path.startsWith('..')) throw new Error(`${file} is not in the project home`)
+  if (path.startsWith('..')) throw new Error(t('{file} liegt nicht im Projekt-Home', { file }))
   const entry = { path, data: Buffer.from(content).toString('base64'), mtime: Date.now() }
   await homeSync(user, ['in'], JSON.stringify([entry]))
 }

@@ -10,6 +10,7 @@ import { lookup as dnsLookup } from 'node:dns/promises'
 import { readFileSync } from 'node:fs'
 import { BlockList, connect, createServer, isIP, type Server, type Socket } from 'node:net'
 import { endianness } from 'node:os'
+import { instanceLang, tIn, type Lang } from './i18n.ts'
 
 export type EgressMode = 'open' | 'allowlist'
 export type EgressSettings = { mode: EgressMode; allow: string[] }
@@ -180,6 +181,8 @@ export function isInternal(address: string) {
 
 type ProjectEgress = {
   compiled: CompiledEgress
+  /** The project's language: the proxy's refusals are read by its agents. */
+  lang?: Lang
   firewall: FirewallState
   error: string
   /** Recently refused targets with time, newest last; the settings page offers them to allow. */
@@ -188,11 +191,11 @@ type ProjectEgress = {
 
 const projects = new Map<string, ProjectEgress>()
 
-export function configureEgress(key: string, settings: EgressSettings) {
+export function configureEgress(key: string, settings: EgressSettings, lang?: Lang) {
   const entry = projects.get(key)
   const compiled = compileEgress(settings)
-  if (entry) entry.compiled = compiled
-  else projects.set(key, { compiled, firewall: 'off', error: '', blocked: new Map() })
+  if (entry) Object.assign(entry, { compiled, lang: lang ?? entry.lang })
+  else projects.set(key, { compiled, lang, firewall: 'off', error: '', blocked: new Map() })
 }
 
 export const egressOf = (key: string) => projects.get(key)?.compiled ?? null
@@ -300,7 +303,7 @@ export function startEgressProxy(o: ProxyOptions): Server {
       buffered = Buffer.concat([buffered, chunk])
       const end = buffered.indexOf('\r\n\r\n')
       if (end < 0) {
-        if (buffered.length > MAX_HEAD) refuse(socket, '431 Request Header Fields Too Large', 'headers too large')
+        if (buffered.length > MAX_HEAD) refuse(socket, '431 Request Header Fields Too Large', tIn(instanceLang(), 'Kopfzeilen zu groß'))
         return
       }
       socket.pause()
@@ -314,11 +317,14 @@ export function startEgressProxy(o: ProxyOptions): Server {
   async function handle(socket: Socket, head: string, rest: Buffer) {
     const lines = head.split('\r\n')
     const request = /^([A-Z]+) (\S+) HTTP\/1\.[01]$/.exec(lines[0])
-    if (!request) return refuse(socket, '400 Bad Request', 'not an HTTP request')
     const key = o.identify(socket)
+    // An answer goes to an agent of that project, so it comes in the project's language.
+    const t = (text: string, params?: Record<string, string>) =>
+      tIn((key && projects.get(key)?.lang) || instanceLang(), text, params)
+    if (!request) return refuse(socket, '400 Bad Request', t('keine HTTP-Anfrage'))
     const compiled = key ? egressOf(key) : null
     if (!key || compiled?.mode !== 'allowlist')
-      return refuse(socket, '403 Forbidden', 'the proxy only serves projects with an allowlist')
+      return refuse(socket, '403 Forbidden', t('der Proxy gilt nur für Projekte mit Allowlist'))
     const [, method, target] = request
     const tunnel = method === 'CONNECT'
     let host: string
@@ -326,17 +332,17 @@ export function startEgressProxy(o: ProxyOptions): Server {
     let path = ''
     if (tunnel) {
       const authority = parseAuthority(target)
-      if (!authority) return refuse(socket, '400 Bad Request', 'invalid target')
+      if (!authority) return refuse(socket, '400 Bad Request', t('ungültiges Ziel'))
       ;({ host, port } = authority)
     } else {
       let url: URL
       try {
         url = new URL(target)
       } catch {
-        return refuse(socket, '400 Bad Request', 'invalid target')
+        return refuse(socket, '400 Bad Request', t('ungültiges Ziel'))
       }
       if (url.protocol !== 'http:' || url.username || url.password)
-        return refuse(socket, '400 Bad Request', 'only http:// or CONNECT')
+        return refuse(socket, '400 Bad Request', t('nur http:// oder CONNECT'))
       host = url.hostname
       port = Number(url.port || 80)
       path = url.pathname + url.search
@@ -345,7 +351,8 @@ export function startEgressProxy(o: ProxyOptions): Server {
     const shown = `${check.host.includes(':') ? `[${check.host}]` : check.host}:${port}`
     if (!check.ok) {
       noteBlocked(key, shown)
-      return refuse(socket, '403 Forbidden', `${shown} is not on the project's allowlist`)
+      const reason = t('{target} steht nicht auf der Allowlist des Projekts', { target: shown })
+      return refuse(socket, '403 Forbidden', reason)
     }
     // A name on the list must not lead into the container or the LAN; an IP on the list may.
     let address = check.host
@@ -355,14 +362,17 @@ export function startEgressProxy(o: ProxyOptions): Server {
       if (!external) {
         noteBlocked(key, shown)
         return refuse(socket, addresses.length ? '403 Forbidden' : '502 Bad Gateway',
-          addresses.length ? `${shown} points to an internal address` : `${shown} cannot be resolved`)
+          addresses.length
+            ? t('{target} zeigt auf eine interne Adresse', { target: shown })
+            : t('{target} nicht auflösbar', { target: shown }))
       }
       address = external
     }
     const upstream = connect({ host: address, port })
     upstream.setTimeout(15_000, () => upstream.destroy())
     upstream.on('error', () => {
-      if (socket.writable && !socket.destroyed) refuse(socket, '502 Bad Gateway', `${shown} not reachable`)
+      if (socket.writable && !socket.destroyed)
+        refuse(socket, '502 Bad Gateway', t('{target} nicht erreichbar', { target: shown }))
       socket.destroy()
     })
     upstream.on('connect', () => {

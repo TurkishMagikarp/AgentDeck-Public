@@ -64,7 +64,7 @@ const agents = Array.from({ length: 8 }, (_, i) => ({
   max_instances: Math.ceil(AGENTS / 8),
 }))
 const issues = Array.from({ length: ISSUES }, (_, i) => ({
-  title: `Load test issue ${i + 1} with a title of usual length`,
+  title: `Load test issue ${i + 1} with a title of the usual length`,
   description: 'Description with acceptance criteria. '.repeat(8),
   status: 'backlog',
   priority: i % 4,
@@ -85,7 +85,7 @@ console.log(`Board response: ${(boardBytes / 1024).toFixed(0)} KB uncompressed\n
 await measure('Read board (warm cache)', 2000, 50, () => api('GET', `/projects/${projectId}/board`))
 await measure('Read issue details', 2000, 50, (i) => api('GET', `/issues/${(i % ISSUES) + 1}`))
 await measure('Create issue', 1000, 20, (i) =>
-  api('POST', `/projects/${projectId}/issues`, { title: `Neu ${i}` }),
+  api('POST', `/projects/${projectId}/issues`, { title: `New ${i}` }),
 )
 await measure('Write comment', 2000, 20, (i) =>
   api('POST', `/issues/${(i % ISSUES) + 1}/comments`, { body: 'Comment' }),
@@ -123,8 +123,8 @@ const seconds = (performance.now() - t) / 1000
 abort.abort()
 
 console.log(
-  `\n${BATCH} issues worked off by agents in ${seconds.toFixed(1)} s (${(BATCH / seconds).toFixed(1)} runs/s)`,
+  `\n${BATCH} issues worked through by agents in ${seconds.toFixed(1)} s (${(BATCH / seconds).toFixed(1)} runs/s)`,
 )
-console.log(`Peak of agents running at once: ${peakRunning}`)
+console.log(`Peak number of agents running at once: ${peakRunning}`)
 console.log(`Slowest board fetch meanwhile: ${slowestPoll.toFixed(1)} ms`)
 console.log(`100 SSE clients received ${(counter.bytes / 1024 / 1024).toFixed(1)} MB in total`)

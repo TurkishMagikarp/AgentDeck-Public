@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { all, DATA_DIR, db, get, run, tx } from './db.ts'
 import { activity, touch } from './core.ts'
 import { kick, stopRun } from './engine.ts'
+import { instanceLang, langOf, t, tIn } from './i18n.ts'
 import { sendPush } from './push.ts'
 
 /**
@@ -31,7 +32,7 @@ export function guardSettings() {
 
 export function saveGuardSettings(input: { capUsd?: unknown }) {
   const capUsd = Number(input.capUsd)
-  if (!Number.isFinite(capUsd) || capUsd < 0 || capUsd > 100_000) throw new Error('Limit: a number between 0 and 100000')
+  if (!Number.isFinite(capUsd) || capUsd < 0 || capUsd > 100_000) throw new Error(t('Limit: Zahl zwischen 0 und 100000'))
   saveSetting('guard.capUsd', String(Math.round(capUsd * 100) / 100))
   saveSetting('guard.trippedAt', '0')
   return guardSettings()
@@ -41,6 +42,9 @@ const spentSince = (since: number): number =>
   // A run counts when it ended inside the window, even if it started before it; running ones count from their start.
   get('SELECT COALESCE(SUM(cost_usd),0) AS cost FROM runs WHERE COALESCE(ended_at, started_at) > ?', since)?.cost ?? 0
 
+/** The name the spend guard stops runs under. Shown in each project's language. */
+const GUARD = 'Ausgabenlimit'
+
 /** Checks the cap once. Returns true when it stopped the fleet. Exported for tests. */
 export function checkSpendGuard(now = Date.now()) {
   const { capUsd } = guardSettings()
@@ -48,10 +52,16 @@ export function checkSpendGuard(now = Date.now()) {
   const spent = spentSince(now - DAY)
   if (spent < capUsd) return false
   saveSetting('guard.trippedAt', String(now))
-  const result = killSwitch('stop', 'Spend limit')
+  const result = killSwitch('stop', GUARD)
+  // The guard watches the whole fleet, so its push speaks the language of the instance.
+  const lang = instanceLang()
   sendPush(
-    'AgentDeck: spend limit reached',
-    `$${spent.toFixed(2)} in 24 h (limit $${capUsd}). ${result.paused} projects paused.`,
+    tIn(lang, 'AgentDeck: Ausgabenlimit erreicht'),
+    tIn(lang, '{spent} $ in 24 h (Limit {cap} $). {paused} Projekte angehalten.', {
+      spent: spent.toFixed(2),
+      cap: capUsd ?? 0,
+      paused: result.paused ?? 0,
+    }),
   ).catch(() => {})
   return true
 }
@@ -365,8 +375,17 @@ export function killSwitch(action: 'stop' | 'resume', actor = 'Owner') {
       }
     })
     let stopped = 0
-    for (const r of live)
-      if (stopRun(r.id, `Kill switch: ${actor === 'Owner' ? 'The owner' : actor} paused all projects.`, 'todo', actor)) stopped++
+    for (const r of live) {
+      // The note lands on an issue, so it is written in the language of that issue's project.
+      const settings = JSON.parse(get('SELECT settings FROM projects WHERE id=?', r.project_id)?.settings || '{}')
+      const lang = langOf({ settings })
+      const by = actor === GUARD ? tIn(lang, GUARD) : actor
+      const note =
+        actor === 'Owner'
+          ? tIn(lang, 'Not-Aus: Der Eigentümer hat alle Projekte angehalten.')
+          : tIn(lang, 'Not-Aus: {actor} hat alle Projekte angehalten.', { actor: by })
+      if (stopRun(r.id, note, 'todo', by)) stopped++
+    }
     for (const { id } of projects) touch(id)
     return { paused: projects.length, stopped }
   }
@@ -374,7 +393,9 @@ export function killSwitch(action: 'stop' | 'resume', actor = 'Owner') {
   // Waking up while the cap is still reached would stop everything again within 30 seconds.
   const { capUsd } = guardSettings()
   if (capUsd && spentSince(Date.now() - DAY) >= capUsd)
-    throw new Error('The spend limit is still reached. Raise it first or wait until the costs of the last 24 hours fall below it.')
+    throw new Error(
+      t('Das Ausgabenlimit ist noch erreicht. Erhöhe es zuerst oder warte, bis die Kosten der letzten 24 Stunden darunter fallen.'),
+    )
 
   const projects = all(`SELECT project_id FROM kill_switch`)
   for (const { project_id } of projects) {

@@ -4,6 +4,32 @@
 const BASE = process.env.AGENTDECK_URL
 const TOKEN = process.env.AGENTDECK_RUN_TOKEN
 
+// The CLI speaks the language of the run's project (AGENTDECK_LANG), English when it is not set.
+const TEXTS = {
+  en: {
+    commented: 'commented',
+    unblocked: (number, blocker) => `issue ${number} no longer waits for ${blocker}`,
+    installed: 'installed',
+    learned: 'learned',
+    created: (key) => `created ${key}`,
+    connected: (id) => `${id} is loaded in the next run on this issue; end this run with status handoff:<your name>`,
+    outsideRun: 'agentdeck: only available inside an AgentDeck run',
+    usage: 'Usage',
+  },
+  de: {
+    commented: 'kommentiert',
+    unblocked: (number, blocker) => `Issue ${number} wartet nicht mehr auf ${blocker}`,
+    installed: 'installiert',
+    learned: 'gemerkt',
+    created: (key) => `${key} angelegt`,
+    connected: (id) =>
+      `${id} ist im nächsten Lauf an diesem Issue geladen; beende diesen Lauf mit dem Status handoff:<dein Name>`,
+    outsideRun: 'agentdeck: nur innerhalb eines AgentDeck-Laufs verfügbar',
+    usage: 'Aufruf',
+  },
+}
+const text = TEXTS[process.env.AGENTDECK_LANG === 'de' ? 'de' : 'en']
+
 async function call(method, path, body) {
   const res = await fetch(`${BASE}/api/agent${path}`, {
     method,
@@ -43,27 +69,32 @@ const commands = {
 
   async comment([number, ...words]) {
     await call('POST', `/issues/${number}/comments`, { body: words.join(' ') })
-    console.log('commented')
+    console.log(text.commented)
   },
 
   async unblock([number, blocker]) {
     await call('POST', `/issues/${number}/unblock`, { blocker: Number(blocker) })
-    console.log(`issue ${number} no longer waits for ${blocker}`)
+    console.log(text.unblocked(number, blocker))
   },
 
   async install(names) {
     const { output } = await call('POST', '/packages', { names: names.join(' ') })
-    console.log(output || 'installed')
+    console.log(output || text.installed)
+  },
+
+  async connect([id]) {
+    await call('POST', '/connections', { id })
+    console.log(text.connected(id))
   },
 
   async learn(words) {
     await call('POST', '/lessons', { body: words.join(' ') })
-    console.log('learned')
+    console.log(text.learned)
   },
 
   async create(_, options) {
     const created = await call('POST', '/issues', options)
-    console.log(`created ${created.key}`)
+    console.log(text.created(created.key))
   },
 }
 
@@ -71,11 +102,11 @@ const [name, ...rest] = process.argv.slice(2)
 const command = commands[name]
 
 if (!BASE || !TOKEN) {
-  console.error('agentdeck: only available inside an AgentDeck run')
+  console.error(text.outsideRun)
   process.exit(2)
 }
 if (!command) {
-  console.error(`Usage: agent-cli.mjs <${Object.keys(commands).join('|')}> ...`)
+  console.error(`${text.usage}: agent-cli.mjs <${Object.keys(commands).join('|')}> ...`)
   process.exit(2)
 }
 

@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { saveQuota } from './adapters.ts'
 import { getAccess } from './auth.ts'
+import { t } from './i18n.ts'
 import { limitingWindows } from './pacing.ts'
 import { rememberResets, resetsEnabled, shouldRedeem } from './resets.ts'
 
@@ -24,7 +25,7 @@ function askCodex(requests: Request[]): Promise<any[]> {
     const results: any[] = []
     let buffer = ''
     let nextId = 1
-    const timer = setTimeout(() => finish(new Error('codex app-server does not answer')), TIMEOUT)
+    const timer = setTimeout(() => finish(new Error(t('codex app-server antwortet nicht'))), TIMEOUT)
 
     function finish(error?: Error) {
       clearTimeout(timer)
@@ -55,7 +56,7 @@ function askCodex(requests: Request[]): Promise<any[]> {
           continue
         }
         if (message.id !== nextId - 1) continue
-        if (message.error) return finish(new Error(message.error.message ?? 'codex app-server error'))
+        if (message.error) return finish(new Error(message.error.message ?? t('codex app-server Fehler')))
         if (message.id === 1) send({ method: 'initialized' })
         else results.push(message.result)
         sendNext()
@@ -89,7 +90,7 @@ export async function readCodexUsage(now = Date.now(), afterReset = false) {
   const [answer] = await askCodex([
     { method: 'account/rateLimitResetCredit/consume', params: { idempotencyKey: randomUUID() } },
   ])
-  console.log(`Codex reset redeemed: ${answer?.outcome}`)
+  console.log(`Codex-Reset eingelöst: ${answer?.outcome}`)
   if (answer?.outcome === 'reset') await readCodexUsage(Date.now(), true)
 }
 

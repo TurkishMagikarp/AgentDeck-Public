@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { all } from './db.ts'
 import { DATA_DIR } from './db.ts'
+import { t } from './i18n.ts'
 import { gitIn } from './sandbox.ts'
 import { Lru } from './lru.ts'
 
@@ -139,7 +140,7 @@ export async function gitGraph(project: Project) {
       return {
         branch,
         number,
-        title: issue?.title ?? '(issue deleted)',
+        title: issue?.title ?? t('(Issue gelöscht)'),
         status: issue?.status ?? 'done',
         maker: issue?.maker ?? '',
         commits: own,

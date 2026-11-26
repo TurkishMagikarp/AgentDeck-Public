@@ -9,6 +9,8 @@ import { ownerOf, SANDBOX, spawnIn, spawnShellIn, stopGroup } from './sandbox.ts
 import type { RunHandle, RunOpts, RunResult, Usage } from './adapters.ts'
 import { connectionKeys } from './mcp.ts'
 import { rewriteCommand, rtkInstalled, RTK_INSTRUCTIONS } from './rtk.ts'
+import { t } from './i18n.ts'
+import { prompts } from './prompts/index.ts'
 
 const MAX_STEPS = 80
 const MAX_TOOL_OUTPUT = 12_000
@@ -33,30 +35,33 @@ const tool = (name: string, description: string, properties: Record<string, stri
   },
 })
 
-const READ_TOOLS = [
-  tool('read_file', 'Read a text file.', { path: 'Path relative to the working directory' }),
-  tool('list_dir', 'List the entries of a directory.', { path: 'Directory, "." for the working directory' }),
-]
+// The descriptions are read by the model, so they come in the language of the run.
+function readTools() {
+  const text = prompts().tools
+  return [
+    tool('read_file', text.readFile, { path: text.workdirPath }),
+    tool('list_dir', text.listDir, { path: text.listDirPath }),
+  ]
+}
 
-const WRITE_TOOLS = [
-  tool('write_file', 'Create or overwrite a file.', {
-    path: 'Path relative to the working directory',
-    content: 'Full file content',
-  }),
-  tool('edit_file', 'Replace one exact, unique occurrence of a string in a file.', {
-    path: 'Path relative to the working directory',
-    old_text: 'Exact text to replace',
-    new_text: 'Replacement',
-  }),
-  tool('run_command', 'Run a shell command in the working directory (builds, tests, git).', {
-    command: 'The command line',
-  }),
-]
+function writeTools() {
+  const text = prompts().tools
+  return [
+    tool('write_file', text.writeFile, { path: text.workdirPath, content: text.writeFileContent }),
+    tool('edit_file', text.editFile, {
+      path: text.workdirPath,
+      old_text: text.editFileOld,
+      new_text: text.editFileNew,
+    }),
+    tool('run_command', text.runCommand, { command: text.runCommandLine }),
+  ]
+}
 
 const clip = (text: string) =>
-  text.length > MAX_TOOL_OUTPUT ? text.slice(0, MAX_TOOL_OUTPUT) + '\n… (output truncated)' : text
+  text.length > MAX_TOOL_OUTPUT ? text.slice(0, MAX_TOOL_OUTPUT) + prompts().tools.truncated : text
 
 export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, model: string): RunHandle {
+  const text = prompts()
   const abort = new AbortController()
   const usage: Usage = { input: 0, output: 0, cost: 0 }
 
@@ -64,12 +69,12 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
   function onFiles(tool: string, args: Record<string, string>): Promise<string> {
     // A read-only question of the owner outside any project (blueprints) may read as the server.
     const sandboxed = SANDBOX && (opts.autonomous || ownerOf(opts.cwd))
-    if (!sandboxed) return fileTool(opts.cwd, tool, args).catch((err: Error) => `Error: ${err.message}`)
+    if (!sandboxed) return fileTool(opts.cwd, tool, args).catch((err: Error) => text.tools.error(err.message))
     return new Promise((done) => {
       const child = spawnIn(opts.cwd, process.execPath, [AGENT_FILES, opts.cwd, tool], {}, true)
       let output = ''
       child.stdout!.on('data', (chunk) => (output += chunk))
-      child.on('error', (err) => done(`Error: ${err.message}`))
+      child.on('error', (err) => done(text.tools.error(err.message)))
       child.on('close', () => done(output))
       child.stdin!.end(JSON.stringify(args))
     })
@@ -78,7 +83,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
   async function runCommand(command: string) {
     const env = safeEnv({ ...connectionKeys(), ...opts.env })
     const rewritten = await rewriteCommand(opts.cwd, command, env)
-    if (abort.signal.aborted) return 'Command canceled'
+    if (abort.signal.aborted) return text.tools.cancelled
     return new Promise<string>((done) => {
       const child = spawnShellIn(opts.cwd, rewritten, {
         env,
@@ -93,7 +98,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
       const stop = () => stopGroup(child.pid)
       const timer = setTimeout(stop, COMMAND_TIMEOUT_MS)
       abort.signal.addEventListener('abort', stop, { once: true })
-      child.on('error', (err) => done(`Command failed to start: ${err.message}`))
+      child.on('error', (err) => done(text.tools.notStarted(err.message)))
       child.on('close', (code) => {
         clearTimeout(timer)
         abort.signal.removeEventListener('abort', stop)
@@ -112,7 +117,7 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
       case 'run_command':
         return runCommand(args.command)
       default:
-        return `Unknown tool ${name}`
+        return text.tools.unknown(name)
     }
   }
 
@@ -124,11 +129,12 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
       body: JSON.stringify({
         model,
         messages,
-        tools: opts.autonomous ? [...READ_TOOLS, ...WRITE_TOOLS] : READ_TOOLS,
+        tools: opts.autonomous ? [...readTools(), ...writeTools()] : readTools(),
       }),
     })
     const data: any = await res.json().catch(() => ({}))
-    if (!res.ok) throw new Error(data.error?.message ?? `API answered with HTTP ${res.status}`)
+    if (!res.ok)
+      throw new Error(data.error?.message ?? t('API antwortet mit HTTP {status}', { status: res.status }))
 
     usage.input += data.usage?.prompt_tokens ?? 0
     usage.cached = (usage.cached ?? 0) + (data.usage?.prompt_cache_hit_tokens ?? 0)
@@ -140,19 +146,19 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
     const messages: Message[] = [
       {
         role: 'system',
-        content:
-          `You are a coding agent working in ${opts.cwd} on ${process.platform}. ` +
-          'Use the tools to inspect files' +
-          (opts.autonomous ? ', change them and run commands. ' : '. You cannot change anything. ') +
-          (opts.env?.RTK_DB_PATH && rtkInstalled() ? `${RTK_INSTRUCTIONS} ` : '') +
-          'When the task is finished, reply with your final message and no tool call.',
+        content: text.apiSystem({
+          cwd: opts.cwd,
+          platform: process.platform,
+          autonomous: opts.autonomous,
+          rtk: opts.env?.RTK_DB_PATH && rtkInstalled() ? `${RTK_INSTRUCTIONS} ` : '',
+        }),
       },
       { role: 'user', content: opts.prompt },
     ]
 
     for (let step = 0; step < MAX_STEPS; step++) {
       const reply = await ask(messages)
-      if (!reply) throw new Error('The API returned no answer')
+      if (!reply) throw new Error(t('Die API hat keine Antwort geliefert'))
       messages.push(reply)
       if (reply.content) {
         opts.onActivity?.(reply.content)
@@ -169,14 +175,19 @@ export function startApiRun(opts: RunOpts, baseUrl: string, apiKey: string, mode
         try {
           result = await execute(call.function.name, JSON.parse(call.function.arguments || '{}'))
         } catch (err: any) {
-          result = `Error: ${err.message}`
+          result = text.tools.error(err.message)
           failed = true
         }
         opts.onEvent?.({ kind: failed ? 'error' : 'tool_result', name: call.function.name, text: result })
         messages.push({ role: 'tool', tool_call_id: call.id, content: clip(result) })
       }
     }
-    return { ok: false, text: '', usage, error: `Not finished after ${MAX_STEPS} steps` }
+    return {
+      ok: false,
+      text: '',
+      usage,
+      error: t('Nach {steps} Schritten nicht fertig geworden', { steps: MAX_STEPS }),
+    }
   }
 
   const done = loop().catch((err): RunResult => ({ ok: false, text: '', usage, error: err.message }))

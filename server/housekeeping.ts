@@ -7,8 +7,12 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DATA_DIR, all, get, run } from './db.ts'
 import { pruneRunEvents } from './runEvents.ts'
+import { pruneTrace } from './landingTrace.ts'
 import { execIn, gitIn } from './sandbox.ts'
 import { pruneAudit } from './audit.ts'
+import { getProject } from './core.ts'
+import { baseBranchOf, confirmsStageMerge, originStageRefs, removeRemoteLandedBranch } from './landing.ts'
+import { cleanupBase, issueBranch, mergedInto, removeLandedIssueBranch } from './branchCleanup.ts'
 
 
 const DAY = 86_400_000
@@ -35,13 +39,13 @@ function pruneRunLog() {
 }
 
 /** The replay timelines are kept as long as the run log. */
-const pruneReplays = () => pruneRunEvents(Date.now() - RUN_LOG_DAYS * DAY)
+const pruneReplays = () => pruneRunEvents(Date.now() - RUN_LOG_DAYS * DAY) + pruneTrace(Date.now() - RUN_LOG_DAYS * DAY)
 
 /**
  * Issue branches and per-issue worktrees of issues that are done (and landed, if the project
  * lands). A branch that is still checked out somewhere is left alone; git refuses anyway.
  */
-async function removeFinishedBranches() {
+export async function removeFinishedBranches() {
   const cutoff = Date.now() - BRANCH_GRACE_DAYS * DAY
   let removed = 0
   for (const project of all<{ id: number; key: string; repo_path: string }>(
@@ -49,25 +53,52 @@ async function removeFinishedBranches() {
   )) {
     const repo = project.repo_path || join(DATA_DIR, 'workspaces', project.key)
     if (!existsSync(join(repo, '.git'))) continue
+    const configured = getProject(project.id)
+    if (!configured) continue
+    const base = await baseBranchOf(configured).catch(() => '')
+    if (!base) continue
+    const stage = cleanupBase(base)
+    const remote = stage && (configured.settings.landing.push || configured.settings.landing.mode === 'pr')
 
     const refs = await git(
       repo,
       'for-each-ref',
-      '--format=%(refname:short)',
+      '--format=%(refname:short)%09%(objectname)',
       `refs/heads/agentdeck/${project.key}-*`,
     )
       .then(({ stdout }) => stdout.split('\n').filter(Boolean))
       .catch(() => [] as string[])
 
-    for (const branch of refs) {
+    const local = new Map(refs.map((entry) => entry.split('\t') as [string, string]))
+    const upstream = remote ? await originStageRefs(configured, base).catch(() => undefined) : undefined
+    const target = remote ? upstream?.target ?? '' : `refs/heads/${base}`
+    for (const branch of new Set([...local.keys(), ...(upstream?.issues.keys() ?? [])])) {
       const number = Number(branch.split('-').pop())
+      if (!Number.isSafeInteger(number) || number < 1 || branch !== issueBranch(project.key, number)) continue
       const finished = get(
-        "SELECT 1 FROM issues WHERE project_id=? AND number=? AND status='done' AND landing='' AND done_at < ?",
+        `SELECT i.id, i.title, i.pr_number, i.pr_sha FROM issues i WHERE i.project_id=? AND i.number=? AND i.status='done'
+         AND i.landing='' AND i.done_at < ?
+         AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.issue_id=i.id AND r.status='running')`,
         project.id,
         number,
-        cutoff,
+        stage ? Date.now() + 1 : cutoff,
       )
       if (!finished) continue
+      if (stage) {
+        const localTip = local.get(branch)
+        const upstreamTip = upstream?.issues.get(branch)
+        const issue = { ...finished, number }
+        let proof: Promise<boolean> | undefined
+        const verified = async (tip: string) =>
+          (await mergedInto(repo, tip, target)) ||
+          (configured.settings.landing.mode === 'pr' && tip === finished.pr_sha &&
+            await (proof ??= confirmsStageMerge(configured, issue).catch(() => false)))
+        if (upstreamTip && await verified(upstreamTip))
+          await removeRemoteLandedBranch(configured, issue, upstreamTip)
+        if (localTip && await verified(localTip) &&
+            await removeLandedIssueBranch(repo, project.key, number, localTip)) removed++
+        continue
+      }
       const worktree = join(DATA_DIR, 'worktrees', project.key, String(number))
       if (existsSync(worktree)) await succeeds(git(repo, 'worktree', 'remove', '--force', worktree))
       if (await succeeds(git(repo, 'branch', '-D', branch))) removed++

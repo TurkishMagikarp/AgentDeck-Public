@@ -3,6 +3,7 @@
 import { getSecret, setSecret } from './auth.ts'
 import { addComment } from './core.ts'
 import { get, run } from './db.ts'
+import { langOf, t, tIn } from './i18n.ts'
 import { sendPush } from './push.ts'
 import { notifyWebhooks } from './webhooks.ts'
 
@@ -27,14 +28,14 @@ export function saveMailSettings(input: { inbox?: string; to?: string; apiKey?: 
 export async function sendMail(subject: string, text: string) {
   const { inbox, to } = mailSettings()
   const key = getSecret(SECRET)
-  if (!inbox || !to || !key) throw new Error('Mail is not set up (inbox, recipient and key)')
+  if (!inbox || !to || !key) throw new Error(t('Mail ist nicht eingerichtet (Postfach, Empfänger und Key)'))
 
   const res = await fetch(`https://api.agentmail.to/v0/inboxes/${encodeURIComponent(inbox)}/messages/send`, {
     method: 'POST',
     headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
     body: JSON.stringify({ to: [to], subject, text }),
   })
-  if (!res.ok) throw new Error(`AgentMail answered with HTTP ${res.status}`)
+  if (!res.ok) throw new Error(t('AgentMail antwortet mit HTTP {status}', { status: res.status }))
 }
 
 const PUBLIC_URL = (process.env.AGENTDECK_PUBLIC_URL ?? '').replace(/\/$/, '')
@@ -57,8 +58,15 @@ export function notifyOwner(project: any, issue: any, reason: string) {
 
   const text = [reason, issue.description, PUBLIC_URL && `${PUBLIC_URL}/#${key}`].filter(Boolean).join('\n\n')
 
-  sendMail(`[${project.name}] ${key} waits for you: ${issue.title}`, text).catch((error) => {
+  const lang = langOf(project)
+  const subject = tIn(lang, '[{project}] {key} wartet auf dich: {title}', {
+    project: project.name,
+    key,
+    title: issue.title,
+  })
+  sendMail(subject, text).catch((error) => {
     // A failed mail must not go unnoticed, and it must not break the run that caused it.
-    addComment(issue.id, 'System', 'system', `Mail to the owner failed: ${error.message}`)
+    const note = tIn(lang, 'Mail an den Owner fehlgeschlagen: {message}', { message: error.message })
+    addComment(issue.id, 'System', 'system', note)
   })
 }

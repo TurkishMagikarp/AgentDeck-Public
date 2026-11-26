@@ -3,6 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import type { MiddlewareHandler } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
+import { t } from './i18n.ts'
 
 // Styles stay 'unsafe-inline': the UI sets style attributes (chart colours, widths) at runtime.
 export const BOARD_CSP = [
@@ -57,5 +58,5 @@ export const MAX_BODY_BYTES = 1024 * 1024
 
 export const limitBody = bodyLimit({
   maxSize: MAX_BODY_BYTES,
-  onError: (c) => c.json({ error: 'Request too large (max. 1 MB)' }, 413),
+  onError: (c) => c.json({ error: t('Anfrage zu groß (max. 1 MB)') }, 413),
 })

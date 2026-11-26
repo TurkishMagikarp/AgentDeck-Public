@@ -1,5 +1,6 @@
 // The scheduler: decides which agent starts on which issue, follows the run and moves the issue
 // on when it ends (done, to the next reviewer, back to the maker, or to a human).
+import { trace } from './landingTrace.ts'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { oneShot, startRun, type RunHandle, type RunResult } from './adapters.ts'
@@ -32,6 +33,7 @@ import {
   PROVIDERS,
   takeChangedProjects,
 } from './core.ts'
+import { connectionsFor } from './mcp.ts'
 import { checklistFor, parseReport } from './checklist.ts'
 import { issueChanges } from './diff.ts'
 import { all, DATA_DIR, get, run, tx } from './db.ts'
@@ -45,6 +47,7 @@ import {
   watchPullRequests,
   type Outcome,
 } from './landing.ts'
+import { forProject, langOf, t } from './i18n.ts'
 import { addLesson } from './lessons.ts'
 import { notifyOwner } from './notify.ts'
 import { runFailed } from './webhooks.ts'
@@ -65,6 +68,7 @@ import {
   hintFor,
   when,
   parkedRest,
+  parksSince,
   PROVIDER_FAILURES,
   restOf,
   restProvider,
@@ -199,12 +203,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
     const { items, template } = checklistFor(issue, agent.name, p.settings.checklists.templates)
     if (items.length) {
       taken.checklist = items
-      addComment(
-        issue.id,
-        'System',
-        'system',
-        `Acceptance checklist created (${items.length === 1 ? '1 item' : `${items.length} items`}${template ? `, template "${template}"` : ''}).`,
-      )
+      addComment(issue.id, 'System', 'system', checklistNote(items.length, template))
     }
   }
   patchIssue(issue.id, taken)
@@ -213,7 +212,10 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
       issue.id,
       'System',
       'system',
-      `Routing: ${PROVIDERS[pick.provider].label} chosen. Skipped: ${skipped.join(' · ')}.`,
+      t('Routing: {provider} gewählt. Übersprungen: {skipped}.', {
+        provider: PROVIDERS[pick.provider].label,
+        skipped: skipped.join(' · '),
+      }),
     )
   }
 
@@ -249,14 +251,17 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
   })
     .then(async (workdir) => {
       l.workdir = workdir
-      if (l.stop) return finish(l, agent, failed('gestoppt'))
+      if (l.stop) return finish(l, agent, failed(t('gestoppt')))
       // A reviewer that gets the diff does not spend its context searching for the change.
       const changes =
         kind === 'review' ? await issueChanges(p, issue.number).catch(() => undefined) : undefined
       try {
+        const current = getIssue(issue.id)
+        const mcp = p.settings.mcpOnDemand ? connectionsFor(agent.mcp_ids, current) : agent.mcp_ids
         const prompt = buildPrompt({
           project: p,
-          issue: getIssue(issue.id),
+          issue: current,
+          heldBack: agent.mcp_ids.filter((id: string) => !mcp.includes(id)),
           agent,
           team: agents,
           workdir,
@@ -268,6 +273,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
           AGENTDECK_URL: OWN_URL,
           AGENTDECK_RUN_TOKEN: token,
           AGENTDECK_CLI: AGENT_CLI,
+          AGENTDECK_LANG: langOf(p),
           ...noPush(p),
           ...ownGithubToken(p),
           ...rtkEnv(p.key, agent.id),
@@ -276,7 +282,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
           // The run's token and a project GitHub token have no shape the scanner knows.
           l.trace = recordRun(runId, knownSecrets(env))
           if (kind === 'work') l.startHead = await headOf(workdir.cwd)
-          if (l.stop) return finish(l, agent, failed('gestoppt'))
+          if (l.stop) return finish(l, agent, failed(t('gestoppt')))
           l.trace.add({ kind: 'prompt', name: `sha256:${promptHash(prompt)}`, text: prompt })
         }
         const trace = l.trace
@@ -287,7 +293,7 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
           cwd: workdir.cwd,
           prompt,
           autonomous: true,
-          mcp: agent.mcp_ids,
+          mcp,
           env,
           onEvent: trace ? (event) => trace.add(event) : undefined,
           onActivity: (output) => {
@@ -310,11 +316,22 @@ function start(p: any, issue: any, agent: any, agents: any[], pick: Pick, skippe
         issue.id,
         'System',
         'system',
-        `The working directory could not be prepared: ${e.message}`,
+        t('Arbeitsverzeichnis konnte nicht vorbereitet werden: {error}', { error: e.message }),
       )
       return finish(l, agent, failed(e.message))
     })
     .catch((e) => console.error('run', e))
+}
+
+function checklistNote(count: number, template?: string) {
+  if (template) {
+    return count === 1
+      ? t('Abnahme-Checkliste angelegt (1 Punkt, Vorlage „{template}“).', { template })
+      : t('Abnahme-Checkliste angelegt ({count} Punkte, Vorlage „{template}“).', { count, template })
+  }
+  return count === 1
+    ? t('Abnahme-Checkliste angelegt (1 Punkt).')
+    : t('Abnahme-Checkliste angelegt ({count} Punkte).', { count })
 }
 
 // ---------- ending a run ----------
@@ -349,10 +366,21 @@ function endRun(l: Live, status: string, res: RunResult, note = '', failure = ''
 
 /** The last step of a replay: how the run ended and what it used. */
 function endSummary(status: string, res: RunResult, note: string, verdict: string) {
-  const label: Record<string, string> = { done: 'finished', failed: 'failed', stopped: 'stopped' }
+  const ended =
+    status === 'done'
+      ? t('Lauf abgeschlossen')
+      : status === 'failed'
+        ? t('Lauf fehlgeschlagen')
+        : status === 'stopped'
+          ? t('Lauf gestoppt')
+          : t('Lauf {status}', { status })
   return [
-    `Run ${label[status] ?? status}${verdict ? ` (${verdict})` : ''}.`,
-    `Tokens: ${res.usage.input} in (${res.usage.cached ?? 0} of them from the cache), ${res.usage.output} out` +
+    `${ended}${verdict ? ` (${verdict})` : ''}.`,
+    t('Tokens: {input} rein (davon {cached} aus dem Cache), {output} raus', {
+      input: res.usage.input,
+      cached: res.usage.cached ?? 0,
+      output: res.usage.output,
+    }) +
       (res.usage.cost ? `, $${res.usage.cost.toFixed(2)}` : '') +
       '.',
     note || res.error || '',
@@ -374,18 +402,23 @@ function failedStreak(issueId: number) {
   return firstGood === -1 ? recent.length : firstGood
 }
 
-async function finish(l: Live, agent: any, res: RunResult) {
+/** A run ends long after the pass that started it, so its end sets the project's language again. */
+function finish(l: Live, agent: any, res: RunResult) {
+  return forProject(getProject(l.projectId), () => finishRun(l, agent, res))
+}
+
+async function finishRun(l: Live, agent: any, res: RunResult) {
   const p = getProject(l.projectId)
   const issue = getIssue(l.issueId)
   // What the run left in its checkout, read while it is still the run's.
   if (l.trace && l.startHead && l.workdir) {
-    const changes = await runChanges(l.workdir.cwd, l.startHead).catch((e) => `Changes could not be read: ${e.message}`)
+    const changes = await runChanges(l.workdir.cwd, l.startHead).catch((e) => t('Änderungen nicht lesbar: {error}', { error: e.message }))
     if (changes) l.trace.add({ kind: 'changes', text: changes })
   }
   // Checked in the maker's checkout before it is let go, while the branch is still checked out there.
   const gate = p && issue && l.kind === 'work' && !l.stop && res.ok ? await gateWork(l, p, issue, res) : null
   if (p && l.workdir) await releaseWorkdir(p, l.workdir)
-  if (!p || !issue) return void endRun(l, 'failed', res, 'Issue deleted')
+  if (!p || !issue) return void endRun(l, 'failed', res, t('Issue gelöscht'))
 
   if (l.stop || !res.ok) finishFailed(l, p, issue, agent, res)
   else if (l.kind === 'review') await finishReview(l, p, issue, agent, res)
@@ -402,8 +435,11 @@ async function finish(l: Live, agent: any, res: RunResult) {
 function parkIfOverCap(p: any, issue: any) {
   const reason = overCap(p.settings.issueCap, issue)
   if (!reason) return false
-  const note = `Cost cap reached: ${reason}. The issue is parked. With "Allow another round", or by moving it back to To Do, it may use the same amount once more.`
-  addComment(issue.id, 'Cost cap', 'watchdog', note)
+  const note = t(
+    'Kosten-Deckel erreicht: {reason}. Das Issue ist geparkt. Mit „Weitere Runde freigeben“ oder durch Zurückschieben auf To Do darf es noch einmal so viel verbrauchen.',
+    { reason },
+  )
+  addComment(issue.id, 'Kosten-Deckel', 'watchdog', note)
   patchIssue(issue.id, {
     status: 'backlog',
     capped: 1,
@@ -438,7 +474,10 @@ function handToDeputy(issue: any, deputy: any, reason: string) {
     issue.id,
     'System',
     'system',
-    `Handed to ${deputy.name} to decide: ${reason}\n\nRead why it is stuck and decide how it goes on.`,
+    t('An {name} zur Entscheidung: {reason}\n\nLies, warum es hängt, und entscheide, wie es weitergeht.', {
+      name: deputy.name,
+      reason,
+    }),
   )
   patchIssue(issue.id, {
     status: 'todo',
@@ -477,14 +516,14 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
 
   if (issue.status === 'review') {
     if (deputy && deputy.id !== issue.maker_id) {
-      addComment(issue.id, 'System', 'system', `Sent to ${deputy.name} for review.`)
+      addComment(issue.id, 'System', 'system', t('Zur Prüfung an {name}.', { name: deputy.name }))
       return patchIssue(issue.id, { reviewers: [deputy.id], review_index: 0, assignee_id: deputy.id })
     }
     addComment(
       issue.id,
       'System',
       'system',
-      'No other reviewer available, the work counts as approved.',
+      t('Kein weiterer Prüfer vorhanden, die Arbeit gilt als abgenommen.'),
     )
     patchIssue(issue.id, { status: 'done' })
     return landByHand(issue.id)
@@ -497,7 +536,12 @@ function settleWithoutHuman(p: any, issue: any, reason: string) {
   // Without the rest an issue that fails at once (a checkout git refuses) is parked and started
   // again every second, see parkedRest.
   const parkedUntil = Date.now() + parkedRest(issue.id)
-  const note = `Parked: ${reason}\n\nThe issue waits in the backlog and holds nothing up. It comes up again at ${when(parkedUntil)} at the earliest, once the open work is done. Moved back to To Do, it starts at once.`
+  // The note starts with "Geparkt:" in either language; parksSince and the reports find it by that.
+  const rest = t(
+    'Das Issue liegt im Backlog und hält nichts auf. Es kommt frühestens {when} wieder dran, sobald die offene Arbeit erledigt ist. Zurück auf To Do geschoben, startet es sofort.',
+    { when: when(parkedUntil) },
+  )
+  const note = `${t('Geparkt:')} ${reason}\n\n${rest}`
   addComment(issue.id, 'Watchdog', 'watchdog', note)
   patchIssue(issue.id, {
     status: 'backlog',
@@ -530,21 +574,25 @@ function sweepWaitingIssues(everyProject: boolean) {
   for (const id of ids) {
     const p = getProject(id)
     if (!p || p.paused || !p.settings.autonomous) continue
-    const waiting = all(
-      `SELECT id FROM issues WHERE project_id=?
-       AND ((status='blocked' AND landing!='approval') OR (status='review' AND review_index<0 AND landing=''))`,
-      p.id,
-    )
-    for (const { id } of waiting) {
-      const issue = getIssue(id)
-      const reason =
-        issue.status === 'review'
-          ? 'Waited for a review by a human.'
-          : 'Was on "Waits for a human".'
-      settleWithoutHuman(p, issue, reason)
-    }
-    if (waiting.length + pullBlockersFromBacklog(p) + resolveRings(p)) kick()
+    forProject(p, () => sweepProject(p))
   }
+}
+
+function sweepProject(p: any) {
+  const waiting = all(
+    `SELECT id FROM issues WHERE project_id=?
+     AND ((status='blocked' AND landing!='approval') OR (status='review' AND review_index<0 AND landing=''))`,
+    p.id,
+  )
+  for (const { id } of waiting) {
+    const issue = getIssue(id)
+    const reason =
+      issue.status === 'review'
+        ? t('Wartete auf eine Prüfung durch einen Menschen.')
+        : t('Stand auf „Wartet auf Mensch“.')
+    settleWithoutHuman(p, issue, reason)
+  }
+  if (waiting.length + pullBlockersFromBacklog(p) + resolveRings(p)) kick()
 }
 
 /**
@@ -590,14 +638,14 @@ function ringText(key: string, ring: number[]) {
 function handRingToDeputy(p: any, ring: number[], deputy: any, marker: string) {
   const created = tx(() =>
     createIssue(p.id, {
-      title: `Resolve ring dependency: ${ringText(p.key, ring)}`,
+      title: t('Ring-Abhängigkeit auflösen: {ring}', { ring: ringText(p.key, ring) }),
       description:
-        `These issues wait on each other in a circle and so never start (A → B means: A waits for B):\n` +
-        `${ringText(p.key, ring)}\n\n` +
-        'Read the issues and remove the dependency that makes the least sense with ' +
-        '`node "$AGENTDECK_CLI" unblock <number> <blocker>`. Then close this issue with `done`. ' +
-        'If the circle remains, AgentDeck resolves it on its own afterwards.\n\n' +
-        marker,
+        t('Diese Issues warten im Kreis aufeinander und starten deshalb nie (A → B heißt: A wartet auf B):') +
+        `\n${ringText(p.key, ring)}\n\n` +
+        t(
+          'Lies die Issues und entferne die Abhängigkeit, die am wenigsten Sinn ergibt, mit `node "$AGENTDECK_CLI" unblock <number> <blocker>`. Schließe dieses Issue dann mit `done`. Bleibt der Kreis bestehen, löst AgentDeck ihn danach selbst auf.',
+        ) +
+        `\n\n${marker}`,
       status: 'todo',
       priority: 3,
       assignee_id: deputy.id,
@@ -611,7 +659,11 @@ function handRingToDeputy(p: any, ring: number[], deputy: any, marker: string) {
         issue.id,
         'Watchdog',
         'watchdog',
-        `Stuck in a ring dependency (${ringText(p.key, ring)}). ${deputy.name} decides in ${p.key}-${created.number}.`,
+        t('Steckt in einer Ring-Abhängigkeit ({ring}). {name} entscheidet in {issue}.', {
+          ring: ringText(p.key, ring),
+          name: deputy.name,
+          issue: `${p.key}-${created.number}`,
+        }),
       )
     }
   }
@@ -626,12 +678,16 @@ function breakRing(p: any, ring: number[]) {
   const blocker = get('SELECT id FROM issues WHERE project_id=? AND number=?', p.id, edge.blocker)
   if (!waiter) return
   patchIssue(waiter.id, { blocked_by: waiter.blocked_by.filter((number: number) => number !== edge.blocker) })
-  const note = `Ring dependency resolved (${ringText(p.key, ring)}): ${p.key}-${edge.waiter} no longer waits for ${p.key}-${edge.blocker}.`
+  const note = t('Ring-Abhängigkeit aufgelöst ({ring}): {waiter} wartet nicht mehr auf {blocker}.', {
+    ring: ringText(p.key, ring),
+    waiter: `${p.key}-${edge.waiter}`,
+    blocker: `${p.key}-${edge.blocker}`,
+  })
   addComment(
     waiter.id,
     'Watchdog',
     'watchdog',
-    `${note} Check whether something is missing now, and create a new issue for it if needed.`,
+    `${note} ${t('Prüf, ob dadurch etwas fehlt, und lege dafür bei Bedarf ein neues Issue an.')}`,
   )
   if (blocker) addComment(blocker.id, 'Watchdog', 'watchdog', note)
 }
@@ -680,30 +736,42 @@ function pullBlockersFromBacklog(p: any) {
           issue.id,
           'Watchdog',
           'watchdog',
-          `${p.key}-${blocker.number} could not be finished and no longer holds up this issue. Check whether something is missing without it, and create a new issue for it if needed.`,
+          t(
+            '{blocker} ließ sich nicht erledigen und hält dieses Issue nicht mehr auf. Prüf, ob ohne es etwas fehlt, und lege dafür bei Bedarf ein neues Issue an.',
+            { blocker: `${p.key}-${blocker.number}` },
+          ),
         )
       }
       addComment(
         blocker.id,
         'Watchdog',
         'watchdog',
-        `No longer holds up: ${keys}. They no longer wait for this issue.`,
+        t('Hält nicht mehr auf: {issues}. Die warten nicht länger auf dieses Issue.', { issues: keys }),
       )
       continue
     }
 
-    const parked = !!get(
-      "SELECT 1 FROM comments WHERE issue_id=? AND kind='watchdog' AND body LIKE 'Parked:%' LIMIT 1",
-      blocker.id,
-    )
+    const parked = parksSince(blocker.id) > 0
     const decider = parked && deputy ? deputy : null
+    const back = {
+      count: dependents.length,
+      issues: keys,
+      attempt: blocker.blocker_returns + 1,
+      max: MAX_BLOCKER_RETURNS,
+    }
     addComment(
       blocker.id,
       'Watchdog',
       'watchdog',
-      `Was in the backlog, but ${dependents.length} issues wait for it (${keys}). Back into the queue` +
-        (decider ? `, ${decider.name} decides.` : '.') +
-        ` Attempt ${blocker.blocker_returns + 1} of ${MAX_BLOCKER_RETURNS}.`,
+      decider
+        ? t(
+            'Lag im Backlog, aber {count} Issues warten darauf ({issues}). Zurück in die Warteschlange, {name} entscheidet. Versuch {attempt} von {max}.',
+            { ...back, name: decider.name },
+          )
+        : t(
+            'Lag im Backlog, aber {count} Issues warten darauf ({issues}). Zurück in die Warteschlange. Versuch {attempt} von {max}.',
+            back,
+          ),
     )
     patchIssue(blocker.id, {
       status: 'todo',
@@ -719,8 +787,12 @@ function pullBlockersFromBacklog(p: any) {
 
 // ---------- landing ----------
 
-/** Writes the result of a landing attempt onto the issue. */
+/** Writes the result of a landing attempt onto the issue, in the project's language. */
 function applyLanding(p: any, issueId: number, outcome: Outcome) {
+  forProject(p, () => writeLanding(p, issueId, outcome))
+}
+
+function writeLanding(p: any, issueId: number, outcome: Outcome) {
   const issue = getIssue(issueId)
   if (!issue) return
   if (outcome.note) addComment(issueId, 'System', 'system', outcome.note)
@@ -747,7 +819,7 @@ function applyLanding(p: any, issueId: number, outcome: Outcome) {
         issueId,
         'Watchdog',
         'watchdog',
-        'Landing failed several times. Please decide how to go on.',
+        t('Die Landung ist mehrfach gescheitert. Bitte entscheiden, wie es weitergeht.'),
       )
     }
   }
@@ -769,12 +841,17 @@ function applyLanding(p: any, issueId: number, outcome: Outcome) {
 export async function approveLanding(issueId: number, sha: string, actor: string) {
   const issue = getIssue(issueId)
   const p = issue && getProject(issue.project_id)
-  if (!p) throw new Error('not found')
-  if (issue.landing !== 'approval' || !issue.gate_sha) throw new Error('The issue does not wait for an approval.')
+  if (!p) throw new Error(t('nicht gefunden'))
+  if (issue.landing !== 'approval' || !issue.gate_sha) throw new Error(t('Das Issue wartet auf keine Freigabe.'))
   if (sha !== issue.gate_sha || (await branchTip(p, issue)) !== sha) {
-    throw new Error('The branch has moved since it was held. Please reload and check the new state.')
+    throw new Error(t('Der Branch hat sich seit dem Anhalten bewegt. Bitte neu laden und den neuen Stand prüfen.'))
   }
-  addComment(issue.id, actor, 'system', `Landing of state ${sha.slice(0, 10)} approved.`)
+  // The errors above answer the owner; what stays on the issue is in the project's language.
+  forProject(p, () => {
+    const shown = { actor, sha: sha.slice(0, 10) }
+    addComment(issue.id, actor, 'system', t('Landung von Stand {sha} freigegeben.', { sha: shown.sha }))
+    trace(issue.id, 'approval', t('{actor} hat Stand {sha} freigegeben (gilt einmal, nur für diesen Commit).', shown), 'warn')
+  })
   patchIssue(issue.id, { approved_sha: sha, gate_sha: '', landing: '', status: 'done' }, actor)
   landByHand(issue.id)
 }
@@ -790,12 +867,14 @@ export function landByHand(issueId: number) {
   const issue = getIssue(issueId)
   const p = issue && getProject(issue.project_id)
   if (!p || p.settings.landing.mode === 'off') return
-  landIssue(p, issue)
-    .then((outcome) => {
-      if (outcome.status !== 'done' || outcome.note) applyLanding(p, issueId, outcome)
-      kick()
-    })
-    .catch((e) => console.error('landing', e))
+  forProject(p, () =>
+    landIssue(p, issue)
+      .then((outcome) => {
+        if (outcome.status !== 'done' || outcome.note) applyLanding(p, issueId, outcome)
+        kick()
+      })
+      .catch((e) => console.error('landing', e)),
+  )
 }
 
 /**
@@ -824,14 +903,19 @@ function heal(l: Live, p: any, issue: any, failure: Failure) {
       lastTwo.length === 2 && lastTwo.every((r) => r.provider === l.provider && r.note === lastTwo[0].note)
     if (!sameTwice) return ''
     avoidProvider.set(issue.id, l.provider)
-    return `The same error twice on ${label}. The next run takes another provider, if one is set up.`
+    return t(
+      'Zweimal derselbe Fehler auf {provider}. Der nächste Lauf nimmt einen anderen Anbieter, falls einer eingerichtet ist.',
+      { provider: label },
+    )
   }
 
   if (failure.kind === 'toolchain') {
     addLesson(
       p.id,
-      `\`${failure.missing}\` was not installed in a run. Check before use and install it if needed.`,
-      'Self-healing',
+      t('`{missing}` war in einem Lauf nicht installiert. Vor Gebrauch prüfen und bei Bedarf installieren.', {
+        missing: failure.missing ?? '',
+      }),
+      'Selbstheilung',
     )
   }
   return hintFor(failure, label)
@@ -846,16 +930,19 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
     // Kind "watchdog", so the next agent finds it among the latest comments of its prompt.
     addComment(
       issue.id,
-      'Self-healing',
+      'Selbstheilung',
       'watchdog',
-      `Run of ${agent.name} failed: ${failure!.cause}\n\n${hint}`,
+      `${t('Lauf von {name} fehlgeschlagen: {cause}', { name: agent.name, cause: failure!.cause })}\n\n${hint}`,
     )
   } else if (failure) {
     addComment(
       issue.id,
       'System',
       'system',
-      `Run of ${agent.name} failed: ${res.error ?? 'unknown error'}`,
+      t('Lauf von {name} fehlgeschlagen: {cause}', {
+        name: agent.name,
+        cause: res.error ?? t('unbekannter Fehler'),
+      }),
     )
   }
 
@@ -873,7 +960,7 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
         issue.id,
         'Watchdog',
         'watchdog',
-        `${streak} runs in a row without a result. Issue blocked, please take a look.`,
+        t('{streak} Läufe in Folge ohne Ergebnis. Issue blockiert, bitte prüfen.', { streak }),
       )
     } else {
       const delay = (failure && retryDelay(failure)) ?? 15_000 * 2 ** streak
@@ -881,7 +968,7 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
     }
   }
   moveIssue(issue.id, { status: to })
-  if (to === 'blocked') needsHuman(p, issue.id, 'Several runs ended without a result.')
+  if (to === 'blocked') needsHuman(p, issue.id, t('Mehrere Läufe sind ohne Ergebnis geblieben.'))
 }
 
 /** Position of the next reviewer who can actually review: enabled, and not the maker. */
@@ -914,21 +1001,23 @@ async function gateWork(l: Live, p: any, issue: any, res: RunResult): Promise<Ga
   if (items.length && !report) {
     return {
       result: 'failed',
-      note: 'Your handoff has no <checklist> block. Report every item of the acceptance checklist as "ok" with proof or as "open", and hand in again.',
+      note: t(
+        'Deine Abgabe enthält keinen <checklist>-Block. Melde zu jedem Punkt der Abnahme-Checkliste "ok" mit Nachweis oder "open" und gib erneut ab.',
+      ),
       report: '',
     }
   }
   if (report?.open.length) {
     return {
       result: 'partial',
-      note: `Partial handoff, open: item ${report.open.join(', ')}.`,
+      note: t('Teilabgabe, offen: Punkt {items}.', { items: report.open.join(', ') }),
       report: block ?? '',
     }
   }
   if (!p.settings.precheck.enabled || !l.workdir) return { result: 'passed', note: '', report: block ?? '' }
 
   l.checking = true
-  const text = 'Precheck running: proof, merge, project check…'
+  const text = t('Vorcheck läuft: Nachweise, Merge, Projektprüfung…')
   l.lastActivity = Date.now()
   emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text, at: l.lastActivity })
   const outcome = await precheck({
@@ -943,7 +1032,7 @@ async function gateWork(l: Live, p: any, issue: any, res: RunResult): Promise<Ga
     report,
   }).catch((error) => ({
     ok: true,
-    note: `Precheck not possible, the reviewers see the work anyway: ${error.message}`,
+    note: t('Vorcheck nicht möglich, die Prüfer sehen die Arbeit trotzdem: {error}', { error: error.message }),
   }))
   return { result: outcome.ok ? 'passed' : 'failed', note: outcome.note, report: block ?? '' }
 }
@@ -977,14 +1066,18 @@ function namedOpenIssues(p: any, issue: any, text: string) {
 
 /** The server check failed: back to the maker with what failed, without spending a review. */
 function sendBackFromPrecheck(p: any, issue: any, agent: any, gate: Gate, patch: Record<string, any>) {
-  addComment(issue.id, 'Precheck', 'watchdog', gate.note)
+  addComment(issue.id, 'Vorcheck', 'watchdog', gate.note)
   const fails = issue.precheck_fails + 1
   if (fails >= MAX_PRECHECK_FAILS) {
     patchIssue(issue.id, { ...patch, status: 'blocked', precheck_fails: 0 })
     return needsHuman(
       p,
       issue.id,
-      `${agent.name} failed the precheck ${fails} times in a row. Last: ${gate.note}`,
+      t('{name} scheitert {fails}-mal in Folge am Vorcheck. Zuletzt: {note}', {
+        name: agent.name,
+        fails,
+        note: gate.note,
+      }),
     )
   }
   patchIssue(issue.id, { ...patch, status: 'todo', precheck_fails: fails, assignee_id: agent.id })
@@ -1009,7 +1102,11 @@ function handInPartial(
     return needsHuman(
       p,
       issue.id,
-      `${agent.name} handed in ${streak} partial results in a row without finishing the checklist. ${gate.note}`,
+      t('{name} hat {streak} Teilabgaben in Folge geliefert, ohne die Checkliste abzuschließen. {note}', {
+        name: agent.name,
+        streak,
+        note: gate.note,
+      }),
     )
   }
 
@@ -1024,7 +1121,7 @@ function handInPartial(
       issue.id,
       'System',
       'system',
-      `${gate.note} Now waits for ${issueList(p.key, step.on)} and carries on by itself once that is done.`,
+      `${gate.note} ${waitsNote(p.key, step.on)}`,
     )
     return patchIssue(issue.id, {
       ...patch,
@@ -1037,21 +1134,34 @@ function handInPartial(
     return needsHuman(
       p,
       issue.id,
-      `${agent.name} handed in a partial result again without meeting another item, and names no open issue it waits for. ${gate.note}`,
+      t(
+        '{name} hat erneut teilweise abgegeben, ohne einen weiteren Punkt zu erfüllen, und nennt kein offenes Issue, auf das es wartet. {note}',
+        { name: agent.name, note: gate.note },
+      ),
     )
   }
   if (step.kind === 'goOn') {
-    addComment(issue.id, 'System', 'system', `${gate.note} Carry on with the open items, without an interim review.`)
+    addComment(
+      issue.id,
+      'System',
+      'system',
+      `${gate.note} ${t('Weiter mit den offenen Punkten, ohne Zwischenprüfung.')}`,
+    )
     return patchIssue(issue.id, { ...patch, status: 'todo' })
   }
 
   const first = nextReviewer(issue, 0, agent.id, agents)
   if (first < 0) {
-    addComment(issue.id, 'System', 'system', `${gate.note} Carry on with the open items.`)
+    addComment(issue.id, 'System', 'system', `${gate.note} ${t('Weiter mit den offenen Punkten.')}`)
     return patchIssue(issue.id, { ...patch, status: 'todo' })
   }
   const reviewer = agents.find((a) => a.id === issue.reviewers[first])
-  addComment(issue.id, 'System', 'system', `${gate.note} Interim review by ${reviewer.name}.`)
+  addComment(
+    issue.id,
+    'System',
+    'system',
+    `${gate.note} ${t('Zwischenprüfung durch {name}.', { name: reviewer.name })}`,
+  )
   patchIssue(issue.id, {
     ...patch,
     status: 'review',
@@ -1069,7 +1179,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
   const patch: Record<string, any> = { handoff: tag(res.text, 'handoff') ?? '' }
   let status = ['done', 'review', 'blocked'].includes(answer) ? answer : 'review'
 
-  addComment(issue.id, agent.name, 'agent', summary || '(no summary)')
+  addComment(issue.id, agent.name, 'agent', summary || t('(keine Zusammenfassung)'))
 
   if (answer.startsWith('handoff:')) {
     const name = answer.slice('handoff:'.length).trim()
@@ -1077,7 +1187,12 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     if (target) {
       status = 'todo'
       patch.assignee_id = target.id
-      addComment(issue.id, 'System', 'system', `Handed over from ${agent.name} to ${target.name}.`)
+      addComment(
+        issue.id,
+        'System',
+        'system',
+        t('Übergabe von {from} an {to}.', { from: agent.name, to: target.name }),
+      )
     }
   }
 
@@ -1087,12 +1202,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
     if (waitsFor.length) {
       status = 'todo'
       patch.blocked_by = [...new Set([...issue.blocked_by, ...waitsFor])]
-      addComment(
-        issue.id,
-        'System',
-        'system',
-        `Now waits for ${issueList(p.key, waitsFor)} and carries on by itself once that is done.`,
-      )
+      addComment(issue.id, 'System', 'system', waitsNote(p.key, waitsFor))
     }
   }
 
@@ -1105,7 +1215,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
       ? handInPartial(p, issue, agent, agents, gate, patch, `${summary}\n${patch.handoff}`)
       : sendBackFromPrecheck(p, issue, agent, gate, patch)
   }
-  if (gate?.note) addComment(issue.id, 'Precheck', 'system', gate.note)
+  if (gate?.note) addComment(issue.id, 'Vorcheck', 'system', gate.note)
   if (gate) patch.precheck_fails = 0
 
   const isFinished = status === 'done' || status === 'review'
@@ -1130,7 +1240,7 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
       status = 'review'
       patch.review_index = first
       patch.assignee_id = reviewer.id
-      addComment(issue.id, 'System', 'system', `Sent to ${reviewer.name} for review.`)
+      addComment(issue.id, 'System', 'system', t('Zur Prüfung an {name}.', { name: reviewer.name }))
     }
   }
 
@@ -1148,15 +1258,19 @@ async function finishWork(l: Live, p: any, issue: any, agent: any, res: RunResul
   }
 
   patchIssue(issue.id, { ...patch, status })
-  if (status === 'blocked') needsHuman(p, issue.id, `${agent.name} is stuck: ${summary}`)
+  if (status === 'blocked') needsHuman(p, issue.id, t('{name} kommt nicht weiter: {summary}', { name: agent.name, summary }))
   if (status === 'review' && patch.review_index === undefined) {
-    needsHuman(p, issue.id, `${agent.name} is done and asks for your review: ${summary}`)
+    needsHuman(
+      p,
+      issue.id,
+      t('{name} ist fertig und bittet um deine Prüfung: {summary}', { name: agent.name, summary }),
+    )
   }
 }
 
 /** Screenshots of the branch for owner and reviewer, see preview.ts. A failure only leaves a note. */
 async function takeScreenshots(l: Live, p: any, issue: any) {
-  const text = 'Capturing the preview…'
+  const text = t('Vorschau wird aufgenommen…')
   emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text, at: Date.now() })
   l.lastActivity = Date.now()
   try {
@@ -1166,10 +1280,10 @@ async function takeScreenshots(l: Live, p: any, issue: any) {
       cwd: l.workdir!.cwd,
       settings: p.settings.preview,
     })
-    addComment(issue.id, 'System', 'system', `Preview captured (${files.length} screenshots).`)
+    addComment(issue.id, 'System', 'system', t('Vorschau aufgenommen ({count} Screenshots).', { count: files.length }))
     emit(p.id, { t: 'shots', issueId: issue.id })
   } catch (error: any) {
-    addComment(issue.id, 'System', 'system', `Preview not possible: ${error.message}`)
+    addComment(issue.id, 'System', 'system', t('Vorschau nicht möglich: {error}', { error: error.message }))
   }
 }
 
@@ -1178,7 +1292,7 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
   const { enabled, llm } = p.settings.watchdog
   if (!enabled || !llm.enabled || !PROVIDERS[llm.provider]) return false
 
-  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text: 'Watchdog is checking the result…' })
+  emit(p.id, { t: 'activity', runId: l.runId, issueId: issue.id, text: t('Watchdog prüft das Ergebnis…') })
   const started = Date.now()
   const verdict = await oneShot(
     llm.provider,
@@ -1200,7 +1314,7 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
   )
 
   if (!verdict.ok) {
-    addComment(issue.id, 'Watchdog', 'system', `Could not check: ${verdict.error}`)
+    addComment(issue.id, 'Watchdog', 'system', t('Prüfung nicht möglich: {error}', { error: verdict.error ?? '' }))
     return false
   }
   if (!/^\s*FAIL/i.test(verdict.text)) return false
@@ -1210,13 +1324,13 @@ async function watchdogRejects(l: Live, p: any, issue: any, summary: string) {
 
 /**
  * The reviewer's verdict from its status block. A reviewer that forgot the block but started its
- * summary the way the ADHD format asks ("Approved:", "Changes:") has still said what it means.
+ * summary the way the ADHD format asks ("Passt:", "Ändern:", in English "Approved:", "Changes:") has still said what it means.
  */
 function reviewVerdict(text: string, summary: string) {
   const stated = (tag(text, 'status') ?? '').toLowerCase().trim()
   if (stated) return stated
-  if (/^\s*approved?\s*:/i.test(summary)) return 'approve'
-  if (/^\s*changes\s*:/i.test(summary)) return 'changes'
+  if (/^\s*(passt|fine|approved?)\s*:/i.test(summary)) return 'approve'
+  if (/^\s*(ändern|changes?)\s*:/i.test(summary)) return 'changes'
   return ''
 }
 
@@ -1227,7 +1341,7 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
   const verdict = reviewVerdict(res.text, summary)
   const backToMaker = { review_index: -1, assignee_id: maker?.id ?? null }
 
-  addComment(issue.id, reviewer.name, 'review', summary || '(no reason given)')
+  addComment(issue.id, reviewer.name, 'review', summary || t('(keine Begründung)'))
   endRun(l, 'done', res, '', '', ['approve', 'changes'].includes(verdict) ? verdict : 'blocked')
 
   if (issue.review_interim && verdict === 'approve') {
@@ -1235,7 +1349,7 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
       issue.id,
       'System',
       'system',
-      `${reviewer.name} approved the interim state. Carry on with the open items.`,
+      t('{name} hat den Zwischenstand freigegeben. Weiter mit den offenen Punkten.', { name: reviewer.name }),
     )
     return moveIssue(issue.id, { status: 'todo', review_interim: 0, ...backToMaker })
   }
@@ -1248,11 +1362,11 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
         issue.id,
         'System',
         'system',
-        `${reviewer.name} approved. On to ${following.name}.`,
+        t('{name} hat freigegeben. Weiter an {next}.', { name: reviewer.name, next: following.name }),
       )
       return moveIssue(issue.id, { status: 'review', review_index: next, assignee_id: following.id })
     }
-    addComment(issue.id, 'System', 'system', `${reviewer.name} approved.`)
+    addComment(issue.id, 'System', 'system', t('{name} hat freigegeben.', { name: reviewer.name }))
     return landAndClose(p, issue)
   }
 
@@ -1263,10 +1377,14 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
         issue.id,
         'Watchdog',
         'watchdog',
-        `${rounds} rounds of changes without approval. Please decide how to go on.`,
+        t('{rounds} Änderungsrunden ohne Freigabe. Bitte entscheiden, wie es weitergeht.', { rounds }),
       )
       moveIssue(issue.id, { status: 'blocked', review_rounds: 0, review_interim: 0, ...backToMaker })
-      return needsHuman(p, issue.id, `${rounds} rounds of changes without approval. Last objection: ${summary}`)
+      return needsHuman(
+        p,
+        issue.id,
+        t('{rounds} Änderungsrunden ohne Freigabe. Letzter Einwand: {summary}', { rounds, summary }),
+      )
     }
     return moveIssue(issue.id, {
       status: 'todo',
@@ -1279,7 +1397,7 @@ async function finishReview(l: Live, p: any, issue: any, reviewer: any, res: Run
 
   // "blocked", or no verdict at all: a human decides, and the issue stays with this reviewer.
   moveIssue(issue.id, { status: 'blocked' })
-  needsHuman(p, issue.id, `${reviewer.name} needs your decision: ${summary}`)
+  needsHuman(p, issue.id, t('{name} braucht deine Entscheidung: {summary}', { name: reviewer.name, summary }))
 }
 
 export function stopRun(runId: number, reason: string, to: string, author = 'Watchdog') {
@@ -1321,7 +1439,12 @@ function settleArenas(p: any) {
       if (!winner) dissolveArena(parentId)
       else if (winner.status === 'done') {
         patchIssue(parentId, { status: 'done' })
-        addComment(parentId, 'Arena', 'system', `Done by the winning entry #${winner.number}.`)
+        addComment(
+          parentId,
+          'Arena',
+          'system',
+          t('Erledigt durch den Gewinner-Beitrag #{number}.', { number: winner.number }),
+        )
       }
       continue
     }
@@ -1354,7 +1477,7 @@ async function judgeArena(p: any, arena: ArenaView) {
   const handedIn = arena.entries.filter((entry) => entry.state === 'handed-in')
   if (!parent || !handedIn.length) return
   if (handedIn.length === 1)
-    return pickArenaWinner(parent.id, handedIn[0].id, 'The only entry handed in.', 'The arena')
+    return pickArenaWinner(parent.id, handedIn[0].id, t('Als einziger Beitrag abgegeben.'), t('Die Arena'))
 
   const entries = await Promise.all(
     labelled(handedIn).map(async ({ label, entry }) => ({
@@ -1375,7 +1498,7 @@ async function judgeArena(p: any, arena: ArenaView) {
   const started = Date.now()
   const verdict = PROVIDERS[provider]
     ? await oneShot(provider, juryPrompt(parent, entries), existsSync(repo) ? repo : '.')
-    : failed('no provider for the jury')
+    : failed(t('kein Anbieter für die Jury'))
   run(
     `INSERT INTO runs (project_id, issue_id, agent_id, agent_name, provider, kind, status, started_at, ended_at,
        input_tokens, output_tokens, cost_usd, verdict)
@@ -1399,7 +1522,7 @@ async function judgeArena(p: any, arena: ArenaView) {
     : undefined
   if (choice) {
     const winner = entries.find((entry) => entry.label === choice.label)!
-    return pickArenaWinner(parent.id, winner.entryId, choice.reason, 'The jury')
+    return pickArenaWinner(parent.id, winner.entryId, choice.reason, t('Die Jury'))
   }
 
   const fails = (juryFails.get(parent.id)?.count ?? 0) + 1
@@ -1410,7 +1533,9 @@ async function judgeArena(p: any, arena: ArenaView) {
         parent.id,
         'Arena',
         'system',
-        `The jury reached no decision (${verdict.error || 'answer not readable'}). Next attempt in five minutes.`,
+        t('Die Jury kam zu keiner Entscheidung ({error}). Neuer Versuch in fünf Minuten.', {
+          error: verdict.error || t('Antwort nicht lesbar'),
+        }),
       )
     return
   }
@@ -1419,12 +1544,12 @@ async function judgeArena(p: any, arena: ArenaView) {
     return pickArenaWinner(
       parent.id,
       handedIn[0].id,
-      'The jury was not reachable; the first entry handed in was taken.',
-      'The arena',
+      t('Die Jury war nicht erreichbar; der erste abgegebene Beitrag wurde genommen.'),
+      t('Die Arena'),
     )
   }
   juryFails.set(parent.id, { count: fails, retryAt: Infinity })
-  const note = 'The jury could not decide the arena. Please pick an entry in the issue.'
+  const note = t('Die Jury konnte die Arena nicht entscheiden. Bitte im Issue einen Beitrag wählen.')
   addComment(parent.id, 'Arena', 'system', note)
   notifyOwner(p, parent, note)
 }
@@ -1435,12 +1560,17 @@ async function judgeArena(p: any, arena: ArenaView) {
  */
 export function pickArenaWinner(parentId: number, entryId: number, reason: string, by: string) {
   const arena = arenaOf({ id: parentId })
-  if (!arena) throw new Error('There is no arena for this issue.')
+  if (!arena) throw new Error(t('Für dieses Issue gibt es keine Arena.'))
+  // The owner may decide in another language than the one the project's issues are written in.
+  forProject(getProject(getIssue(parentId)?.project_id), () => decideArena(arena, parentId, entryId, reason, by))
+}
+
+function decideArena(arena: ArenaView, parentId: number, entryId: number, reason: string, by: string) {
   const { winner } = closeArena(parentId, entryId, reason, by)
   juryFails.delete(parentId)
   for (const entry of arena.entries)
     if (entry.id !== entryId)
-      stopIssueRun(entry.id, 'The arena is decided, the run was stopped.', 'done', 'Arena')
+      stopIssueRun(entry.id, t('Die Arena ist entschieden, der Lauf wurde gestoppt.'), 'done', 'Arena')
 
   const p = getProject(winner.project_id)
   const agents = all('SELECT * FROM agents WHERE project_id=?', p.id).map(mapAgent)
@@ -1448,7 +1578,7 @@ export function pickArenaWinner(parentId: number, entryId: number, reason: strin
   if (first >= 0) {
     const reviewer = agents.find((agent) => agent.id === winner.reviewers[first])
     patchIssue(winner.id, { status: 'review', review_index: first, assignee_id: reviewer.id, landing: '' })
-    addComment(winner.id, 'System', 'system', `Sent to ${reviewer.name} for review.`)
+    addComment(winner.id, 'System', 'system', t('Zur Prüfung an {name}.', { name: reviewer.name }))
   } else {
     // "In progress" is the state a finished issue has while its branch lands.
     patchIssue(winner.id, { status: 'in_progress', landing: '' })
@@ -1462,7 +1592,11 @@ export function pickArenaWinner(parentId: number, entryId: number, reason: strin
 // ---------- scheduler ----------
 
 function tick() {
-  for (const row of all('SELECT id FROM projects WHERE paused=0')) scheduleProject(getProject(row.id))
+  for (const row of all('SELECT id FROM projects WHERE paused=0')) {
+    // Everything a pass writes or starts belongs to this project, so it runs in its language.
+    const p = getProject(row.id)
+    forProject(p, () => scheduleProject(p))
+  }
 }
 
 function scheduleProject(p: any) {
@@ -1548,13 +1682,17 @@ function scheduleProject(p: any) {
     if (blockers.length) {
       // Approved blockers only need to land: say so, so nobody has to look why it still waits.
       if (blockers.every((number: number) => landingNumbers.has(number)))
-      wait(issue, 'merge', `Waits for the merge of ${issueList(p.key, blockers)}`)
-      else wait(issue, 'blocked', `Waits for ${issueList(p.key, blockers)}`)
+        wait(issue, 'merge', t('Wartet auf Merge von {issues}', { issues: issueList(p.key, blockers) }))
+      else wait(issue, 'blocked', t('Wartet auf {issues}', { issues: issueList(p.key, blockers) }))
       continue
     }
     const retryAt = retryAfter.get(issue.id) ?? 0
     if (retryAt > Date.now()) {
-      wait(issue, 'retry', `Next attempt from ${when(retryAt)}, the last run failed`)
+      wait(
+        issue,
+        'retry',
+        t('Neuer Versuch ab {when}, der letzte Lauf ist fehlgeschlagen', { when: when(retryAt) }),
+      )
       wakeAt(retryAt)
       continue
     }
@@ -1564,24 +1702,32 @@ function scheduleProject(p: any) {
       wait(
         issue,
         'agent',
-        issue.assignee_id ? 'The assigned agent no longer exists' : 'No agent free',
+        issue.assignee_id ? t('Der zugewiesene Agent existiert nicht mehr') : t('Kein Agent frei'),
       )
       continue
     }
     if (!agent.enabled) {
-      wait(issue, 'agent', `${agent.name} is switched off`)
+      wait(issue, 'agent', t('{name} ist ausgeschaltet', { name: agent.name }))
       continue
     }
     if (!isFree(agent)) {
       wait(
         issue,
         'agent',
-        `${agent.name} already works on ${busy(agent)} of at most ${agent.max_instances} issues`,
+        t('{name} arbeitet schon an {busy} von höchstens {max} Issues', {
+          name: agent.name,
+          busy: busy(agent),
+          max: agent.max_instances,
+        }),
       )
       continue
     }
     if (slots <= 0) {
-      wait(issue, 'full', `Project limit reached: ${p.settings.maxConcurrent} runs at once`)
+      wait(
+        issue,
+        'full',
+        t('Projekt-Limit erreicht: {max} Läufe gleichzeitig', { max: p.settings.maxConcurrent }),
+      )
       continue
     }
 
@@ -1589,7 +1735,7 @@ function scheduleProject(p: any) {
     const { pick, skipped } = routeProvider(p, agent, avoidProvider.get(issue.id), kind, issue.model)
     if (!pick) {
       exhausted = true
-      wait(issue, 'provider', `No provider available. ${skipped.join(' · ')}`)
+      wait(issue, 'provider', t('Kein Anbieter verfügbar. {skipped}', { skipped: skipped.join(' · ') }))
       continue
     }
     const full = getIssue(issue.id)
@@ -1621,8 +1767,11 @@ function landingReasons(projectId: number): Record<number, Reason> {
     const minutes = Math.floor((Date.now() - landing.since) / 60_000)
     reasons[issueId] =
       landing.step === 'testing'
-        ? { kind: 'landing', text: `Approved, landing in progress (merge and test, for ${minutes} min)` }
-        : { kind: 'landing', text: `Approved, waits for landing: place ${++place} in line` }
+        ? { kind: 'landing', text: t('Freigegeben, Landung läuft (Merge und Test, seit {minutes} min)', { minutes }) }
+        : {
+            kind: 'landing',
+            text: t('Freigegeben, wartet auf Landung: Platz {place} in der Schlange', { place: ++place }),
+          }
   }
   return reasons
 }
@@ -1644,16 +1793,29 @@ function setWaiting(projectId: number, reasons: Record<number, Reason>) {
 
 const issueList = (key: string, numbers: number[]) => {
   const shown = numbers.slice(0, 3).map((number) => `${key}-${number}`)
-  return numbers.length > 3 ? `${shown.join(', ')} and ${numbers.length - 3} more` : shown.join(', ')
+  return numbers.length > 3
+    ? t('{issues} und {count} weitere', { issues: shown.join(', '), count: numbers.length - 3 })
+    : shown.join(', ')
 }
+
+const waitsNote = (key: string, numbers: number[]) =>
+  t('Wartet jetzt auf {issues} und geht von selbst weiter, sobald das erledigt ist.', {
+    issues: issueList(key, numbers),
+  })
 
 function exhaustedNotice(agents: any[]) {
   const resting = [...new Set(agents.map((a) => a.provider))]
     .map((provider) => ({ provider, rest: restOf(provider) }))
     .filter((r) => r.rest)
-    .map((r) => `${PROVIDERS[r.provider]?.label ?? r.provider}: ${r.rest!.reason} until ${when(r.rest!.until)}`)
-  if (resting.length) return `Agents are paused. ${resting.join(', ')}.`
-  return 'Usage limit reached: no provider is above its threshold. Agents are paused.'
+    .map((r) =>
+      t('{provider}: {reason} bis {when}', {
+        provider: PROVIDERS[r.provider]?.label ?? r.provider,
+        reason: r.rest!.reason,
+        when: when(r.rest!.until),
+      }),
+    )
+  if (resting.length) return t('Agenten pausieren. {providers}.', { providers: resting.join(', ') })
+  return t('Usage-Limit erreicht: kein Provider liegt über seiner Schwelle. Agenten pausieren.')
 }
 
 /** Fill free slots with eligible work. A parked-only group must not stall an autonomous project. */
@@ -1734,29 +1896,33 @@ function armWatchdog() {
 function watchdog() {
   const now = Date.now()
   for (const l of [...live.values()]) {
-    const settings = getProject(l.projectId)?.settings.watchdog
+    const p = getProject(l.projectId)
+    const settings = p?.settings.watchdog
     if (!settings?.enabled || l.stop || l.checking) continue
+    forProject(p, () => applyRules(l, settings.rules, now))
+  }
+}
 
-    for (const rule of settings.rules) {
-      const minutes =
-        rule.type === 'stall'
-          ? (now - l.lastActivity) / 60_000
-          : rule.type === 'runtime'
-            ? (now - l.startedAt) / 60_000
-            : -1
-      if (minutes < rule.value) continue
+function applyRules(l: Live, rules: any[], now: number) {
+  for (const rule of rules) {
+    const minutes =
+      rule.type === 'stall'
+        ? (now - l.lastActivity) / 60_000
+        : rule.type === 'runtime'
+          ? (now - l.startedAt) / 60_000
+          : -1
+    if (minutes < rule.value) continue
 
-      const message =
-        rule.type === 'stall'
-          ? `No activity for ${rule.value} minutes.`
-          : `Run is taking longer than ${rule.value} minutes.`
-      if (rule.action === 'comment') {
-        if (!l.warned.has(rule.type)) addComment(l.issueId, 'Watchdog', 'watchdog', message)
-        l.warned.add(rule.type)
-      } else {
-        stopRun(l.runId, `${message} Run stopped.`, rule.action === 'block' ? 'blocked' : 'todo')
-        break
-      }
+    const message =
+      rule.type === 'stall'
+        ? t('Keine Aktivität seit {minutes} Minuten.', { minutes: rule.value })
+        : t('Lauf dauert länger als {minutes} Minuten.', { minutes: rule.value })
+    if (rule.action === 'comment') {
+      if (!l.warned.has(rule.type)) addComment(l.issueId, 'Watchdog', 'watchdog', message)
+      l.warned.add(rule.type)
+    } else {
+      stopRun(l.runId, `${message} ${t('Lauf gestoppt.')}`, rule.action === 'block' ? 'blocked' : 'todo')
+      return
     }
   }
 }

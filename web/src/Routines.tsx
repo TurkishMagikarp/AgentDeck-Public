@@ -1,6 +1,7 @@
 import { createResource, createSignal, For, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { api } from './api'
+import { t } from './i18n'
 import { agentById, board, fail } from './store'
 import { Field, Modal, Select, Toggle } from './ui'
 
@@ -16,9 +17,10 @@ type Routine = {
   only_when_idle: boolean | number
 }
 
+// Labels are German keys; they are translated where the Select renders them.
 const SCHEDULES = [
-  ['daily', 'Daily at'],
-  ['interval', 'Every … minutes'],
+  ['daily', 'Täglich um'],
+  ['interval', 'Alle … Minuten'],
 ] as const
 
 const newRoutine = (): Routine => ({
@@ -34,8 +36,10 @@ const newRoutine = (): Routine => ({
 
 function describeSchedule(routine: Routine) {
   const when =
-    routine.schedule === 'daily' ? `daily at ${routine.at}` : `every ${routine.every_minutes} minutes`
-  return routine.only_when_idle ? `${when}, when nothing is open` : when
+    routine.schedule === 'daily'
+      ? t('täglich um {at}', { at: routine.at })
+      : t('alle {n} Minuten', { n: routine.every_minutes })
+  return routine.only_when_idle ? t('{when}, wenn nichts offen ist', { when }) : when
 }
 
 export function Routines() {
@@ -54,19 +58,18 @@ export function Routines() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Routines</h2>
+          <h2>{t('Routinen')}</h2>
           <p class="muted">
-            Recurring work. When a routine is due, it creates an issue for its agent. While the last one is
-            still open, no new one is added.
+            {t('Wiederkehrende Arbeit. Ist eine Routine fällig, legt sie ein Issue für ihren Agenten an. Solange das letzte noch offen ist, kommt kein weiteres dazu.')}
           </p>
         </div>
         <button class="primary" onClick={() => setEditing(newRoutine())}>
-          Add routine
+          {t('Routine hinzufügen')}
         </button>
       </div>
 
       <div class="grid">
-        <For each={routines()} fallback={<p class="muted">No routines yet.</p>}>
+        <For each={routines()} fallback={<p class="muted">{t('Noch keine Routinen.')}</p>}>
           {(routine) => (
             <article
               class="tile"
@@ -75,7 +78,7 @@ export function Routines() {
             >
               <strong>{routine.name}</strong>
               <p class="muted">
-                {describeSchedule(routine)} · {agentById(routine.agent_id)?.name ?? 'any agent'}
+                {describeSchedule(routine)} · {agentById(routine.agent_id)?.name ?? t('beliebiger Agent')}
               </p>
               <p class="clamp">{routine.prompt}</p>
             </article>
@@ -103,21 +106,21 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Delete routine "${draft.name}"?`)) return
+    if (!confirm(t('Routine "{name}" löschen?', { name: draft.name }))) return
     await api.del(`/routines/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Edit routine' : 'New routine'} onClose={props.onClose}>
+    <Modal title={draft.id ? t('Routine bearbeiten') : t('Neue Routine')} onClose={props.onClose}>
       <form class="form" onSubmit={save}>
         <div class="row">
-          <Field label="Name">
+          <Field label={t('Name')}>
             <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
           </Field>
-          <Field label="Agent">
+          <Field label={t('Agent')}>
             <select onChange={(e) => setDraft('agent_id', Number(e.currentTarget.value) || null)}>
-              <option value="">Any free agent</option>
+              <option value="">{t('Beliebiger freier Agent')}</option>
               <For each={board.agents}>
                 {(agent) => (
                   <option value={agent.id} selected={agent.id === draft.agent_id}>
@@ -130,17 +133,17 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
         </div>
 
         <div class="row">
-          <Field label="Schedule">
+          <Field label={t('Rhythmus')}>
             <Select
               value={draft.schedule}
-              options={SCHEDULES}
+              options={SCHEDULES.map(([value, label]) => [value, t(label)] as const)}
               onChange={(value) => setDraft('schedule', value)}
             />
           </Field>
           <Show
             when={draft.schedule === 'daily'}
             fallback={
-              <Field label="Minutes" hint="At least 5">
+              <Field label={t('Minuten')} hint={t('Mindestens 5')}>
                 <input
                   type="number"
                   min="5"
@@ -150,13 +153,13 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
               </Field>
             }
           >
-            <Field label="Time" hint="Time zone of the server">
+            <Field label={t('Uhrzeit')} hint={t('Zeitzone des Servers')}>
               <input type="time" value={draft.at} onInput={(e) => setDraft('at', e.currentTarget.value)} />
             </Field>
           </Show>
         </div>
 
-        <Field label="Task" hint="Becomes the description of the new issue">
+        <Field label={t('Auftrag')} hint={t('Wird zur Beschreibung des angelegten Issues')}>
           <textarea
             rows="8"
             value={draft.prompt}
@@ -165,25 +168,25 @@ function RoutineForm(props: { routine: Routine; onClose: () => void }) {
         </Field>
 
         <Toggle
-          label="Only when nothing is open"
-          title="Waits until no issue is in progress, in review or blocked. For planners that create the next task."
+          label={t('Nur wenn nichts offen ist')}
+          title={t('Wartet, bis kein Issue mehr in Arbeit, Review oder blockiert ist. Für Planer, die die nächste Aufgabe anlegen.')}
           checked={!!draft.only_when_idle}
           onChange={(on) => setDraft('only_when_idle', on)}
         />
-        <Toggle label="Active" checked={!!draft.enabled} onChange={(on) => setDraft('enabled', on)} />
+        <Toggle label={t('Aktiv')} checked={!!draft.enabled} onChange={(on) => setDraft('enabled', on)} />
 
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Delete
+              {t('Löschen')}
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Cancel
+            {t('Abbrechen')}
           </button>
           <button class="primary" type="submit">
-            Save
+            {t('Speichern')}
           </button>
         </footer>
       </form>

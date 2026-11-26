@@ -5,6 +5,7 @@
 // default landing place. Deliveries arrive through the signed webhook (githubWebhook.ts).
 import { createIssue, mergeSettings } from './core.ts'
 import { all, get, run, tx } from './db.ts'
+import { forProject, t } from './i18n.ts'
 
 const BODY_CHARS = 18_000
 
@@ -15,7 +16,8 @@ const text = (value: unknown, max: number) => (typeof value === 'string' ? value
 /** The projects that take issues of this repository under this label. */
 function projectsFor(repo: string, label: string) {
   return all('SELECT id, settings FROM projects')
-    .map((row) => ({ id: row.id as number, intake: mergeSettings(JSON.parse(row.settings || '{}')).intake }))
+    .map((row) => ({ id: row.id as number, settings: mergeSettings(JSON.parse(row.settings || '{}')) }))
+    .map((project) => ({ ...project, intake: project.settings.intake }))
     .filter(
       ({ intake }) =>
         intake.enabled &&
@@ -37,22 +39,27 @@ export function takeGithubIssue(payload: any): TakenIssue[] {
   if (!source || !repo || !label || source.pull_request || source.state !== 'open') return []
   if (!/^https:\/\/github\.com\//.test(url)) return []
 
-  const title = text(source.title, 300).trim() || `GitHub issue #${source.number}`
-  const author = text(source.user?.login, 60) || 'unknown'
   const body = text(source.body, BODY_CHARS + 1)
-  const description = [
-    `Source: [${repo}#${Number(source.number) || '?'}](${url}), reported by ${author} on GitHub.`,
-    '',
-    body.length > BODY_CHARS ? `${body.slice(0, BODY_CHARS)}\n\n… (cut)` : body,
-  ].join('\n')
+  // Written per project: the agents read the issue in their project's language.
+  const filed = () => ({
+    title: text(source.title, 300).trim() || t('GitHub-Issue #{number}', { number: source.number }),
+    description: [
+      t('Quelle: [{issue}]({url}), gemeldet von {author} auf GitHub.', {
+        issue: `${repo}#${Number(source.number) || '?'}`,
+        url,
+        author: text(source.user?.login, 60) || t('unbekannt'),
+      }),
+      '',
+      body.length > BODY_CHARS ? `${body.slice(0, BODY_CHARS)}\n\n${t('… (gekürzt)')}` : body,
+    ].join('\n'),
+  })
 
   const taken: TakenIssue[] = []
   for (const project of projectsFor(repo, label)) {
     const created = tx(() => {
       if (get('SELECT 1 FROM issues WHERE project_id=? AND source=?', project.id, url)) return null
       const issue = createIssue(project.id, {
-        title,
-        description,
+        ...forProject(project, filed),
         status: project.intake.status,
         created_by: 'GitHub',
       })

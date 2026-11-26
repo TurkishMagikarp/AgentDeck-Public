@@ -1,5 +1,7 @@
 import { createSignal } from 'solid-js'
 import { api } from './api'
+import { t } from './i18n'
+import { LanguageSwitch } from './ui'
 
 /** Shown when the server is protected by a token and this browser has no session yet. */
 export function Login() {
@@ -19,21 +21,22 @@ export function Login() {
   return (
     <div class="overlay">
       <form class="modal form" onSubmit={submit}>
-        <h2>Sign in</h2>
-        <p class="muted">This server is protected. Enter the access token (AGENTDECK_TOKEN).</p>
+        <h2>{t('Anmelden')}</h2>
+        <p class="muted">{t('Dieser Server ist geschützt. Gib das Zugangs-Token ein (AGENTDECK_TOKEN).')}</p>
         <input
           type="password"
           autocomplete="current-password"
           autofocus
-          placeholder="Access token"
+          placeholder={t('Zugangs-Token')}
           value={token()}
           onInput={(e) => setToken(e.currentTarget.value)}
         />
-        {wrong() && <p class="bad-text">That token is wrong.</p>}
+        {wrong() && <p class="bad-text">{t('Das Token stimmt nicht.')}</p>}
         <footer>
+          <LanguageSwitch />
           <span class="spacer" />
           <button class="primary" type="submit" disabled={!token()}>
-            Sign in
+            {t('Anmelden')}
           </button>
         </footer>
       </form>

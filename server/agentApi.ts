@@ -2,10 +2,12 @@
 // new issues. It authenticates with the token of its run, never with the board token.
 import { Hono } from 'hono'
 import { itemsFromText } from './checklist.ts'
-import { addComment, createIssue, getIssue, getProject, mapIssue, patchIssue } from './core.ts'
+import { addComment, createIssue, getAgent, getIssue, getProject, mapIssue, patchIssue } from './core.ts'
 import { all, get, tx } from './db.ts'
 import { kick } from './engine.ts'
+import { forProject, t } from './i18n.ts'
 import { addLesson } from './lessons.ts'
+import { CONNECTIONS } from './mcp.ts'
 import { runOfToken, type RunIdentity } from './runTokens.ts'
 import { installPackages } from './sandbox.ts'
 import { missingSections } from './ticket.ts'
@@ -17,9 +19,10 @@ export const agentApi = new Hono<Env>()
 agentApi.use('*', async (c, next) => {
   const header = c.req.header('authorization') ?? ''
   const identity = runOfToken(header.replace(/^Bearer /, ''))
-  if (!identity) return c.json({ error: 'This run token is invalid or expired' }, 401)
+  if (!identity) return c.json({ error: t('Dieses Lauf-Token ist nicht (mehr) gültig') }, 401)
   c.set('run', identity)
-  return next()
+  // The agent that reads the answers works in its project's language.
+  return forProject(getProject(identity.projectId), next)
 })
 
 const text = (value: unknown, max: number) => String(value ?? '').slice(0, max)
@@ -37,7 +40,7 @@ function agentIdsByName(projectId: number, names: unknown): number[] {
   const agents = all('SELECT id, name FROM agents WHERE project_id=?', projectId)
   return wanted.map((name) => {
     const agent = agents.find((candidate) => candidate.name.toLowerCase() === name)
-    if (!agent) throw new Error(`No agent named "${name}" in this project`)
+    if (!agent) throw new Error(t('Kein Agent namens "{name}" in diesem Projekt', { name }))
     return agent.id
   })
 }
@@ -58,7 +61,7 @@ agentApi.get('/issues', (c) => {
 
 agentApi.get('/issues/:number', (c) => {
   const issue = issueByNumber(c.get('run').projectId, c.req.param('number'))
-  if (!issue) return c.json({ error: 'Issue not found' }, 404)
+  if (!issue) return c.json({ error: t('Issue nicht gefunden') }, 404)
   const comments = all(
     'SELECT author, kind, body, created_at FROM comments WHERE issue_id=? ORDER BY id',
     issue.id,
@@ -69,10 +72,10 @@ agentApi.get('/issues/:number', (c) => {
 agentApi.post('/issues/:number/unblock', async (c) => {
   const identity = c.get('run')
   const issue = issueByNumber(identity.projectId, c.req.param('number'))
-  if (!issue) return c.json({ error: 'Issue not found' }, 404)
+  if (!issue) return c.json({ error: t('Issue nicht gefunden') }, 404)
   const blocker = Number((await c.req.json().catch(() => ({}))).blocker)
   if (!issue.blocked_by.includes(blocker)) {
-    return c.json({ error: `Issue ${issue.number} does not wait for ${blocker}` }, 400)
+    return c.json({ error: t('Issue {number} wartet nicht auf {blocker}', { number: issue.number, blocker }) }, 400)
   }
   patchIssue(
     issue.id,
@@ -80,7 +83,7 @@ agentApi.post('/issues/:number/unblock', async (c) => {
     identity.agentName,
   )
   const key = getProject(identity.projectId).key
-  addComment(issue.id, identity.agentName, 'agent', `No longer waits for ${key}-${blocker}.`)
+  addComment(issue.id, identity.agentName, 'agent', t('Wartet nicht mehr auf {issue}.', { issue: `${key}-${blocker}` }))
   kick()
   return c.json({ ok: true })
 })
@@ -88,9 +91,9 @@ agentApi.post('/issues/:number/unblock', async (c) => {
 agentApi.post('/issues/:number/comments', async (c) => {
   const identity = c.get('run')
   const issue = issueByNumber(identity.projectId, c.req.param('number'))
-  if (!issue) return c.json({ error: 'Issue not found' }, 404)
+  if (!issue) return c.json({ error: t('Issue nicht gefunden') }, 404)
   const body = text((await c.req.json().catch(() => ({}))).body, 20_000).trim()
-  if (!body) return c.json({ error: 'Comment is empty' }, 400)
+  if (!body) return c.json({ error: t('Kommentar leer') }, 400)
   addComment(issue.id, identity.agentName, 'agent', body)
   return c.json({ ok: true }, 201)
 })
@@ -104,11 +107,35 @@ agentApi.post('/packages', async (c) => {
     .filter(Boolean)
   try {
     const output = await installPackages(names)
-    addComment(identity.issueId, identity.agentName, 'agent', `System packages installed: ${names.join(', ')}`)
+    addComment(
+      identity.issueId,
+      identity.agentName,
+      'agent',
+      t('Systempakete installiert: {names}', { names: names.join(', ') }),
+    )
     return c.json({ ok: true, output })
   } catch (e: any) {
     return c.json({ error: String(e.stderr || e.message).trim().slice(-2000) }, 400)
   }
+})
+
+// An on-demand connection is left out of a run to keep its steps small (mcp.ts). The agent that
+// needs its tools after all asks here; the next run on the issue gets them.
+agentApi.post('/connections', async (c) => {
+  const identity = c.get('run')
+  const id = text((await c.req.json().catch(() => ({}))).id, 40).trim().toLowerCase()
+  const own: string[] = getAgent(identity.agentId)?.mcp_ids ?? []
+  if (!CONNECTIONS[id] || !own.includes(id)) {
+    const possible = own.join(', ') || t('keine')
+    return c.json({ error: t('Keine Verbindung "{id}" für diesen Agenten. Möglich: {possible}', { id, possible }) }, 400)
+  }
+  const wanted: string[] = getIssue(identity.issueId)?.mcp_wanted ?? []
+  if (!wanted.includes(id)) {
+    patchIssue(identity.issueId, { mcp_wanted: [...wanted, id] }, identity.agentName)
+    const note = t('Braucht die MCP-Werkzeuge von {name}.', { name: CONNECTIONS[id].label })
+    addComment(identity.issueId, identity.agentName, 'agent', note)
+  }
+  return c.json({ ok: true })
 })
 
 agentApi.post('/lessons', async (c) => {
@@ -166,7 +193,7 @@ agentApi.post('/issues', async (c) => {
   const identity = c.get('run')
   const body = await c.req.json().catch(() => ({}))
   const title = text(body.title, 300).trim()
-  if (!title) return c.json({ error: 'Title is missing' }, 400)
+  if (!title) return c.json({ error: t('Titel fehlt') }, 400)
 
   const project = getProject(identity.projectId)
   const description = text(body.description, 20_000)
@@ -174,7 +201,10 @@ agentApi.post('/issues', async (c) => {
   if (missing.length) {
     return c.json(
       {
-        error: `The description needs the sections ${missing.map((name) => `"## ${name}"`).join(', ')}. Write the issue so that a junior could do it without asking (format: see "How to write an issue" in your prompt) and create it again.`,
+        error: t(
+          'Die Beschreibung braucht die Abschnitte {sections}. Schreib das Issue so, dass ein Junior es ohne Rückfrage erledigen kann (Format: siehe "How to write an issue" in deinem Prompt), und leg es erneut an.',
+          { sections: missing.map((name) => `"## ${name}"`).join(', ') },
+        ),
       },
       400,
     )
@@ -184,7 +214,10 @@ agentApi.post('/issues', async (c) => {
     const list = similar.map((issue) => `${project.key}-${issue.number} "${issue.title}"`).join(', ')
     return c.json(
       {
-        error: `A similar open issue exists: ${list}. Comment there instead of creating a new one. Only if yours really is something else: --force yes.`,
+        error: t(
+          'Ähnliches offenes Issue vorhanden: {list}. Kommentiere dort, statt ein neues anzulegen. Nur wenn deins wirklich etwas anderes ist: --force yes.',
+          { list },
+        ),
       },
       409,
     )
@@ -215,7 +248,10 @@ agentApi.post('/issues', async (c) => {
       created.id,
       'System',
       'system',
-      `Filed by ${identity.agentName} while working on ${project.key}-${origin?.number ?? '?'}.`,
+      t('Angelegt von {agent} während {issue}.', {
+        agent: identity.agentName,
+        issue: `${project.key}-${origin?.number ?? '?'}`,
+      }),
     )
     kick()
     return c.json({ number: created.number, key: `${project.key}-${created.number}` }, 201)

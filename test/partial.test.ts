@@ -22,10 +22,10 @@ test('a later partial delivery that met nothing new goes to a human', () => {
 
 test('only lines that say something waits name blockers', () => {
   const report = [
-    'Partial: route 5 built.',
-    '- Exits wait on SHOP-826',
+    'Teilweise: Route 5 gebaut.',
+    '- Ausgänge warten auf SHOP-826',
     '- Collectors lack figures (SHOP-827)',
-    '- Collectors stay with SHOP-845',
+    '- Sammler weiter bei SHOP-845',
   ].join('\n')
   const lines = waitingLines(report)
   assert.match(lines, /SHOP-826/)

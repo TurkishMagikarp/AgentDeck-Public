@@ -8,6 +8,7 @@ import { startApiRun } from './apiAgent.ts'
 import { apiKey, getAccess, runEnv } from './auth.ts'
 import { EFFORTS, PROVIDERS, MODEL_RE } from './core.ts'
 import { startManagedRun } from './managedAgent.ts'
+import { currentLang, t, tIn, variants, withLang } from './i18n.ts'
 import { prepareMcp } from './mcp.ts'
 import { DATA_DIR, run } from './db.ts'
 import type { TraceEvent } from './runEvents.ts'
@@ -46,11 +47,43 @@ export type RunOpts = {
  */
 const CODEX_COMPACT_TOKENS = Number(process.env.AGENTDECK_CODEX_COMPACT_TOKENS) || 100_000
 
+/**
+ * opencode compacts only when the model's window is full, and DeepSeek Flash has a window of a
+ * million tokens: measured runs never compacted and reached 360k tokens per step. opencode has
+ * no threshold setting, so the run gets a smaller window for its model instead. It compacts at
+ * the window minus the output limit, which makes this number the threshold. 0 switches it off.
+ */
+const OPENCODE_COMPACT_TOKENS = Number(process.env.AGENTDECK_OPENCODE_COMPACT_TOKENS ?? 100_000)
+const OPENCODE_OUTPUT_TOKENS = 32_000
+
+/** Exported for the tests. `model` is opencode's "provider/model". */
+export function withContextLimit(
+  content: string | undefined,
+  model: string,
+  threshold = OPENCODE_COMPACT_TOKENS,
+) {
+  const slash = model.indexOf('/')
+  if (!threshold || slash < 1) return content
+  const [provider, id] = [model.slice(0, slash), model.slice(slash + 1)]
+  const config = content ? JSON.parse(content) : {}
+  const models = config.provider?.[provider]?.models ?? {}
+  const limit = { context: threshold + OPENCODE_OUTPUT_TOKENS, output: OPENCODE_OUTPUT_TOKENS }
+  return JSON.stringify({
+    ...config,
+    provider: {
+      ...config.provider,
+      [provider]: { ...config.provider?.[provider], models: { ...models, [id]: { ...models[id], limit } } },
+    },
+  })
+}
+
+const hasStatus = (text: string) => /<status>/i.test(text)
+
 const short = (s: string, n = 160) => (s.length > n ? s.slice(0, n) + '…' : s).replace(/\s+/g, ' ')
 
 function command(cli: string, o: RunOpts): [string, string[]] {
   const m = (o.model ?? '').trim()
-  if (!MODEL_RE.test(m)) throw new Error('Invalid model name')
+  if (!MODEL_RE.test(m)) throw new Error(t('Ungültiger Modellname'))
   const effort = EFFORTS.includes(o.effort ?? '') ? (o.effort ?? '') : ''
   if (cli === 'claude')
     return [
@@ -83,7 +116,15 @@ function command(cli: string, o: RunOpts): [string, string[]] {
     ]
   return [
     'opencode',
-    ['run', '--format', 'json', ...(o.autonomous ? ['--auto'] : []), ...(m ? ['-m', m] : [])],
+    [
+      'run',
+      '--format',
+      'json',
+      ...(o.autonomous ? ['--auto'] : []),
+      ...(m ? ['-m', m] : []),
+      // The effort is the model's variant; opencode ignores one the model does not have.
+      ...(effort ? ['--variant', effort] : []),
+    ],
   ]
 }
 
@@ -105,7 +146,7 @@ export function textOf(content: any): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content))
     return content
-      .map((block) => (typeof block?.text === 'string' ? block.text : block?.type === 'image' ? '[image]' : ''))
+      .map((block) => (typeof block?.text === 'string' ? block.text : block?.type === 'image' ? t('[Bild]') : ''))
       .filter(Boolean)
       .join('\n')
   return content == null ? '' : JSON.stringify(content)
@@ -215,8 +256,8 @@ export function parse(cli: string, provider: string, e: any, st: State, act: (s:
       st.sawResult = true
       st.ok = !e.is_error
       if (e.is_error) {
-        st.error = short(String(e.result ?? e.subtype ?? 'error'), 400)
-        ev({ kind: 'error', text: String(e.result ?? e.subtype ?? 'error') })
+        st.error = short(String(e.result ?? e.subtype ?? t('Fehler')), 400)
+        ev({ kind: 'error', text: String(e.result ?? e.subtype ?? t('Fehler')) })
       }
     }
   } else if (cli === 'codex') {
@@ -243,13 +284,16 @@ export function parse(cli: string, provider: string, e: any, st: State, act: (s:
       st.sawResult = true
     } else if (e.type === 'turn.failed' || e.type === 'error') {
       st.ok = false
-      st.error = short(String(e.error?.message ?? e.message ?? 'error'), 400)
-      ev({ kind: 'error', text: String(e.error?.message ?? e.message ?? 'error') })
+      st.error = short(String(e.error?.message ?? e.message ?? t('Fehler')), 400)
+      ev({ kind: 'error', text: String(e.error?.message ?? e.message ?? t('Fehler')) })
     }
   } else {
     const p = e.part ?? {}
     if (e.type === 'text' && p.text) {
-      act((st.text = p.text))
+      // A compaction right after the final answer adds a summary and a closing remark. The answer
+      // with the status block stays the result of the run.
+      if (!hasStatus(st.text) || hasStatus(p.text)) st.text = p.text
+      act(p.text)
       ev({ kind: 'assistant', text: p.text })
     } else if (e.type === 'tool_use') {
       const name = String(p.tool ?? 'tool')
@@ -271,8 +315,8 @@ export function parse(cli: string, provider: string, e: any, st: State, act: (s:
       st.sawResult = true
     } else if (e.type === 'error') {
       st.ok = false
-      st.error = short(String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'error'), 400)
-      ev({ kind: 'error', text: String(e.error?.data?.message ?? e.error?.message ?? e.message ?? 'error') })
+      st.error = short(String(e.error?.data?.message ?? e.error?.message ?? e.message ?? t('Fehler')), 400)
+      ev({ kind: 'error', text: String(e.error?.data?.message ?? e.error?.message ?? e.message ?? t('Fehler')) })
     }
   }
 }
@@ -281,24 +325,25 @@ const quoteForCmd = (arg: string) => (/^[w./:=@-]+$/.test(arg) ? arg : `"${arg.r
 
 export function startRun(o: RunOpts): RunHandle {
   const cli = PROVIDERS[o.provider]?.cli
-  if (!cli) throw new Error(`Unknown provider ${o.provider}`)
+  if (!cli) throw new Error(t('Unbekannter Provider {provider}', { provider: o.provider }))
   if (cli === 'mock') return mockRun(o)
   if (cli === 'api') {
     const key = apiKey(o.provider)
-    if (!key) throw new Error('No API key stored for this provider')
+    if (!key) throw new Error(t('Für diesen Anbieter ist kein API-Key hinterlegt'))
     const model = o.model?.trim() || PROVIDERS[o.provider].defaultModel
     return startApiRun(o, PROVIDERS[o.provider].baseUrl!, key, model)
   }
   if (cli === 'managed') {
     const model = o.model?.trim() || PROVIDERS[o.provider].defaultModel
-    if (!MODEL_RE.test(model)) throw new Error('Invalid model name')
+    if (!MODEL_RE.test(model)) throw new Error(t('Ungültiger Modellname'))
     return startManagedRun(o, model)
   }
   const [cmd, baseArgs] = command(cli, o)
   // In the sandbox the run belongs to the project user that owns its directory. An autonomous run
   // never falls back to the server's user; a read-only question from the owner may.
   const owner = ownerOf(o.cwd)
-  if (SANDBOX && o.autonomous && !owner) throw new Error(`Sandbox: ${o.cwd} belongs to no project user`)
+  if (SANDBOX && o.autonomous && !owner)
+    throw new Error(t('Sandbox: {dir} gehört keinem Projektnutzer', { dir: o.cwd }))
   const files = owner ? join(owner.home, '.agentdeck') : join(DATA_DIR, 'tmp')
   const mcp = prepareMcp(cli, o.mcp ?? [], randomUUID(), files)
   const env = { ...runEnv(o.provider, cli), ...mcp.env, ...o.env }
@@ -308,6 +353,10 @@ export function startRun(o: RunOpts): RunHandle {
       const plugin = pathToFileURL(join(import.meta.dirname, 'rtk-opencode.mjs')).href
       env.OPENCODE_CONFIG_CONTENT = withRtkPlugin(env.OPENCODE_CONFIG_CONTENT, plugin)
     }
+  }
+  if (cli === 'opencode') {
+    const limited = withContextLimit(env.OPENCODE_CONFIG_CONTENT, (o.model ?? '').trim())
+    if (limited) env.OPENCODE_CONFIG_CONTENT = limited
   }
 
   // Codex reads the prompt from stdin when its last argument is "-", so extra flags go in front of it.
@@ -329,7 +378,7 @@ export function startRun(o: RunOpts): RunHandle {
         writeFileSync(file.path, file.content, { mode: 0o600 })
       }
     }
-    if (stopped) return { ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'gestoppt' }
+    if (stopped) return { ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: t('gestoppt') }
     const win = process.platform === 'win32'
     // On Windows the CLIs are .cmd shims and need a shell. Arguments are fixed flags, a validated
     // model name or values we built ourselves; anything with special characters gets quoted.
@@ -367,6 +416,8 @@ export const newState = (): State => ({
 /** Reads the output of a started CLI until it ends. */
 function follow(child: ReturnType<typeof spawn>, cmd: string, env: NodeJS.ProcessEnv, o: RunOpts, cli: string) {
   const st = newState()
+  // The CLI's output arrives in callbacks; they keep the language the run was started in.
+  const lang = currentLang()
   const act = (s: string) => o.onActivity?.(short(s, 1200))
   // Every event of the run is wanted, so a failing listener must not stop the parsing.
   const ev: Trace = (event) => {
@@ -379,7 +430,7 @@ function follow(child: ReturnType<typeof spawn>, cmd: string, env: NodeJS.Proces
   createInterface({ input: child.stdout! }).on('line', (line) => {
     if (line[0] !== '{') return
     try {
-      parse(cli, o.provider, JSON.parse(line), st, act, ev)
+      withLang(lang, () => parse(cli, o.provider, JSON.parse(line), st, act, ev))
     } catch {}
   })
   child.stdin!.on('error', () => {})
@@ -390,7 +441,7 @@ function follow(child: ReturnType<typeof spawn>, cmd: string, env: NodeJS.Proces
         ok: false,
         text: st.text,
         usage: st.usage,
-        error: `${cmd} failed to start: ${err.message}`,
+        error: tIn(lang, '{cmd} konnte nicht gestartet werden: {message}', { cmd, message: err.message }),
       }),
     )
     child.on('close', async (code) => {
@@ -405,7 +456,9 @@ function follow(child: ReturnType<typeof spawn>, cmd: string, env: NodeJS.Proces
         ok,
         text: st.text,
         usage: st.usage,
-        error: ok ? undefined : (st.error ?? (short(stderr.trim(), 400) || `Exit-Code ${code}`)),
+        error: ok
+          ? undefined
+          : (st.error ?? (short(stderr.trim(), 400) || tIn(lang, 'Exit-Code {code}', { code: String(code) }))),
       })
     })
   })
@@ -436,42 +489,49 @@ export const oneShot = (provider: string, prompt: string, cwd: string, model = '
  * commit that file, so landing can be tested. "[mock:fail:<message>]" makes a run fail with that
  * message until the self-healing has left a hint on the issue.
  */
+/** The status line only a review prompt carries, the same in both languages. */
+const REVIEW_PROMPT = '<status>approve | changes | blocked</status>'
+
 function mockAnswer(o: RunOpts) {
   // The arena's jury (arena.ts): "[mock:jury:B]" in the task picks that entry, otherwise the first.
   if (!o.autonomous && o.prompt.includes('<winner>')) {
     const pick = o.prompt.match(/\[mock:jury:([A-D?])\]/)?.[1] ?? 'A'
-    return `<winner>${pick}</winner>\n<reason>Mock jury: entry ${pick} solves the task with the least code.</reason>`
+    const reason = t('Mock-Jury: Beitrag {pick} erfüllt die Aufgabe am knappsten.', { pick })
+    return `<winner>${pick}</winner>\n<reason>${reason}</reason>`
   }
   if (!o.autonomous) return 'PASS'
-  if (o.prompt.includes('## Your task: review')) {
+  if (o.prompt.includes(REVIEW_PROMPT)) {
     // A reviewer that forgets its status block, as real ones sometimes do.
     if (o.prompt.includes('[mock:nostatus]'))
-      return '<summary>Approved: checked, just without a status block (Mock).</summary>'
+      return `<summary>${t('Passt: geprüft, nur ohne Status-Block (Mock).')}</summary>`
     // "[mock:changes:QA]": only the reviewer of that name asks for changes.
     const onlyReviewer = o.prompt.match(/\[mock:changes:([^\]]+)\]/)?.[1]
     const asksForChanges = onlyReviewer
-      ? o.prompt.includes(`You are "${onlyReviewer}"`)
+      ? [`You are "${onlyReviewer}"`, `Du bist "${onlyReviewer}"`].some((line) => o.prompt.includes(line))
       : o.prompt.includes('[mock:changes]')
     return asksForChanges
-      ? '<summary>Changes: test missing (mock).</summary>\n<status>changes</status>'
-      : '<summary>Approved: checked (mock).</summary>\n<status>approve</status>'
+      ? `<summary>${t('Ändern: Test fehlt (Mock).')}</summary>\n<status>changes</status>`
+      : `<summary>${t('Passt: geprüft (Mock).')}</summary>\n<status>approve</status>`
   }
   if (o.prompt.includes('[mock:waitfor]')) {
     const other = o.prompt.match(/\[mock:waitfor\]\s*([A-Z][A-Z0-9]*-\d+)/)?.[1] ?? ''
-    return `<summary>Blocked: waits for ${other} (mock).</summary>\n<handoff>Waiting.</handoff>\n<status>blocked</status>`
+    const summary = t('Blockiert: wartet auf {other} (Mock).', { other })
+    return `<summary>${summary}</summary>\n<handoff>${t('Wartet.')}</handoff>\n<status>blocked</status>`
   }
-  return `${mockChecklist(o.prompt)}<summary>Mock run: task done (simulated).</summary>\n<handoff>Nothing open. Changed: no files (mock).</handoff>\n<status>review</status>`
+  const summary = t('Mock-Lauf: Aufgabe simuliert umgesetzt.')
+  const handoff = t('Nichts offen. Geändert: keine Dateien (Mock).')
+  return `${mockChecklist(o.prompt)}<summary>${summary}</summary>\n<handoff>${handoff}</handoff>\n<status>review</status>`
 }
 
 /** The report on the acceptance checklist: all items met, or the first open with "[mock:partial]". */
 function mockChecklist(prompt: string) {
-  const list = prompt.match(/## Acceptance checklist\n[^\n]*\n((?:\d+\. [^\n]*\n?)+)/)?.[1]
+  const list = prompt.match(/## (?:Acceptance checklist|Abnahme-Checkliste)\n[^\n]*\n((?:\d+\. [^\n]*\n?)+)/)?.[1]
   if (!list) return ''
   const count = list.trim().split('\n').length
   const lines = Array.from({ length: count }, (_, index) =>
     index === 0 && prompt.includes('[mock:partial]')
-      ? '1. open: still missing'
-      : `${index + 1}. ok: checked (mock)`,
+      ? `1. open: ${t('fehlt noch')}`
+      : `${index + 1}. ok: ${t('geprüft (Mock)')}`,
   )
   return `<checklist>\n${lines.join('\n')}\n</checklist>\n`
 }
@@ -479,14 +539,14 @@ function mockChecklist(prompt: string) {
 function mockRun(o: RunOpts): RunHandle {
   let timer: NodeJS.Timeout
   let finish: (r: RunResult) => void
-  const steps = ['Reading issue…', 'Read: src/index.ts', '$ npm test', 'Writing summary…']
+  const steps = [t('Lese Issue…'), 'Read: src/index.ts', '$ npm test', t('Schreibe Zusammenfassung…')]
 
   if (o.prompt.includes('[mock:create]') && o.env?.AGENTDECK_CLI) {
     const args = [
       o.env.AGENTDECK_CLI,
       'create',
       '--title',
-      'Created by the mock agent',
+      t('Vom Mock-Agenten angelegt'),
       '--status',
       'backlog',
     ]
@@ -500,7 +560,7 @@ function mockRun(o: RunOpts): RunHandle {
   }
 
   const fileToCommit = o.prompt.match(/\[mock:commit:([\w./-]+)\]/)?.[1]
-  if (fileToCommit && o.autonomous && !o.prompt.includes('## Your task: review')) {
+  if (fileToCommit && o.autonomous && !o.prompt.includes(REVIEW_PROMPT)) {
     const title = o.prompt.match(/## Issue [^\n]*/)?.[0] ?? 'mock'
     const file = join(o.cwd, fileToCommit)
     const identity = ['-c', 'user.name=Mock', '-c', 'user.email=mock@localhost']
@@ -528,6 +588,9 @@ function mockRun(o: RunOpts): RunHandle {
     }
   }
 
+  // The self-healing signs its hint with its name, in the language the project had at that time.
+  const healed = variants('Selbstheilung').some((name) => o.prompt.includes(`**${name}:**`))
+
   const done = new Promise<RunResult>((resolve) => {
     finish = resolve
     let i = 0
@@ -542,7 +605,7 @@ function mockRun(o: RunOpts): RunHandle {
         }
         clearInterval(timer)
         const failWith = o.prompt.match(/\[mock:fail:([^\]]+)\]/)?.[1]
-        if (failWith && o.autonomous && !o.prompt.includes('**Self-healing:**')) {
+        if (failWith && o.autonomous && !healed) {
           return resolve({ ok: false, text: '', usage: { input: 100, output: 0, cost: 0 }, error: failWith })
         }
         const text = mockAnswer(o)
@@ -555,7 +618,7 @@ function mockRun(o: RunOpts): RunHandle {
   return {
     kill: () => {
       clearInterval(timer)
-      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: 'gestoppt' })
+      finish({ ok: false, text: '', usage: { input: 0, output: 0, cost: 0 }, error: t('gestoppt') })
     },
     done,
   }

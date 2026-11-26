@@ -220,7 +220,7 @@ test('proxy: CONNECT to an allowed target tunnels bytes both ways', async () => 
 test('proxy: CONNECT to a port the list does not name is refused', async () => {
   const out = await send('CONNECT 127.0.0.1:22 HTTP/1.1\r\n\r\n')
   assert.match(out, /^HTTP\/1\.1 403/)
-  assert.match(out, /allowlist/)
+  assert.match(out, /Allowlist/)
 })
 
 test('proxy: hosts off the list are refused and shown on the settings page', async () => {
@@ -234,7 +234,7 @@ test('proxy: hosts off the list are refused and shown on the settings page', asy
 test('proxy: a name on the list that resolves inside is refused', async () => {
   const out = await send('CONNECT inside.test:443 HTTP/1.1\r\n\r\n')
   assert.match(out, /^HTTP\/1\.1 403/)
-  assert.match(out, /internal address/)
+  assert.match(out, /interne Adresse/)
   assert.match(await send('CONNECT nowhere.test:443 HTTP/1.1\r\n\r\n'), /^HTTP\/1\.1 502/)
 })
 

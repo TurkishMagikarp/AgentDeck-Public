@@ -1,24 +1,25 @@
 import { For, Show } from 'solid-js'
 import { board, providers, saveSettings } from './store'
+import { t } from './i18n'
 import { Icon } from './icons'
 import type { WatchdogRule } from './types'
 import { Field, Select, Toggle } from './ui'
 
 const RULE_TYPES = [
-  ['stall', 'No activity for (minutes)'],
-  ['runtime', 'Run takes longer than (minutes)'],
-  ['attempts', 'Failed attempts in a row'],
+  ['stall', 'Keine Aktivität seit (Minuten)'],
+  ['runtime', 'Lauf dauert länger als (Minuten)'],
+  ['attempts', 'Fehlversuche in Folge'],
 ] as const
 
 const ACTIONS = [
-  ['comment', 'Comment only'],
-  ['stop', 'Stop run and reschedule'],
-  ['block', 'Stop and wait for a human'],
+  ['comment', 'nur kommentieren'],
+  ['stop', 'Lauf stoppen und neu einplanen'],
+  ['block', 'stoppen und auf Mensch warten'],
 ] as const
 
 const ON_FAIL = [
-  ['todo', 'Back to the agent'],
-  ['blocked', 'Wait for a human'],
+  ['todo', 'zurück an den Agenten'],
+  ['blocked', 'auf Mensch warten'],
 ] as const
 
 export function Watchdog() {
@@ -34,11 +35,11 @@ export function Watchdog() {
         <div>
           <h2>Watchdog</h2>
           <p class="muted">
-            Watches running agents and, if you want, checks every result before an issue moves on.
+            {t('Überwacht laufende Agenten und prüft auf Wunsch jedes Ergebnis, bevor ein Issue weiterwandert.')}
           </p>
         </div>
         <Toggle
-          label="Active"
+          label={t('Aktiv')}
           checked={watchdog().enabled}
           onChange={(on) => saveSettings((s) => void (s.watchdog.enabled = on))}
         />
@@ -46,22 +47,22 @@ export function Watchdog() {
 
       <section class="section">
         <div class="section-head">
-          <h3>Rules</h3>
+          <h3>{t('Regeln')}</h3>
           <button
             onClick={() =>
               saveSettings((s) => s.watchdog.rules.push({ type: 'stall', value: 10, action: 'comment' }))
             }
           >
-            Add rule
+            {t('Regel hinzufügen')}
           </button>
         </div>
         <ul class="rules">
-          <For each={watchdog().rules} fallback={<li class="muted">No rules.</li>}>
+          <For each={watchdog().rules} fallback={<li class="muted">{t('Keine Regeln.')}</li>}>
             {(rule, index) => (
               <li>
                 <Select
                   value={rule.type}
-                  options={RULE_TYPES}
+                  options={RULE_TYPES.map(([value, label]) => [value, t(label)] as const)}
                   onChange={(type) => changeRule(index(), { type })}
                 />
                 <input
@@ -72,13 +73,13 @@ export function Watchdog() {
                 />
                 <Select
                   value={rule.action}
-                  options={ACTIONS}
+                  options={ACTIONS.map(([value, label]) => [value, t(label)] as const)}
                   onChange={(action) => changeRule(index(), { action })}
                 />
                 <button
                   class="ghost danger"
                   onClick={() => saveSettings((s) => s.watchdog.rules.splice(index(), 1))}
-                  aria-label="Remove rule"
+                  aria-label={t('Regel entfernen')}
                 >
                   <Icon name="close" size={14} />
                 </button>
@@ -90,9 +91,9 @@ export function Watchdog() {
 
       <section class="section">
         <div class="section-head">
-          <h3>Custom AI review</h3>
+          <h3>{t('Eigene Prüfung per KI')}</h3>
           <Toggle
-            label="Review after every run"
+            label={t('Nach jedem Lauf prüfen')}
             checked={watchdog().llm.enabled}
             onChange={(on) => saveSettings((s) => void (s.watchdog.llm.enabled = on))}
           />
@@ -100,8 +101,8 @@ export function Watchdog() {
         <Show when={watchdog().llm.enabled}>
           <div class="form">
             <Field
-              label="What should be checked?"
-              hint="The reviewer only reads the working directory and answers PASS or FAIL."
+              label={t('Was soll geprüft werden?')}
+              hint={t('Der Prüfer liest das Arbeitsverzeichnis nur und antwortet mit PASS oder FAIL.')}
             >
               <textarea
                 rows="5"
@@ -113,7 +114,7 @@ export function Watchdog() {
               />
             </Field>
             <div class="row">
-              <Field label="Reviewer runs on">
+              <Field label={t('Prüfer läuft über')}>
                 <select
                   onChange={(e) => {
                     const provider = e.currentTarget.value
@@ -129,10 +130,10 @@ export function Watchdog() {
                   </For>
                 </select>
               </Field>
-              <Field label="On FAIL">
+              <Field label={t('Bei FAIL')}>
                 <Select
                   value={watchdog().llm.onFail}
-                  options={ON_FAIL}
+                  options={ON_FAIL.map(([value, label]) => [value, t(label)] as const)}
                   onChange={(onFail) => saveSettings((s) => void (s.watchdog.llm.onFail = onFail))}
                 />
               </Field>

@@ -11,7 +11,7 @@ const issue = (number: number, grp: string, fields: Partial<Issue> = {}): Issue 
 const selected = (issues: Issue[], slots = 3, ordered = true, at = now) =>
   readyBacklog(issues, slots, ordered, at).map((i) => i.number)
 
-test('an idle agent can work on Asset pipeline while its earlier group is parked', () => {
+test('an idle project can work on Asset pipeline while its earlier group is parked', () => {
   const issues = [
     issue(902, 'Act 1, station 7', { parked_until: now + 1 }),
     issue(898, 'Asset pipeline'), issue(899, 'Asset pipeline'), issue(697, 'Repo intake'),

@@ -1,5 +1,7 @@
 # AgentDeck
 
+Deutsch: [README.de.md](README.de.md)
+
 **A self-hosted issue board for AI coding agents.** Assign work to Claude Code, Codex CLI, or
 OpenCode. Watch runs live, inspect diffs, and choose whether finished work stays in review,
 merges locally, or opens as a pull request.
@@ -160,6 +162,26 @@ empty to use a managed workspace.
 | `AGENTDECK_PUBLIC_URL`            | empty           | Public address for links in mails and as the web push sender                                         |
 | `AGENTDECK_CHECKOUT_LIMIT_GB`     | 10              | Checkouts above this size lose their build output on the next run                                    |
 | `AGENTDECK_GITHUB_WEBHOOK_SECRET` | empty           | Secret of the GitHub webhooks (at least 16 characters), see "Approval gates and GitHub webhooks"     |
+| `AGENTDECK_LANG`                  | see "Languages" | `de` or `en`: language of the instance                                                               |
+
+## Languages
+
+AgentDeck comes in German and English.
+
+- **User interface:** Each person switches the language in their own browser (the "Language"
+  switch). The choice applies to that browser only.
+- **Project:** The project setting "Language of the agents" (`settings.language`) decides in which language
+  the agents get their prompts and in which language the server writes its notes on the issues of
+  that project.
+- **Instance:** `AGENTDECK_LANG=de|en` sets the default for the morning report and for new projects.
+  Without the variable a fresh instance starts in English; an instance that already had projects
+  stays German.
+- **Adding texts:** The German text in the code is the key (`t('…')`), the English version goes
+  into `server/i18n/en.*.ts` or `web/src/i18n/en.*.ts`. If an entry is missing, `test/i18n.test.ts`
+  and `test/i18nServer.test.ts` fail.
+
+The scripts `npm run demo` and `scripts/seed-demo.mjs` read `AGENTDECK_LANG` as well (default `en`)
+and create the demo project in that language.
 
 ## Running with Docker
 
@@ -339,6 +361,15 @@ version changes do not count, an unreadable file does), changes infrastructure f
 issue then sits in "Waits for a human", and "Approve landing" appears in the issue. The approval
 holds for exactly the commit shown and only once: if the branch changes after that, it waits again.
 Only the owner gives this approval, never the deputy agent, not even in fully autonomous projects.
+
+**Branch cleanup on `dev` and `pre-dev`:** After a proven landing AgentDeck removes its
+`agentdeck/KEY-N` branch locally and, for published landings, on `origin` as well. The periodic
+maintenance also checks older finished issues. Git must find the exact branch state in the target,
+or the matching GitHub PR must be confirmed as merged (also with squash or rebase). Newer states,
+foreign branches and checkouts that are unclean or not managed by AgentDeck are kept.
+
+**Forgejo instead of GitHub:** pull requests can land through a Forgejo instance, see
+[docs/forgejo-landing.md](docs/forgejo-landing.md).
 
 **GitHub webhooks** (landing "Pull request"): without webhooks AgentDeck asks GitHub every minute
 whether the checks of the open pull requests are done. With webhooks GitHub reports that itself,

@@ -6,6 +6,7 @@
 // env dumps, config files or tokens, and the timeline is shown in the UI.
 import { createHash } from 'node:crypto'
 import { all, db, get, run } from './db.ts'
+import { currentLang, t, withLang } from './i18n.ts'
 import { gitIn } from './sandbox.ts'
 import { secretIn } from './secretScan.ts'
 
@@ -36,7 +37,7 @@ const WINDOW_STEP = 6_000
 const PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g
 const MAX_HITS_PER_LINE = 50
 
-const marker = (rule: string) => `[SECRET: ${rule}]`
+const marker = (rule: string) => t('[GEHEIM: {rule}]', { rule })
 
 /** Values in one line the scanner calls secrets. Long lines in overlapping windows. */
 function secretsInLine(line: string): { rule: string; value: string }[] {
@@ -65,7 +66,7 @@ function secretsInLine(line: string): { rule: string; value: string }[] {
  */
 export function redact(text: string, known: string[] = []): string {
   let out = text
-  for (const value of known) if (value && out.includes(value)) out = out.split(value).join(marker('run token'))
+  for (const value of known) if (value && out.includes(value)) out = out.split(value).join(marker(t('Token des Laufs')))
   out = out.replace(PRIVATE_KEY, marker('private-key'))
   const lines = out.split('\n')
   let changed = false
@@ -149,6 +150,8 @@ export function recordRun(runId: number, known: string[] = []): Recorder {
   let timer: NodeJS.Timeout | undefined
   let closed = false
   let overCap = false
+  // Events arrive from the CLI's callbacks; what is written about them keeps the run's language.
+  const lang = currentLang()
 
   const flush = () => {
     if (timer) clearTimeout(timer)
@@ -170,21 +173,26 @@ export function recordRun(runId: number, known: string[] = []): Recorder {
     else if (!timer) timer = setTimeout(flush, FLUSH_MS).unref()
   }
 
+  const record = (event: TraceEvent) => {
+    if (closed || !RUN_EVENT_KINDS.includes(event.kind)) return
+    const final = event.kind === 'changes' || event.kind === 'end'
+    if (overCap && !final) return
+    const cap = event.kind === 'prompt' ? PROMPT_CAP : EVENT_CAP
+    const { payload, size } = clean(String(event.text ?? ''), cap, known)
+    const name = redact(String(event.name ?? '').slice(0, 200), known)
+    if (!final && bytes + payload.length + name.length > RUN_CAP) {
+      overCap = true
+      const cut = t('Aufzeichnung gekürzt: Der Lauf hat mehr als {mb} MB erzeugt, weitere Schritte fehlen.', {
+        mb: RUN_CAP / 1024 / 1024,
+      })
+      push('error', '', cut, 0)
+      return
+    }
+    push(event.kind, name, payload, size)
+  }
+
   const recorder = {
-    add(event: TraceEvent) {
-      if (closed || !RUN_EVENT_KINDS.includes(event.kind)) return
-      const final = event.kind === 'changes' || event.kind === 'end'
-      if (overCap && !final) return
-      const cap = event.kind === 'prompt' ? PROMPT_CAP : EVENT_CAP
-      const { payload, size } = clean(String(event.text ?? ''), cap, known)
-      const name = redact(String(event.name ?? '').slice(0, 200), known)
-      if (!final && bytes + payload.length + name.length > RUN_CAP) {
-        overCap = true
-        push('error', '', `Recording cut: the run produced more than ${RUN_CAP / 1024 / 1024} MB, further steps are missing.`, 0)
-        return
-      }
-      push(event.kind, name, payload, size)
-    },
+    add: (event: TraceEvent) => withLang(lang, () => record(event)),
     flush,
     close() {
       if (closed) return
@@ -233,12 +241,12 @@ export async function runChanges(cwd: string, base: string): Promise<string> {
     .map((line) => ` ${line.slice(3)}`)
     .slice(0, 50)
     .join('\n')
-  if (!commits && !files && !untracked) return `No changes (HEAD ${head.slice(0, 10)}).`
+  if (!commits && !files && !untracked) return t('Keine Änderungen (HEAD {head}).', { head: head.slice(0, 10) })
   return [
     `HEAD ${base.slice(0, 10)} → ${head.slice(0, 10)}`,
     commits && `Commits:\n${commits}`,
-    files && `Files since the run started (incl. uncommitted changes):\n${files}`,
-    untracked && `New, untracked files:\n${untracked}`,
+    files && `${t('Dateien seit Laufbeginn (inkl. nicht committeter Änderungen):')}\n${files}`,
+    untracked && `${t('Neue, nicht versionierte Dateien:')}\n${untracked}`,
   ]
     .filter(Boolean)
     .join('\n\n')

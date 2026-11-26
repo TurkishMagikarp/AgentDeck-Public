@@ -42,7 +42,7 @@ describe('check command at landing', () => {
     const repo = repoWithIssueBranch()
     const outcome = await landIssue(projectFor(repo, 'test -f feature.txt', 'landing'), issue)
     assert.equal(outcome.status, 'done')
-    assert.match(outcome.note, /green/)
+    assert.match(outcome.note, /grün/)
     assert.equal(git(repo, 'show', 'HEAD:feature.txt'), 'feature')
   })
 

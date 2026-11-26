@@ -1,5 +1,6 @@
 import { createResource, createSignal, For, onCleanup, Show } from 'solid-js'
 import { api } from './api'
+import { t } from './i18n'
 import { board, fail, openIssue } from './store'
 import type { ArenaEntry, ArenaView, Issue } from './types'
 import { Modal } from './ui'
@@ -9,18 +10,18 @@ const MAX_ENTRIES = 4
 const REFRESH_MS = 4000
 
 const STATE_LABEL: Record<ArenaEntry['state'], string> = {
-  working: 'working',
-  'handed-in': 'handed in',
-  out: 'dropped out',
-  winner: 'winner',
-  lost: 'not picked',
+  working: 'arbeitet',
+  'handed-in': 'abgegeben',
+  out: 'ausgeschieden',
+  winner: 'Gewinner',
+  lost: 'nicht gewählt',
 }
 
 const PHASE_TEXT: Record<ArenaView['phase'], string> = {
-  waiting: 'The entries are in progress. Once none is still at work, the jury decides.',
-  judge: 'All entries are handed in. The jury compares them without knowing who wrote them.',
-  empty: 'No entry was handed in.',
-  closed: 'Decided. Only the winner goes on to review and landing.',
+  waiting: 'Die Beiträge sind in Arbeit. Sobald keiner mehr arbeitet, entscheidet die Jury.',
+  judge: 'Alle Beiträge sind abgegeben. Die Jury vergleicht sie, ohne zu wissen, von wem sie stammen.',
+  empty: 'Kein Beitrag wurde abgegeben.',
+  closed: 'Entschieden. Nur der Gewinner geht in Prüfung und Landung.',
 }
 
 /**
@@ -60,11 +61,11 @@ export function Arena(props: { issue: Issue; version: number }) {
               <h3>Arena</h3>
               <Show when={!isParent()}>
                 <button class="link" onClick={() => openIssue(view().parent.id).catch(fail)}>
-                  Entry for {board.project?.key}-{view().parent.number}
+                  {t('Beitrag zu {ref}', { ref: `${board.project?.key}-${view().parent.number}` })}
                 </button>
               </Show>
             </div>
-            <p class="muted">{view().winnerId < 0 ? 'Ended without a result.' : PHASE_TEXT[view().phase]}</p>
+            <p class="muted">{view().winnerId < 0 ? t('Ohne Ergebnis beendet.') : t(PHASE_TEXT[view().phase])}</p>
             <ul class="arena-entries">
               <For each={view().entries}>
                 {(entry) => (
@@ -75,17 +76,17 @@ export function Arena(props: { issue: Issue; version: number }) {
                         {board.project?.key}-{entry.number}
                       </span>
                     </button>
-                    <span class="arena-state">{STATE_LABEL[entry.state]}</span>
+                    <span class="arena-state">{t(STATE_LABEL[entry.state])}</span>
                     <span class="muted arena-spent">
                       {entry.minutes} min · {entry.costUsd.toFixed(2)} $
                     </span>
                     <Show when={view().phase === 'judge' && entry.state === 'handed-in'}>
                       <button
                         class="ghost"
-                        title="Decides the arena yourself instead of waiting for the jury"
+                        title={t('Entscheidet die Arena selbst, statt auf die Jury zu warten')}
                         onClick={() => pick(entry)}
                       >
-                        Pick this one
+                        {t('Diesen wählen')}
                       </button>
                     </Show>
                   </li>
@@ -101,12 +102,11 @@ export function Arena(props: { issue: Issue; version: number }) {
           <div class="issue-section-head">
             <h3>Arena</h3>
             <button class="ghost" onClick={() => setChoosing(true)}>
-              Start arena
+              {t('Arena starten')}
             </button>
           </div>
           <p class="muted">
-            Several agents solve this issue in parallel, each on its own branch. A jury picks the best
-            result; only that one goes on to review and landing.
+            {t('Mehrere Agenten lösen dieses Issue parallel, jeder auf eigenem Branch. Eine Jury wählt das beste Ergebnis; nur das geht in Prüfung und Landung.')}
           </p>
         </section>
       </Show>
@@ -136,11 +136,10 @@ function StartArena(props: { issueId: number; onClose: () => void; onStarted: ()
     api.post(`/issues/${props.issueId}/arena`, { agents: chosen() }).then(props.onStarted).catch(fail)
 
   return (
-    <Modal title="Start arena" onClose={props.onClose}>
+    <Modal title={t('Arena starten')} onClose={props.onClose}>
       <div class="form">
         <p class="muted">
-          Pick {MIN_ENTRIES} to {MAX_ENTRIES} agents. Each gets the same task and works on its own.
-          Costs accrue per entry.
+          {t('Wähle {min} bis {max} Agenten. Jeder bekommt dieselbe Aufgabe und arbeitet für sich. Die Kosten fallen pro Beitrag an.', { min: MIN_ENTRIES, max: MAX_ENTRIES })}
         </p>
         <div class="arena-choice">
           <For each={agents()}>
@@ -160,10 +159,10 @@ function StartArena(props: { issueId: number; onClose: () => void; onStarted: ()
         </div>
         <footer>
           <button class="ghost" onClick={props.onClose}>
-            Cancel
+            {t('Abbrechen')}
           </button>
           <button class="primary" disabled={!valid()} onClick={start}>
-            {valid() ? `Start ${chosen().length} agents` : 'Pick agents'}
+            {valid() ? t('{n} Agenten starten', { n: chosen().length }) : t('Agenten wählen')}
           </button>
         </footer>
       </div>

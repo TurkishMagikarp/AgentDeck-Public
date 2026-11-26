@@ -2,6 +2,7 @@
 // Secret values (API keys, tokens) never reach this table: callers pass only whether a secret
 // changed, and `scrub` drops anything under a secret-looking name in case a caller forgets.
 import { all, run } from './db.ts'
+import { instanceLang, tIn } from './i18n.ts'
 
 const DAY = 86_400_000
 export const AUDIT_DAYS = 180
@@ -52,6 +53,7 @@ export function pruneAudit(now = Date.now()) {
 /**
  * The setting paths that differ between two settings objects. Numbers and booleans keep their old
  * and new value; text only counts as changed, because a command line or a path may carry a secret.
+ * The word is stored with the entry, so it is written in the language of the instance.
  */
 export function settingsChanges(before: any, after: any) {
   const changes: Record<string, unknown> = {}
@@ -64,7 +66,7 @@ export function settingsChanges(before: any, after: any) {
       return
     }
     const shown = (v: any) => typeof v === 'number' || typeof v === 'boolean'
-    changes[path] = shown(a) && shown(b) ? { from: a, to: b } : 'changed'
+    changes[path] = shown(a) && shown(b) ? { from: a, to: b } : tIn(instanceLang(), 'geändert')
   }
   walk(before ?? {}, after ?? {}, '')
   return changes

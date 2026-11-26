@@ -4,6 +4,7 @@ import { ModelSelect } from './ModelSelect'
 import { board, providerLabel, saveSettings } from './store'
 import { TIER_LABEL, TIERS, type Budget } from './types'
 import { formatTokens, Select, Toggle } from './ui'
+import { locale, t } from './i18n'
 
 type ProviderUsage = {
   provider: string
@@ -39,22 +40,26 @@ type AgentUsage = {
 type UsageData = { providers: ProviderUsage[]; byAgent: AgentUsage[] }
 
 const WINDOWS = [
-  ['5h', '5 hours'],
-  ['day', 'Day'],
-  ['week', 'Week'],
-  ['month', 'Month'],
+  ['5h', t('5 Stunden')],
+  ['day', 'Tag'],
+  ['week', t('Woche')],
+  ['month', 'Monat'],
 ] as const
 
 const UNITS = [
   ['tokens', 'Tokens'],
-  ['usd', 'US dollars'],
-  ['runs', 'Runs'],
+  ['usd', 'US-Dollar'],
+  ['runs', 'Läufe'],
 ] as const
 
 const SCOPES = [
-  ['global', 'All projects'],
-  ['project', 'This project only'],
+  ['global', 'alle Projekte'],
+  ['project', 'nur dieses Projekt'],
 ] as const
+
+/** Option labels stay German in the constants; they are translated where the select renders. */
+const tr = <T extends string>(options: readonly (readonly [T, string])[]) =>
+  options.map(([value, label]) => [value, t(label)] as const)
 
 export function Usage() {
   const projectId = () => board.project!.id
@@ -80,8 +85,7 @@ export function Usage() {
         <div>
           <h2>Usage &amp; Routing</h2>
           <p class="muted">
-            When a provider drops below its threshold, the agent falls back to the next one in the order. When
-            none is left above it, the agents pause.
+            {t('Fällt ein Anbieter unter seine Schwelle, weicht der Agent auf den nächsten in der Reihenfolge aus. Liegt keiner mehr darüber, pausieren die Agenten.')}
           </p>
         </div>
       </div>
@@ -94,18 +98,15 @@ export function Usage() {
 
       <section class="section">
         <div class="section-head">
-          <h3>Pace the quota</h3>
+          <h3>{t('Kontingent einteilen')}</h3>
           <Toggle
-            label="Plan by subscription window"
+            label={t('Nach Abo-Fenster planen')}
             checked={board.project!.settings.quotaPacing}
             onChange={(on) => saveSettings((s) => void (s.quotaPacing = on))}
           />
         </div>
         <p class="muted">
-          There is no saving: agents run at full speed until the provider's stop threshold is reached. When a
-          subscription window resets within an hour with more than 30 % left, large issues go first. An issue
-          is large when its previous runs used more than twice as much as a typical run in the project.
-
+          {t('Gespart wird nicht: Agenten laufen voll, bis die Stopp-Schwelle des Anbieters erreicht ist. Setzt sich ein Abo-Fenster innerhalb einer Stunde mit mehr als 30 % Rest zurück, kommen große Issues zuerst dran. Groß ist ein Issue, dessen bisherige Läufe mehr als doppelt so viel verbraucht haben wie ein üblicher Lauf im Projekt.')}
         </p>
       </section>
 
@@ -115,21 +116,21 @@ export function Usage() {
 
       <RtkSavings />
 
-      <h3>Usage per agent</h3>
+      <h3>{t('Verbrauch pro Agent')}</h3>
       <table>
         <thead>
           <tr>
             <th>Agent</th>
-            <th>Provider</th>
-            <th class="num">Runs</th>
-            <th class="num">Failed</th>
-            <th class="num" title="Input that did not come from the cache, plus output">
-              New tokens
+            <th>{t('Anbieter')}</th>
+            <th class="num">{t('Läufe')}</th>
+            <th class="num">{t('Fehlgeschlagen')}</th>
+            <th class="num" title={t('Eingabe, die nicht aus dem Cache kam, plus Ausgabe')}>
+              {t('Tokens neu')}
             </th>
-            <th class="num" title="Resent context, about a tenth of the price">
-              From cache
+            <th class="num" title={t('Erneut mitgeschickter Kontext, etwa ein Zehntel des Preises')}>
+              {t('aus dem Cache')}
             </th>
-            <th class="num">Cost</th>
+            <th class="num">{t('Kosten')}</th>
           </tr>
         </thead>
         <tbody>
@@ -138,7 +139,7 @@ export function Usage() {
             fallback={
               <tr>
                 <td colSpan={7} class="muted">
-                  No runs yet.
+                  {t('Noch keine Läufe.')}
                 </td>
               </tr>
             }
@@ -165,15 +166,15 @@ export function Usage() {
 function windowLabel(window: string) {
   const model = window.match(/^(?:seven_day|five_hour)_(.+)$/)?.[1]
   const base = window.startsWith('five_hour')
-    ? '5 hours'
+    ? t('5 Stunden')
     : window.startsWith('seven_day')
-      ? 'Week'
+      ? t('Woche')
       : window
   return model ? `${base} ${model[0].toUpperCase()}${model.slice(1)}` : base
 }
 
 const restEnd = (at: number) =>
-  new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
+  new Date(at).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' })
 
 function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
   const usage = () => props.usage
@@ -188,8 +189,8 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
 
   const usedText = () => {
     if (budget().unit === 'usd') return `$${usage().cost.toFixed(2)}`
-    if (budget().unit === 'runs') return `${usage().used} runs`
-    return `${formatTokens(usage().tokens)} tokens`
+    if (budget().unit === 'runs') return usage().used === 1 ? t('1 Lauf') : t('{n} Läufe', { n: usage().used })
+    return t('{n} Tokens', { n: formatTokens(usage().tokens) })
   }
 
   return (
@@ -197,44 +198,45 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
       <div class="tile-head">
         <strong>{usage().label}</strong>
         <span class="badge" classList={{ bad: !usage().available }}>
-          {usage().unsupported ? 'Disabled' : !usage().ready ? 'Not set up' : usage().available ? 'Available' : 'Paused'}
+          {usage().unsupported ? t('deaktiviert') : !usage().ready ? t('nicht eingerichtet') : usage().available ? t('verfügbar') : t('pausiert')}
         </span>
       </div>
 
       <Show when={knownLeft()}>
-      <div class="meter" title={`${Math.round(usage().left)}% left`}>
+        <div class="meter" title={t('{n} % übrig', { n: Math.round(usage().left) })}>
           <div classList={{ low: !usage().available }} style={{ width: `${usage().left}%` }} />
           <span class="threshold" style={{ left: `${budget().stopAtPct}%` }} />
         </div>
       </Show>
       <p>
         <Show when={knownLeft()}>
-          <strong>{Math.round(usage().left)}%</strong> left{usage().quotaLeft == null ? ' in your own budget' : ''} ·{' '}
+          <strong>{Math.round(usage().left)} %</strong> {t('übrig')}
+          {usage().quotaLeft == null ? ` ${t('im eigenen Budget')}` : ''} ·{' '}
         </Show>
-        Used {usedText()}
+        {t('Verbrauch')} {usedText()}
       </p>
       <Show when={usage().mode === 'subscription' && usage().quotaLeft == null}>
-        <p class="muted">Remaining subscription quota unknown.</p>
+        <p class="muted">{t('Abo-Restkontingent unbekannt.')}</p>
       </Show>
       <Show when={usage().resting}>
         {(rest) => (
           <p class="resting">
-            {rest().reason}, paused until {restEnd(rest().until)}.{' '}
+            {t('{reason}, pausiert bis {time}.', { reason: rest().reason, time: restEnd(rest().until) })}{' '}
             <button
               class="link"
               onClick={() => api.post(`/providers/${usage().provider}/wake`).then(props.onWake)}
             >
-              Release now
+              {t('Jetzt freigeben')}
             </button>
           </p>
         )}
       </Show>
       <Show when={usage().quotas.length}>
         <p class="muted">
-          Subscription usage:{' '}
+          {t('Abo-Auslastung:')}{' '}
           {usage()
-            .quotas.map((q) => `${windowLabel(q.window)} ${Math.round(q.utilization * 100)}%${
-              q.stale ? (q.active ? ' (last known value)' : ' (outdated, does not count)') : ''
+            .quotas.map((q) => `${windowLabel(q.window)} ${Math.round(q.utilization * 100)} %${
+              q.stale ? (q.active ? ` (${t('letzter bekannter Wert')})` : ` (${t('veraltet, zählt nicht')})`) : ''
             }`)
             .join(' · ')}
         </p>
@@ -244,10 +246,10 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
         {(resets) => (
           <div class="resets">
             <span class="muted">
-              Limit resets available: <strong>{resets().available}</strong>
+              {t('Limit-Resets verfügbar:')} <strong>{resets().available}</strong>
             </span>
             <Toggle
-              label="Redeem automatically"
+              label={t('Automatisch einlösen')}
               checked={resets().enabled}
               onChange={(on) =>
                 api.put(`/providers/${usage().provider}/resets`, { enabled: on }).then(props.onWake)
@@ -259,29 +261,29 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
 
       <div class="budget">
         <label>
-          Budget
+          {t('Budget')}
           <input
             type="number"
             min="0"
             value={budget().limit}
             onChange={(e) => setBudget('limit', Number(e.currentTarget.value))}
-            title="0 = no budget of its own, only the subscription quota counts"
+            title={t('0 = kein eigenes Budget, nur die Abo-Auslastung zählt')}
           />
         </label>
         <label>
-          Unit
-          <Select value={budget().unit} options={UNITS} onChange={(unit) => setBudget('unit', unit)} />
+          {t('Einheit')}
+          <Select value={budget().unit} options={tr(UNITS)} onChange={(unit) => setBudget('unit', unit)} />
         </label>
         <label>
-          Period
+          {t('Zeitraum')}
           <Select
             value={budget().window}
-            options={WINDOWS}
+            options={tr(WINDOWS)}
             onChange={(window) => setBudget('window', window)}
           />
         </label>
         <label>
-          Stop at % left
+          {t('Stopp bei % übrig')}
           <input
             type="number"
             min="0"
@@ -291,8 +293,8 @@ function ProviderCard(props: { usage: ProviderUsage; onWake: () => void }) {
           />
         </label>
         <label>
-          Counts
-          <Select value={budget().scope} options={SCOPES} onChange={(scope) => setBudget('scope', scope)} />
+          {t('Zählt')}
+          <Select value={budget().scope} options={tr(SCOPES)} onChange={(scope) => setBudget('scope', scope)} />
         </label>
       </div>
     </article>
@@ -320,24 +322,26 @@ function RtkSavings() {
     <Show when={report()?.installed}>
       <section class="section">
         <div class="section-head">
-          <h3>RTK savings</h3>
+          <h3>{t('Ersparnis durch RTK')}</h3>
           <span class="muted">
-            {formatTokens(report()!.total.saved)} tokens saved ({share(report()!.total)}%) across{' '}
-            {report()!.total.commands} commands
+            {t('{tokens} Tokens gespart ({pct} %) bei {commands} Befehlen', {
+              tokens: formatTokens(report()!.total.saved),
+              pct: share(report()!.total),
+              commands: report()!.total.commands,
+            })}
           </span>
         </div>
         <p class="muted">
-          RTK shortens shell command output before the model reads it. Counting starts with each agent's first
-          run in this project.
+          {t('RTK kürzt die Ausgabe von Shell-Befehlen, bevor das Modell sie liest. Gezählt wird ab dem ersten Lauf jedes Agenten in diesem Projekt.')}
         </p>
         <table>
           <thead>
             <tr>
               <th>Agent</th>
-              <th class="num">Commands</th>
-              <th class="num">Without RTK</th>
-              <th class="num">With RTK</th>
-              <th class="num">Saved</th>
+              <th class="num">{t('Befehle')}</th>
+              <th class="num">{t('ohne RTK')}</th>
+              <th class="num">{t('mit RTK')}</th>
+              <th class="num">{t('gespart')}</th>
             </tr>
           </thead>
           <tbody>
@@ -346,7 +350,7 @@ function RtkSavings() {
               fallback={
                 <tr>
                   <td colSpan={5} class="muted">
-                    No commands have gone through RTK yet.
+                    {t('Noch keine Befehle über RTK gelaufen.')}
                   </td>
                 </tr>
               }
@@ -358,7 +362,7 @@ function RtkSavings() {
                   <td class="num">{formatTokens(row.input)}</td>
                   <td class="num">{formatTokens(row.output)}</td>
                   <td class="num">
-                    {formatTokens(row.saved)} ({share(row)}%)
+                    {formatTokens(row.saved)} ({share(row)} %)
                   </td>
                 </tr>
               )}
@@ -371,7 +375,7 @@ function RtkSavings() {
 }
 
 /**
- * Which model of each provider counts as strong, medium or light. Fallback and "Switch provider"
+ * Which model of each provider counts as strong, medium or light. Fallback and "Anbieter wechseln"
  * use it to give an agent the same kind of model on the other provider.
  */
 function ModelTiersTable() {
@@ -380,18 +384,17 @@ function ModelTiersTable() {
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Model tiers</h3>
+        <h3>{t('Modell-Stufen')}</h3>
       </div>
       <p class="muted">
-        On a fallback and when switching providers, every agent gets the model of its tier at the new
-        provider. Empty means: the provider's default.
+        {t('Beim Ausweichen und beim Anbieterwechsel bekommt jeder Agent das Modell seiner Stufe beim neuen Anbieter. Leer heißt: Standard des Anbieters.')}
       </p>
       <div class="table-scroll">
         <table class="tiers">
           <thead>
             <tr>
-              <th>Provider</th>
-              <For each={TIERS}>{(tier) => <th>{TIER_LABEL[tier]}</th>}</For>
+              <th>{t('Anbieter')}</th>
+              <For each={TIERS}>{(tier) => <th>{t(TIER_LABEL[tier])}</th>}</For>
             </tr>
           </thead>
           <tbody>
@@ -436,16 +439,15 @@ function FallbackOrder() {
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Fallback order</h3>
+        <h3>{t('Anbieter-Reihenfolge')}</h3>
         <Toggle
-          label="Allow fallback"
+          label={t('Overrides dürfen ausweichen')}
           checked={settings().fallbackEnabled}
           onChange={(on) => saveSettings((s) => void (s.fallbackEnabled = on))}
         />
       </div>
       <p class="muted">
-        Without an agent override the search starts at the top here, for reviews too. The stop value
-        of each provider applies. The model follows the agent's model tier.
+        {t('Ohne Agenten-Override startet die Suche hier ganz oben, auch bei Prüfungen. Es gilt der Stoppwert des jeweiligen Anbieters. Das Modell folgt der Modell-Stufe des Agenten.')}
       </p>
       <ol class="order">
         <For each={settings().fallback}>
@@ -457,7 +459,7 @@ function FallbackOrder() {
                 class="ghost"
                 onClick={() => move(index(), -1)}
                 disabled={index() === 0}
-                aria-label="Move up"
+                aria-label={t('Nach oben')}
               >
                 ↑
               </button>
@@ -465,7 +467,7 @@ function FallbackOrder() {
                 class="ghost"
                 onClick={() => move(index(), 1)}
                 disabled={index() === settings().fallback.length - 1}
-                aria-label="Move down"
+                aria-label={t('Nach unten')}
               >
                 ↓
               </button>
@@ -475,18 +477,18 @@ function FallbackOrder() {
       </ol>
       <div class="budget">
         <label>
-          Reserve for own agents, % left
+          {t('Reserve beim Ausweichen eines Overrides, % übrig')}
           <input
             type="number"
             min="0"
             max="95"
             value={settings().fallbackReservePct}
             onChange={(e) => saveSettings((s) => void (s.fallbackReservePct = Number(e.currentTarget.value)))}
-            title="A fallback provider takes over other agents' runs only while it has more than this left"
+            title={t('Gilt nur, wenn ein ausdrücklich zugewiesener Anbieter nicht verfügbar ist')}
           />
         </label>
         <Toggle
-          label="Let reviews fall back too"
+          label={t('Auch Prüfungen mit Override dürfen ausweichen')}
           checked={settings().fallbackReviews}
           onChange={(on) => saveSettings((s) => void (s.fallbackReviews = on))}
         />

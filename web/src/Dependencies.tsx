@@ -5,6 +5,7 @@ import { Icon } from './icons'
 import { board, fail, openIssue, saveSettings, weights } from './store'
 import type { Issue } from './types'
 import { Toggle } from './ui'
+import { t } from './i18n'
 
 const WIDTH = 230
 const HEIGHT = 64
@@ -15,10 +16,10 @@ const PAD = 16
 const STATUS_LABEL: Record<string, string> = {
   backlog: 'Backlog',
   todo: 'To Do',
-  in_progress: 'In progress',
+  in_progress: 'In Arbeit',
   review: 'Review',
-  blocked: 'Waiting',
-  done: 'Done',
+  blocked: 'Wartet',
+  done: 'Fertig',
 }
 
 type Node = { issue: Issue; layer: number; x: number; y: number }
@@ -139,62 +140,67 @@ export function Dependencies() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Dependencies</h2>
+          <h2>{t('Abhängigkeiten')}</h2>
           <p class="muted">
-            Blockers on the left, what waits on them on the right. Whoever holds up others starts earlier: it
-            gets the highest priority of the waiting issues, one level more from {BOOST_FROM} held up, two{' '}
-            from {BOOST_FROM * 2}.
+            {t(
+              'Links die Blocker, rechts was auf sie wartet. Wer andere aufhält, startet früher: Er bekommt die höchste Priorität der wartenden Issues, ab {a} aufgehaltenen eine Stufe mehr, ab {b} zwei.',
+              { a: BOOST_FROM, b: BOOST_FROM * 2 },
+            )}
           </p>
         </div>
       </div>
 
       <Show when={layout().nodes.length}>
-        <ul class="dependency-summary" aria-label="Overview of the dependencies">
+        <ul class="dependency-summary" aria-label={t('Überblick über die Abhängigkeiten')}>
           <li classList={{ zero: String(layout().nodes.length) === '0' }}>
             <strong>{layout().nodes.length}</strong>
-            <span>issues in the graph</span>
+            <span>{t('Issues im Graph')}</span>
           </li>
           <li classList={{ zero: String(layout().nodes.filter((node) => node.layer === 0 && node.issue.status !== 'done').length) === '0' }}>
             <strong>{layout().nodes.filter((node) => node.layer === 0 && node.issue.status !== 'done').length}</strong>
-            <span>blockers without a predecessor: this is where it starts</span>
+            <span>{t('Blocker ohne Vorgänger: hier geht es los')}</span>
           </li>
           <li classList={{ zero: String(layout().nodes.filter((node) => node.layer > 0).length) === '0' }}>
             <strong>{layout().nodes.filter((node) => node.layer > 0).length}</strong>
-            <span>wait for others</span>
+            <span>{t('warten auf andere')}</span>
           </li>
           <li classList={{ zero: String(Math.max(...layout().nodes.map((node) => node.layer)) + 1) === '0' }}>
             <strong>{Math.max(...layout().nodes.map((node) => node.layer)) + 1}</strong>
-            <span>levels: the longest chain</span>
+            <span>{t('Stufen: die längste Kette')}</span>
           </li>
         </ul>
       </Show>
 
       <div class="dependency-options">
         <Toggle
-          label="Start blockers first"
+          label={t('Blocker zuerst starten')}
           checked={board.project!.settings.blockerBoost}
           onChange={(on) => saveSettings((s) => void (s.blockerBoost = on))?.catch(fail)}
         />
-        <Toggle label="Show finished blockers" checked={showDone()} onChange={setShowDone} />
+        <Toggle label={t('Erledigte Blocker zeigen')} checked={showDone()} onChange={setShowDone} />
       </div>
 
       <Show when={loops().length}>
         <p class="dependency-loop">
-          Cycle found:{' '}
+          {t('Kreis gefunden:')}{' '}
           {loops()
             .map((loop) => loop.map((number) => `${board.project!.key}-${number}`).join(' → '))
             .join('; ')}
           .{' '}
           {board.project!.settings.autonomous
-            ? 'AgentDeck resolves it: first the deputy decides which dependency to drop, otherwise the one on the newest issue is dropped.'
-            : 'These issues wait on each other and never start on their own. Remove one of the dependencies in the issue.'}
+            ? t(
+                'AgentDeck löst ihn auf: Erst entscheidet der Deputy, welche Abhängigkeit wegfällt, sonst fällt die auf das neueste Issue weg.',
+              )
+            : t(
+                'Diese Issues warten aufeinander und starten nie von selbst. Entferne eine der Abhängigkeiten im Issue.',
+              )}
         </p>
       </Show>
 
       <Show
         when={layout().nodes.length}
         fallback={
-          <p class="muted">No open dependencies. They are created through "Waiting on" in the issue.</p>
+          <p class="muted">{t('Keine offenen Abhängigkeiten. Sie entstehen über „Wartet auf“ im Issue.')}</p>
         }
       >
         <div class="dependency-graph">
@@ -256,16 +262,16 @@ export function Dependencies() {
                       <span class="mono">
                         {board.project!.key}-{node.issue.number}
                       </span>
-                      <span class="muted">{STATUS_LABEL[node.issue.status]}</span>
+                      <span class="muted">{t(STATUS_LABEL[node.issue.status])}</span>
                       <Show when={weight()?.blocks}>
-                        <span class="holds" title={`Holds up ${weight()!.blocks} issues`}>
-                          holds up {weight()!.blocks}
+                        <span class="holds" title={t('Hält {n} Issues auf', { n: weight()!.blocks })}>
+                          {t('hält {n} auf', { n: weight()!.blocks })}
                         </span>
                       </Show>
                       <Show when={raised()}>
-                        <span class="raised" title="Priority raised because others are waiting on it">
+                        <span class="raised" title={t('Priorität angehoben, weil andere darauf warten')}>
                           <Icon name="arrowUp" size={11} />
-                          {PRIORITIES[weight()!.effective]}
+                          {t(PRIORITIES[weight()!.effective])}
                         </span>
                       </Show>
                     </span>

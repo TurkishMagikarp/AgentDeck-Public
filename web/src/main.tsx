@@ -6,6 +6,7 @@ import '@fontsource-variable/jetbrains-mono'
 import './styles.css'
 import './mission.css'
 import './polish.css'
+import './visibility.css'
 
 render(() => <App />, document.getElementById('app')!)
 keepTicksReadable()

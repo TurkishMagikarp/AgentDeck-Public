@@ -2,6 +2,8 @@
 // Agents record lessons with the board command "learn", the self-healing records missing tools,
 // and the owner can add or delete them. Every run of the project reads the newest ones.
 import { all, get, run } from './db.ts'
+import { t } from './i18n.ts'
+import { prompts } from './prompts/index.ts'
 
 /** Only the newest lessons go into a prompt; older ones stay visible in the settings. */
 const IN_PROMPT = 15
@@ -16,7 +18,7 @@ export function listLessons(projectId: number) {
 
 export function addLesson(projectId: number, body: string, source: string) {
   const text = body.trim().replace(/\s+/g, ' ').slice(0, MAX_LENGTH)
-  if (!text) throw new Error('Lesson is empty')
+  if (!text) throw new Error(t('Notiz leer'))
   // The same lesson twice only costs prompt space.
   const known = get('SELECT id FROM lessons WHERE project_id=? AND lower(body)=lower(?)', projectId, text)
   if (known) return known.id as number
@@ -41,7 +43,7 @@ export function lessonsForPrompt(projectId: number) {
     IN_PROMPT,
   )
   if (!lessons.length) return ''
-  return `## What this project has learned\n${lessons
+  return `${prompts().lessons}\n${lessons
     .reverse()
     .map((lesson) => `- ${lesson.body}`)
     .join('\n')}`

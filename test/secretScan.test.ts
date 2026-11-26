@@ -120,7 +120,7 @@ describe('gates', () => {
     commit('.env', `GITHUB_TOKEN=${KEYS.github}\n`)
     const result = await precheck({ cwd: dir, branch: 'agentdeck/T-1', base: 'main', command: '', timeoutMin: 1, report: null })
     assert.equal(result.ok, false)
-    assert.match(result.note, /GitHub token in `\.env`/)
+    assert.match(result.note, /GitHub-Token in `\.env`/)
     assert.ok(!result.note.includes(KEYS.github))
   })
 
@@ -129,7 +129,7 @@ describe('gates', () => {
     commit('a.txt', 'hello\n')
     const result = await precheck({ cwd: dir, branch: 'agentdeck/T-1', base: 'main', command: '', timeoutMin: 1, report: null })
     assert.equal(result.ok, true)
-    assert.match(result.note, /no secrets/)
+    assert.match(result.note, /keine Geheimnisse/)
   })
 
   test('the landing stops for the owner and leaves the base as it was', async () => {
@@ -142,7 +142,7 @@ describe('gates', () => {
     const outcome = await landIssue({ id: 9, key: 'T', repo_path: dir, settings }, { id: 91, number: 1, title: 'x' })
     assert.equal(outcome.status, 'blocked')
     assert.equal(outcome.needsOwner, true)
-    assert.match(outcome.note, /private key/)
+    assert.match(outcome.note, /privater Schlüssel/)
     assert.equal(git('rev-parse', 'main'), before)
   })
 })

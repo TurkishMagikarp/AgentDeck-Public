@@ -51,7 +51,7 @@ test('settings changes keep numbers and switches, text only as changed', () => {
   assert.deepEqual(settingsChanges(before, after), {
     maxConcurrent: { from: 3, to: 5 },
     autonomous: { from: false, to: true },
-    'precheck.command': 'changed',
+    'precheck.command': 'geändert',
   })
   assert.deepEqual(settingsChanges(before, mergeSettings(before)), {})
 })

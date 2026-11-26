@@ -2,6 +2,7 @@ import { createResource, createSignal, For, Show } from 'solid-js'
 import { createStore } from 'solid-js/store'
 import { api } from './api'
 import { fleet } from './fleet'
+import { t } from './i18n'
 import { ModelSelect } from './ModelSelect'
 import { board, fail, liveLine, providerLabel, providers } from './store'
 import { TIER_LABEL, type Agent, type Tier } from './types'
@@ -10,12 +11,12 @@ import { Field, initials, Modal, onActivateKey, Select, Toggle } from './ui'
 type Draft = Omit<Agent, 'id'> & { id?: number }
 
 const EFFORTS: [string, string][] = [
-  ['', 'Default'],
-  ['low', 'Low'],
-  ['medium', 'Medium'],
-  ['high', 'High'],
-  ['xhigh', 'Very high'],
-  ['max', 'Max'],
+  ['', 'Standard'],
+  ['low', 'niedrig'],
+  ['medium', 'mittel'],
+  ['high', 'hoch'],
+  ['xhigh', 'sehr hoch'],
+  ['max', 'maximal'],
 ]
 
 const newAgent = (): Draft => ({
@@ -40,15 +41,15 @@ export function Agents() {
     <div class="page">
       <div class="page-head">
         <div>
-          <h2>Agents</h2>
-          <p class="muted">Who works in this project, with which provider, and how many in parallel.</p>
+          <h2>{t('Agenten')}</h2>
+          <p class="muted">{t('Wer in diesem Projekt arbeitet, mit welchem Anbieter und wie oft parallel.')}</p>
         </div>
         <div class="row">
           <Show when={board.agents.length}>
-            <button onClick={() => setSwitching(true)}>Switch provider</button>
+            <button onClick={() => setSwitching(true)}>{t('Anbieter wechseln')}</button>
           </Show>
           <button class="primary" onClick={() => setEditing(newAgent())}>
-          Add agent
+            {t('Agent hinzufügen')}
           </button>
         </div>
       </div>
@@ -60,7 +61,7 @@ export function Agents() {
       <div class="grid">
         <For
           each={board.agents}
-          fallback={<p class="muted">No agents yet. Without agents the board stands still.</p>}
+          fallback={<p class="muted">{t('Noch keine Agenten. Ohne Agenten bleibt das Board stehen.')}</p>}
         >
           {(agent) => (
             <AgentCard
@@ -74,7 +75,7 @@ export function Agents() {
         <Show when={board.agents.length}>
           <button class="tile add-tile" onClick={() => setEditing(newAgent())}>
             <span aria-hidden="true">+</span>
-            Add agent
+            {t('Agent hinzufügen')}
           </button>
         </Show>
       </div>
@@ -127,11 +128,11 @@ function SwitchProvider(props: { onClose: () => void }) {
   }
 
   return (
-    <Modal title="Switch provider" onClose={props.onClose} wide>
+    <Modal title={t('Anbieter wechseln')} onClose={props.onClose} wide>
       <div class="form">
         <Field
-          label="New provider"
-          hint="Sets a provider override for the selection. The model tier is kept."
+          label={t('Neuer Anbieter')}
+          hint={t('Setzt einen Anbieter-Override für die Auswahl. Die Modell-Stufe bleibt erhalten.')}
         >
           <Select
             value={target()}
@@ -144,10 +145,10 @@ function SwitchProvider(props: { onClose: () => void }) {
             <thead>
               <tr>
                 <th />
-                <th>Agent</th>
-                <th>Tier</th>
-                <th>Now</th>
-                <th>After</th>
+                <th>{t('Agent')}</th>
+                <th>{t('Stufe')}</th>
+                <th>{t('Jetzt')}</th>
+                <th>{t('Danach')}</th>
               </tr>
             </thead>
             <tbody>
@@ -161,20 +162,20 @@ function SwitchProvider(props: { onClose: () => void }) {
                         <input
                           type="checkbox"
                           checked={on()}
-                          aria-label={`Switch ${agent.name}`}
+                          aria-label={t('{name} umstellen', { name: agent.name })}
                           onChange={(e) => toggle(agent.id, e.currentTarget.checked)}
                         />
                       </td>
                       <td>{agent.name}</td>
-                      <td>{step() ? TIER_LABEL[step()!.tier] : '–'}</td>
+                      <td>{step() ? t(TIER_LABEL[step()!.tier]) : '–'}</td>
                       <td class="muted">
-                        {agent.provider_override ? providerLabel(agent.provider) : 'Project order'}
+                        {agent.provider_override ? providerLabel(agent.provider) : t('Projektreihenfolge')}
                         {agent.model && ` · ${agent.model}`}
                       </td>
                       <td>
                         {on() && step()
-                          ? `${providerLabel(step()!.to.provider)} · ${step()!.to.model || 'default'}`
-                          : 'stays'}
+                          ? `${providerLabel(step()!.to.provider)} · ${step()!.to.model || t('Standard')}`
+                          : t('bleibt')}
                       </td>
                     </tr>
                   )
@@ -186,10 +187,10 @@ function SwitchProvider(props: { onClose: () => void }) {
         <footer>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Cancel
+            {t('Abbrechen')}
           </button>
           <button class="primary" disabled={saving() || !chosen().length} onClick={apply}>
-            Switch {chosen().length} {chosen().length === 1 ? 'agent' : 'agents'}
+            {chosen().length === 1 ? t('1 Agent umstellen') : t('{n} Agenten umstellen', { n: chosen().length })}
           </button>
         </footer>
       </div>
@@ -214,7 +215,7 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
       classList={{ disabled: !props.agent.enabled, working: running() > 0 }}
       role="button"
       tabIndex={0}
-      aria-label={`Edit ${props.agent.name}`}
+      aria-label={t('{name} bearbeiten', { name: props.agent.name })}
       onClick={props.onEdit}
       onKeyDown={onActivateKey(props.onEdit)}
     >
@@ -222,16 +223,17 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
         <span class={`avatar large ${props.agent.provider}`}>{initials(props.agent.name)}</span>
         <div>
           <strong>{props.agent.name}</strong>
-          <p class="muted">{props.agent.role || 'No role'}</p>
+          <p class="muted">{props.agent.role || t('Keine Rolle')}</p>
         </div>
       </div>
       <p class="muted">
-        {props.agent.provider_override ? `Override: ${providerLabel(props.agent.provider)}` : 'Project order'}
+        {props.agent.provider_override ? t('Override: {provider}', { provider: providerLabel(props.agent.provider) })
+          : t('Projektreihenfolge')}
         {props.agent.model && ` · ${props.agent.model}`}
       </p>
       <p>
-        {running()} / {props.agent.max_instances} instances active
-        {!props.agent.enabled && ' · disabled'}
+        {t('{running} / {max} Instanzen aktiv', { running: running(), max: props.agent.max_instances })}
+        {!props.agent.enabled && ` · ${t('deaktiviert')}`}
       </p>
       <Show when={current()}>
         {(now) => (
@@ -244,15 +246,18 @@ function AgentCard(props: { agent: Agent; onEdit: () => void }) {
       </Show>
       <Show when={week()}>
         {(w) => (
-          <p class="tile-week muted" title="Last 7 days: finished against failed runs">
+          <p class="tile-week muted" title={t('Letzte 7 Tage: abgeschlossene gegen fehlgeschlagene Läufe')}>
             <span class="rate-bar" aria-hidden="true">
               <span
                 classList={{ low: (w().successRate ?? 1) < 0.5 }}
                 style={{ width: `${Math.round((w().successRate ?? 0) * 100)}%` }}
               />
             </span>
-            {w().successRate === null ? 'no rating yet' : `${Math.round(w().successRate! * 100)}% success`} · {w().runs} runs ·{' '}
-            ${w().costUsd < 10 ? w().costUsd.toFixed(2) : Math.round(w().costUsd)}
+            {w().successRate === null
+              ? t('noch keine Wertung')
+              : t('{rate} % Erfolg', { rate: Math.round(w().successRate! * 100) })}{' '}
+            · {t('{n} Läufe', { n: w().runs })} ·{' '}
+            {w().costUsd < 10 ? w().costUsd.toFixed(2) : Math.round(w().costUsd)} $
           </p>
         )}
       </Show>
@@ -292,21 +297,21 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
   }
 
   async function remove() {
-    if (!confirm(`Delete agent "${draft.name}"?`)) return
+    if (!confirm(t('Agent "{name}" löschen?', { name: draft.name }))) return
     await api.del(`/agents/${draft.id}`).catch(fail)
     props.onClose()
   }
 
   return (
-    <Modal title={draft.id ? 'Edit agent' : 'New agent'} onClose={props.onClose}>
+    <Modal title={draft.id ? t('Agent bearbeiten') : t('Neuer Agent')} onClose={props.onClose}>
       <form class="form" onSubmit={save}>
         <div class="row">
-          <Field label="Name">
+          <Field label={t('Name')}>
             <input required value={draft.name} onInput={(e) => setDraft('name', e.currentTarget.value)} />
           </Field>
-          <Field label="Role">
+          <Field label={t('Rolle')}>
             <input
-              placeholder="e.g. Backend developer"
+              placeholder={t('z. B. Backend-Entwickler')}
               value={draft.role}
               onInput={(e) => setDraft('role', e.currentTarget.value)}
             />
@@ -314,12 +319,14 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
         </div>
 
         <Toggle
-          label="Override the provider for this agent"
+          label={t('Anbieter für diesen Agenten überschreiben')}
           checked={draft.provider_override}
           onChange={(on) => setDraft('provider_override', on)}
         />
         <div class="row">
-          <Field label={draft.provider_override ? 'Preferred provider' : 'Reference provider for the model tier'}>
+          <Field label={
+              draft.provider_override ? t('Bevorzugter Anbieter') : t('Referenzanbieter für die Modell-Stufe')
+            }>
             <select
               onChange={(e) => {
                 // A model of one provider means nothing to another.
@@ -335,21 +342,21 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
               </For>
             </select>
           </Field>
-          <Field label="Model">
+          <Field label={t('Modell')}>
             <ModelSelect
               provider={draft.provider}
               value={draft.model}
               onChange={(model) => setDraft('model', model)}
             />
           </Field>
-          <Field label="Effort" hint="Thinking effort per run">
+          <Field label={t('Effort')} hint={t('Denkaufwand pro Lauf')}>
             <Select
               value={draft.effort}
-              options={EFFORTS}
+              options={EFFORTS.map(([value, label]) => [value, t(label)] as [string, string])}
               onChange={(effort) => setDraft('effort', effort)}
             />
           </Field>
-          <Field label="Max instances" hint="Copies running in parallel">
+          <Field label={t('Max. Instanzen')} hint={t('Parallel laufende Kopien')}>
             <input
               type="number"
               min="1"
@@ -360,7 +367,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
           </Field>
         </div>
 
-        <Field label="Instructions">
+        <Field label={t('Anweisungen')}>
           <textarea
             rows="6"
             value={draft.instructions}
@@ -370,7 +377,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
 
         <Show when={board.skills.length}>
           <div class="field">
-            <span>Skills</span>
+            <span>{t('Skills')}</span>
             <div class="chips">
               <For each={board.skills}>
                 {(skill) => (
@@ -388,7 +395,7 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
 
         <Show when={connections()?.length}>
           <div class="field">
-            <span>MCP connections</span>
+            <span>{t('MCP-Verbindungen')}</span>
             <div class="chips">
               <For each={connections()}>
                 {(connection) => (
@@ -402,25 +409,25 @@ function AgentForm(props: { draft: Draft; onClose: () => void }) {
               </For>
             </div>
             <Show when={draft.provider === 'deepseek' && draft.mcp_ids.length}>
-              <small>The Deepseek agent cannot use MCP connections yet.</small>
+              <small>{t('Der Deepseek-Agent kann MCP-Verbindungen noch nicht nutzen.')}</small>
             </Show>
           </div>
         </Show>
 
-        <Toggle label="Active" checked={draft.enabled} onChange={(on) => setDraft('enabled', on)} />
+        <Toggle label={t('Aktiv')} checked={draft.enabled} onChange={(on) => setDraft('enabled', on)} />
 
         <footer>
           <Show when={draft.id}>
             <button type="button" class="ghost danger" onClick={remove}>
-              Delete
+              {t('Löschen')}
             </button>
           </Show>
           <span class="spacer" />
           <button type="button" onClick={props.onClose}>
-            Cancel
+            {t('Abbrechen')}
           </button>
           <button class="primary" type="submit">
-            Save
+            {t('Speichern')}
           </button>
         </footer>
       </form>

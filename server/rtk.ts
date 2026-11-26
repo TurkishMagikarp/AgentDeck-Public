@@ -99,7 +99,7 @@ export async function rtkReport(project: { id: number; key: string }) {
     try {
       byAgent.push({ agent: agent.name, ...(await savingsIn(folderOf(project.key), databaseOf(project.key, agent.id))) })
     } catch (error) {
-      console.warn(`RTK: stats for ${project.key}/${agent.id} not readable`, (error as Error).message)
+      console.warn(`RTK: Statistik für ${project.key}/${agent.id} nicht lesbar`, (error as Error).message)
     }
   }
 

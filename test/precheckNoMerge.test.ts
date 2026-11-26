@@ -34,7 +34,7 @@ test('the base is not merged into the branch before its turn', async () => {
   const before = git('rev-parse', 'HEAD')
   const result = await check(dir)
   assert.equal(result.ok, true)
-  assert.match(result.note, /no conflicts/)
+  assert.match(result.note, /konfliktfrei/)
   assert.equal(git('rev-parse', 'HEAD'), before)
 })
 

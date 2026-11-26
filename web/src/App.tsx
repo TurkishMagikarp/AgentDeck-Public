@@ -8,6 +8,7 @@ import { ConfirmToken } from './Confirm'
 import { Board } from './Board'
 import { Dashboard } from './Dashboard'
 import { Journal } from './Journal'
+import { Feed } from './Feed'
 import { fleet, refreshFleet } from './fleet'
 import { MissionControl } from './MissionControl'
 import { Dependencies } from './Dependencies'
@@ -37,8 +38,9 @@ import {
   switchingProject,
 } from './store'
 import { Providers } from './Providers'
+import { language, setLanguage, t } from './i18n'
 import { nextTheme, setTheme, theme } from './theme'
-import { Modal, Toggle } from './ui'
+import { LanguageSwitch, Modal, Toggle } from './ui'
 import { Usage } from './Usage'
 import { Routines } from './Routines'
 import { Watchdog } from './Watchdog'
@@ -46,18 +48,19 @@ import { Watchdog } from './Watchdog'
 /** What the team does: the views you look at every day. */
 const VIEWS = [
   ['board', 'Board', 'board'],
-  ['dashboard', 'Statistics', 'chart'],
+  ['dashboard', 'Statistiken', 'chart'],
+  ['feed', 'Live-Feed', 'play'],
   ['journal', 'Journal', 'journal'],
-  ['dependencies', 'Dependencies', 'network'],
+  ['dependencies', 'Abhängigkeiten', 'network'],
   ['git', 'Git', 'branch'],
-  ['agents', 'Agents', 'users'],
+  ['agents', 'Agenten', 'users'],
 ] as const
 
 /** How the project is set up: grouped behind one tab, so the bar stays short. */
 const SETTINGS = [
-  ['settings', 'Project'],
-  ['usage', 'Usage & routing'],
-  ['routines', 'Routines'],
+  ['settings', 'Projekt'],
+  ['usage', 'Usage & Routing'],
+  ['routines', 'Routinen'],
   ['watchdog', 'Watchdog'],
   ['skills', 'Skills'],
 ] as const
@@ -123,7 +126,7 @@ export function App() {
         api
           .post<{ number: number }>(`/projects/${target.id}/issues`, { title, status: 'backlog' })
           .then((issue) => {
-            say(`${target.key}-${issue.number} created in the backlog`)
+            say(t('{id} im Backlog angelegt', { id: `${target.key}-${issue.number}` }))
             return Promise.all([loadProjects(), refreshFleet()])
           })
           .catch(fail),
@@ -132,20 +135,29 @@ export function App() {
 
   /** What Ctrl+K can do besides finding issues. */
   const commands = (): Command[] => [
-    { id: 'home', label: 'Open Mission Control', hint: 'G then M', run: () => setHome(true) },
-    ...(isAdmin() ? [{ id: 'new', label: 'Create a new project', run: () => setCreating(true) }] : []),
-    ...(isAdmin() ? [{ id: 'providers', label: 'Providers and access', run: () => setShowProviders(true) }] : []),
-    { id: 'theme', label: 'Switch theme (system, dark, light)', run: () => setTheme(nextTheme(theme())) },
+    { id: 'home', label: t('Mission Control öffnen'), hint: t('G dann M'), run: () => setHome(true) },
+    ...(isAdmin() ? [{ id: 'new', label: t('Neues Projekt anlegen'), run: () => setCreating(true) }] : []),
+    ...(isAdmin() ? [{ id: 'providers', label: t('Anbieter und Zugänge'), run: () => setShowProviders(true) }] : []),
+    { id: 'theme', label: t('Darstellung wechseln (System, Dunkel, Hell)'), run: () => setTheme(nextTheme(theme())) },
+    { id: 'language', label: t('Sprache wechseln (Deutsch, English)'), run: () => setLanguage(language() === 'de' ? 'en' : 'de') },
     ...projects().map((project) => ({
       id: `project-${project.id}`,
-      label: `Open project: ${project.name}`,
+      label: t('Projekt öffnen: {name}', { name: project.name }),
       hint: project.key,
       run: () => selectProject(project.id),
     })),
     ...(board.project && !home()
       ? [
-          { id: 'pause', label: board.project.paused ? 'Resume project' : 'Pause project', run: togglePause },
-          ...VIEWS.map(([id, label]) => ({ id: `tab-${id}`, label: `View: ${label}`, run: () => openTab(id) })),
+          {
+            id: 'pause',
+            label: board.project.paused ? t('Projekt fortsetzen') : t('Projekt pausieren'),
+            run: togglePause,
+          },
+          ...VIEWS.map(([id, label]) => ({
+            id: `tab-${id}`,
+            label: t('Ansicht: {name}', { name: t(label) }),
+            run: () => openTab(id),
+          })),
         ]
       : []),
   ]
@@ -231,7 +243,7 @@ export function App() {
           <span class="project-name">Mission Control</span>
           <Show when={fleet()?.inbox.length}>
             {(count) => (
-              <span class="needs-you" title={`${count()} need you`}>
+              <span class="needs-you" title={t('{n} brauchen dich', { n: count() })}>
                 {count()}
               </span>
             )}
@@ -264,15 +276,15 @@ export function App() {
             {(me()?.name ?? 'AD').slice(0, 2).toUpperCase()}
           </span>
           <span class="account-text">
-            <strong>{me()?.name ?? 'Account'}</strong>
-            <Show when={me()}>{(who) => <span class="muted">{ROLE_LABELS[who().role]}</span>}</Show>
+            <strong>{me()?.name ?? t('Konto')}</strong>
+            <Show when={me()}>{(who) => <span class="muted">{t(ROLE_LABELS[who().role])}</span>}</Show>
           </span>
           <Icon name="chevronRight" size={14} />
         </button>
         <Show when={isAdmin()}>
           <button class="new-project" onClick={() => setCreating(true)}>
             <Icon name="plus" size={14} />
-            Project
+            {t('Projekt')}
           </button>
         </Show>
       </nav>
@@ -296,7 +308,7 @@ export function App() {
                 <div class="phone-bar">
                   <select
                     class="project-switch"
-                    aria-label="Switch project"
+                    aria-label={t('Projekt wechseln')}
                     onChange={(e) => selectProject(Number(e.currentTarget.value))}
                   >
                     <For each={projects()}>
@@ -307,69 +319,71 @@ export function App() {
                       )}
                     </For>
                   </select>
-                  <button class="icon-button" onClick={() => setHome(true)} aria-label="Mission Control">
+                  <button class="icon-button" onClick={() => setHome(true)} aria-label={t('Mission Control')}>
                     <Icon name="radar" />
                   </button>
-                  <button class="icon-button" onClick={() => setSearching(true)} aria-label="Search issues">
+                  <button class="icon-button" onClick={() => setSearching(true)} aria-label={t('Issues suchen')}>
                     <Icon name="search" />
                   </button>
-                  <button class="icon-button" onClick={() => setMore(true)} aria-label="More">
+                  <button class="icon-button" onClick={() => setMore(true)} aria-label={t('Mehr')}>
                     <Icon name="settings" />
                   </button>
-                  <button class="icon-button" onClick={() => setCreating(true)} aria-label="New project">
+                  <button class="icon-button" onClick={() => setCreating(true)} aria-label={t('Neues Projekt')}>
                     <Icon name="plus" />
                   </button>
                 </div>
-                <nav class="tabs" aria-label="Views">
+                <nav class="tabs" aria-label={t('Ansichten')}>
                   <For each={VIEWS}>
                     {([id, label, icon]) => (
                       <button
                         classList={{ active: tab() === id }}
                         aria-current={tab() === id ? 'page' : undefined}
-                        title={label}
+                        title={t(label)}
                         onClick={() => openTab(id)}
                       >
                         <Icon name={icon} />
-                        <span class="tab-label">{label}</span>
+                        <span class="tab-label">{t(label)}</span>
                       </button>
                     )}
                   </For>
                   <button
                     classList={{ active: isSettings(tab()) }}
                     aria-current={isSettings(tab()) ? 'page' : undefined}
-                    title="Settings"
+                    title={t('Einstellungen')}
                     onClick={() => openTab(lastSettings())}
                   >
                     <Icon name="settings" />
-                    <span class="tab-label">Settings</span>
+                    <span class="tab-label">{t('Einstellungen')}</span>
                   </button>
                 </nav>
                 <span class="spacer" />
-                <button class="search-button" onClick={() => setSearching(true)} aria-label="Search issues">
+                <button class="search-button" onClick={() => setSearching(true)} aria-label={t('Issues suchen')}>
                   <Icon name="search" size={14} />
-                  <span class="search-label">Search</span>
-                  <kbd>Ctrl K</kbd>
+                  <span class="search-label">{t('Suchen')}</span>
+                  <kbd>{t('Strg K')}</kbd>
                 </button>
                 <Toggle
-                  label="ADHD mode"
-                  title="Agents reply with one result line and at most three bullet points"
+                  label={t('ADHD-Modus')}
+                  title={t('Agenten antworten mit einer Ergebniszeile und höchstens drei Stichpunkten')}
                   checked={project().settings.adhd}
                   onChange={(on) => saveSettings((s) => void (s.adhd = on))}
                 />
                 <Toggle
-                  label="Caveman"
-                  title="Agents write tersely like a caveman and save output tokens. Code, commands and status stay exact."
+                  label={t('Caveman')}
+                  title={t(
+                    'Agenten schreiben knapp wie ein Höhlenmensch und sparen Ausgabe-Tokens. Code, Befehle und Status bleiben exakt.',
+                  )}
                   checked={project().settings.caveman}
                   onChange={(on) => saveSettings((s) => void (s.caveman = on))}
                 />
                 <button classList={{ primary: project().paused }} onClick={togglePause}>
                   <Icon name={project().paused ? 'play' : 'pause'} size={14} />
-                  {project().paused ? 'Resume' : 'Pause'}
+                  {project().paused ? t('Fortsetzen') : t('Pausieren')}
                 </button>
               </header>
 
               <Show when={isSettings(tab())}>
-                <nav class="subnav" aria-label="Settings">
+                <nav class="subnav" aria-label={t('Einstellungen')}>
                   <For each={SETTINGS}>
                     {([id, label]) => (
                       <button
@@ -377,7 +391,7 @@ export function App() {
                         aria-current={tab() === id ? 'page' : undefined}
                         onClick={() => openTab(id)}
                       >
-                        {label}
+                        {t(label)}
                       </button>
                     )}
                   </For>
@@ -394,6 +408,9 @@ export function App() {
                 </Match>
                 <Match when={tab() === 'dashboard'}>
                   <Dashboard />
+                </Match>
+                <Match when={tab() === 'feed'}>
+                  <Feed />
                 </Match>
                 <Match when={tab() === 'journal'}>
                   <Journal />
@@ -429,19 +446,27 @@ export function App() {
       </main>
 
       <Show when={more()}>
-        <Modal title="Account" popover onClose={() => setMore(false)}>
+        <Modal title={t('Konto')} popover onClose={() => setMore(false)}>
           <div class="more-menu">
             <Show when={isAdmin()}>
-              <button onClick={() => (setMore(false), setShowProviders(true))}>Providers and access</button>
-              <button onClick={() => (setMore(false), setShowUsers(true))}>Users</button>
-              <button onClick={() => (setMore(false), setShowAudit(true))}>Audit log</button>
+              <button onClick={() => (setMore(false), setShowProviders(true))}>{t('Anbieter und Zugänge')}</button>
+              <button onClick={() => (setMore(false), setShowUsers(true))}>{t('Benutzer')}</button>
+              <button onClick={() => (setMore(false), setShowAudit(true))}>{t('Änderungsprotokoll')}</button>
             </Show>
             <button onClick={() => setTheme(nextTheme(theme()))}>
-              Theme: {{ system: 'System', dark: 'Dark', light: 'Light' }[theme()]}
+              {t('Darstellung: {mode}', { mode: t({ system: 'System', dark: 'Dunkel', light: 'Hell' }[theme()]) })}
             </button>
+            <LanguageSwitch />
             <button onClick={logout}>
-              Log out
-              <Show when={me()}>{(who) => <span class="muted"> · {who().name} ({ROLE_LABELS[who().role]})</span>}</Show>
+              {t('Abmelden||Konto')}
+              <Show when={me()}>
+                {(who) => (
+                  <span class="muted">
+                    {' '}
+                    · {who().name} ({t(ROLE_LABELS[who().role])})
+                  </span>
+                )}
+              </Show>
             </button>
           </div>
         </Modal>
@@ -485,12 +510,12 @@ export function App() {
 function Welcome(props: { onCreate: () => void }) {
   return (
     <div class="welcome">
-      <h1>No project yet</h1>
+      <h1>{t('Noch kein Projekt')}</h1>
       <p class="muted">
-        Describe what you want built and let the AI suggest agents, skills and issues.
+        {t('Beschreibe, was gebaut werden soll, und lass die KI Agenten, Skills und Issues vorschlagen.')}
       </p>
       <button class="primary" onClick={props.onCreate}>
-        Create your first project
+        {t('Erstes Projekt anlegen')}
       </button>
     </div>
   )

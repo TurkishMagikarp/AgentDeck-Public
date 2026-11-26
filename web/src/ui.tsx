@@ -1,5 +1,6 @@
 import type { JSX, ParentProps } from 'solid-js'
-import { onCleanup, onMount, splitProps } from 'solid-js'
+import { For, onCleanup, onMount, splitProps } from 'solid-js'
+import { language, locale, setLanguage, t } from './i18n'
 import { Icon } from './icons'
 
 const FOCUSABLE =
@@ -51,7 +52,7 @@ export function Modal(props: ParentProps<{ title: string; onClose: () => void; w
       >
         <header>
           <h2>{props.title}</h2>
-          <button class="ghost icon-button" onClick={props.onClose} aria-label="Close">
+          <button class="ghost icon-button" onClick={props.onClose} aria-label={t('Schließen')}>
             <Icon name="close" />
           </button>
         </header>
@@ -130,9 +131,34 @@ export function formatTokens(n: number) {
 
 export function timeAgo(timestamp: number) {
   const minutes = Math.round((Date.now() - timestamp) / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes} min ago`
+  if (minutes < 1) return t('gerade eben')
+  if (minutes < 60) return t('vor {n} min', { n: minutes })
   const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours} h ago`
-  return new Date(timestamp).toLocaleDateString('en-US')
+  if (hours < 24) return t('vor {n} h', { n: hours })
+  return new Date(timestamp).toLocaleDateString(locale())
 }
+
+/** DE / EN switch; the choice is remembered in this browser. */
+export function LanguageSwitch() {
+  return (
+    <div class="segmented language-switch" role="group" aria-label={t('Sprache')}>
+      <For each={LANGUAGES}>
+        {([code, label]) => (
+          <button
+            classList={{ active: language() === code }}
+            aria-pressed={language() === code}
+            lang={code}
+            onClick={() => setLanguage(code)}
+          >
+            {label}
+          </button>
+        )}
+      </For>
+    </div>
+  )
+}
+
+const LANGUAGES = [
+  ['de', 'Deutsch'],
+  ['en', 'English'],
+] as const

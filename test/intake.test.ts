@@ -87,7 +87,7 @@ describe('labelled GitHub issues', () => {
     )
     const filed = get('SELECT description FROM issues WHERE id=?', taken[0].issueId)
     assert.ok(filed.description.length < 19_000)
-    assert.match(filed.description, /\(cut\)/)
+    assert.match(filed.description, /gekürzt/)
   })
 })
 

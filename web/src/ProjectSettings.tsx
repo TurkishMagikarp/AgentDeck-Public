@@ -4,15 +4,20 @@ import { board, closeProject, fail, loadProjects, saveSettings, setBoard } from 
 import type { Webhook, WebhookEvent } from './types'
 import { createResource, createSignal, For, onCleanup, onMount, Show } from 'solid-js'
 import { Field, Select, Toggle } from './ui'
+import { t } from './i18n'
+
+// Labels stay German keys in the constants; they are translated where they are shown.
+const tl = <T extends string>(list: readonly (readonly [T, string])[]) =>
+  list.map(([value, label]) => [value, t(label)] as const)
 
 const LANDING_MODES = [
-  ['off', 'Off'],
-  ['merge', 'Merge directly'],
-  ['pr', 'Pull request, merge after green checks'],
+  ['off', 'Aus'],
+  ['merge', 'Direkt mergen'],
+  ['pr', 'Pull Request, Merge nach grünen Checks'],
 ] as const
 
 const MERGE_METHODS = [
-  ['merge', 'Merge commit'],
+  ['merge', 'Merge-Commit'],
   ['squash', 'Squash'],
   ['rebase', 'Rebase'],
 ] as const
@@ -65,7 +70,7 @@ function SectionRail(props: { root: () => HTMLElement | undefined }) {
 
   return (
     <Show when={items().length > 1}>
-      <nav class="section-rail" aria-label="Sections of this page">
+      <nav class="section-rail" aria-label={t('Abschnitte dieser Seite')}>
         <For each={items()}>
           {(item, index) => (
             <button
@@ -94,23 +99,24 @@ function randomSlug() {
 }
 
 const EGRESS_MODES = [
-  ['open', 'Open'],
-  ['allowlist', 'Allowed hosts only'],
+  ['open', 'Offen'],
+  ['allowlist', 'Nur erlaubte Hosts'],
 ] as const
 
 const WORKSPACES = [
-  ['issue', 'One worktree per issue'],
-  ['agent', 'One checkout per agent'],
+  ['issue', 'Pro Issue ein Worktree'],
+  ['agent', 'Pro Agent ein Checkout'],
 ] as const
 
-const TEMPLATE_EXAMPLE = `## UI
-Agents: Frontend
-Title: page, view
-- Screenshot before and after in the repo
-- Keyboard use checked
+const AGENT_LANGUAGES = [
+  ['de', 'Deutsch'],
+  ['en', 'English'],
+] as const
 
-## All
-- Only files changed that the issue asks for`
+const templateExample = () =>
+  t(
+    '## Oberfläche\nAgenten: Frontend\nTitel: seite, ansicht\n- Screenshot vorher und nachher im Repo\n- Tastaturbedienung geprüft\n\n## Alle\n- Nur Dateien geändert, die das Issue verlangt',
+  )
 
 export function ProjectSettings() {
   const project = () => board.project!
@@ -120,7 +126,7 @@ export function ProjectSettings() {
   }
 
   async function remove() {
-    if (!confirm(`Delete project "${project().name}" with all its issues, agents and runs?`)) return
+    if (!confirm(t('Projekt "{name}" mit allen Issues, Agenten und Läufen löschen?', { name: project().name }))) return
     await api.del(`/projects/${project().id}`).catch(fail)
     closeProject()
     await loadProjects()
@@ -131,15 +137,15 @@ export function ProjectSettings() {
   return (
     <div class="page narrow" ref={page}>
       <div class="page-head">
-        <h2>Project</h2>
+        <h2>{t('Projekt')}</h2>
       </div>
       <SectionRail root={() => page} />
       <div class="form">
         <div class="row">
-          <Field label="Name">
+          <Field label={t('Name')}>
             <input value={project().name} onChange={(e) => save({ name: e.currentTarget.value })} />
           </Field>
-          <Field label="Concurrent agents" hint="Limit for the whole project">
+          <Field label={t('Gleichzeitige Agenten')} hint={t('Obergrenze für das ganze Projekt')}>
             <input
               type="number"
               min="1"
@@ -154,16 +160,16 @@ export function ProjectSettings() {
         </div>
         <div class="row">
           <Field
-            label="Checkout"
-            hint="Per agent: each agent keeps its own checkout, so build caches (asset import, node_modules) survive."
+            label={t('Arbeitsordner')}
+            hint={t('Pro Agent: ein fester Checkout je Agent, Build-Caches (Asset-Import, node_modules) bleiben erhalten.')}
           >
             <Select
               value={project().settings.workspace}
-              options={WORKSPACES}
+              options={tl(WORKSPACES)}
               onChange={(workspace) => saveSettings((s) => void (s.workspace = workspace))}
             />
           </Field>
-          <Field label="Review rounds" hint="After that, a human decides">
+          <Field label={t('Änderungsrunden im Review')} hint={t('Danach entscheidet ein Mensch')}>
             <input
               type="number"
               min="1"
@@ -177,49 +183,63 @@ export function ProjectSettings() {
           </Field>
         </div>
         <Field
-          label="Git repository on the server"
-          hint="Each issue gets its own worktree and branch agentdeck/KEY-n."
+          label={t('Git-Repository auf dem Server')}
+          hint={t('Jedes Issue bekommt einen eigenen Worktree und Branch agentdeck/KEY-n.')}
         >
           <input value={project().repo_path} onChange={(e) => save({ repo_path: e.currentTarget.value })} />
         </Field>
+        <Field
+          label={t('Sprache der Agenten')}
+          hint={t('In dieser Sprache bekommen die Agenten ihre Aufträge und schreibt der Server seine Notizen.')}
+        >
+          <Select
+            value={project().settings.language}
+            options={AGENT_LANGUAGES}
+            onChange={(language) => saveSettings((s) => void (s.language = language))}
+          />
+        </Field>
         <div class="row">
           <Toggle
-            label="Record the history of runs"
-            title='Stores the prompt, tool calls, results, answers and the changes of every run, shortened and without detected secrets. To be seen under "Show history" at every run, for 30 days.'
+            label={t('Verlauf der Läufe aufzeichnen')}
+            title={t('Speichert je Lauf Auftrag, Werkzeugaufrufe, Ergebnisse, Antworten und die Änderungen, gekürzt und ohne erkannte Geheimnisse. Zu sehen unter „Verlauf zeigen“ bei jedem Lauf, 30 Tage lang.')}
             checked={project().settings.replay}
             onChange={(on) => saveSettings((s) => void (s.replay = on))}
+          />
+          <Toggle
+            label={t('Große MCP-Verbindungen nur bei Bedarf')}
+            title={t('Die Werkzeuge von PixelLab kosten in jedem Schritt etwa 90.000 Tokens. Ein Lauf bekommt sie nur, wenn das Issue PixelLab nennt oder der Agent sie mit „connect“ anfordert. Die API-Keys sind immer gesetzt.')}
+            checked={project().settings.mcpOnDemand}
+            onChange={(on) => saveSettings((s) => void (s.mcpOnDemand = on))}
           />
         </div>
         <section class="section">
           <div class="section-head">
-            <h3>Acceptance</h3>
+            <h3>{t('Abnahme')}</h3>
           </div>
           <p class="muted">
-            Every issue gets a checklist: its "Done when" plus the matching template. The agent reports every
-            item with proof, and the reviewers judge only by that. If something is still missing, only the
-            first reviewer checks the interim state.
+            {t('Jedes Issue bekommt eine Checkliste: sein „Done when“ plus die passende Vorlage. Der Agent meldet jeden Punkt mit Nachweis, die Prüfer urteilen nur danach. Fehlt noch etwas, prüft nur der erste Prüfer den Zwischenstand.')}
           </p>
           <div class="row">
             <Toggle
-              label="Acceptance checklists"
+              label={t('Abnahme-Checklisten')}
               checked={project().settings.checklists.enabled}
               onChange={(on) => saveSettings((s) => void (s.checklists.enabled = on))}
             />
             <Toggle
-              label="After changes, resume with the same reviewer"
+              label={t('Nach Änderungswunsch beim selben Prüfer weitermachen')}
               checked={project().settings.resumeReview}
               onChange={(on) => saveSettings((s) => void (s.resumeReview = on))}
             />
           </div>
           <Show when={project().settings.checklists.enabled}>
             <Field
-              label="Templates"
-              hint="'## Name' starts a template. 'Agents:' and 'Title:' (comma-separated) say what it applies to; the first match is used. A template without either applies to every issue. Items start with '- '."
+              label={t('Vorlagen')}
+              hint={t('„## Name“ beginnt eine Vorlage. „Agenten:“ und „Titel:“ (kommagetrennt) sagen, wofür sie gilt; die erste passende wird genommen. Eine Vorlage ohne beides gilt für jedes Issue. Punkte beginnen mit „- “.')}
             >
               <textarea
                 rows="12"
                 class="mono"
-                placeholder={TEMPLATE_EXAMPLE}
+                placeholder={templateExample()}
                 value={project().settings.checklists.templates}
                 onChange={(e) => {
                   const templates = e.currentTarget.value
@@ -229,17 +249,16 @@ export function ProjectSettings() {
             </Field>
           </Show>
           <Toggle
-            label="Precheck before every review"
+            label={t('Vorcheck vor jedem Review')}
             checked={project().settings.precheck.enabled}
             onChange={(on) => saveSettings((s) => void (s.precheck.enabled = on))}
           />
           <Show when={project().settings.precheck.enabled}>
             <p class="muted">
-              Before a reviewer sees the work: proof files present, everything committed, base branch merged
-              in without conflicts, check command green. Otherwise the issue goes back without a review run.
+              {t('Bevor ein Prüfer die Arbeit sieht: Nachweis-Dateien vorhanden, alles committet, Basis-Branch konfliktfrei eingemergt, Prüfbefehl grün. Sonst geht das Issue ohne Review-Lauf zurück.')}
             </p>
             <div class="row">
-              <Field label="Check command" hint="Runs in the agent's checkout. Empty = only proof and merge.">
+              <Field label={t('Prüfbefehl')} hint={t('Läuft im Checkout des Agenten. Leer = nur Nachweise und Merge.')}>
                 <input
                   class="mono"
                   placeholder="npm test"
@@ -250,7 +269,7 @@ export function ProjectSettings() {
                   }}
                 />
               </Field>
-              <Field label="Time limit (minutes)">
+              <Field label={t('Zeitlimit (Minuten)')}>
                 <input
                   type="number"
                   min="1"
@@ -264,34 +283,31 @@ export function ProjectSettings() {
               </Field>
             </div>
             <Toggle
-              label="Run the check command only before landing"
+              label={t('Prüfbefehl erst vor dem Landen')}
               checked={project().settings.precheck.commandAt === 'landing'}
               onChange={(on) => saveSettings((s) => void (s.precheck.commandAt = on ? 'landing' : 'review'))}
             />
             <p class="muted">
-              On: the reviewers see the work at once. The check command runs once after the last approval on
-              the merged state, and only green is pushed. Red goes back to the maker with the output. Agents
-              then do not run the full test suite themselves. Only with landing "Merge".
+              {t('An: Die Prüfer sehen die Arbeit sofort. Der Prüfbefehl läuft einmal nach der letzten Freigabe auf dem gemergten Stand, gepusht wird nur bei Grün. Rot geht mit der Ausgabe an den Ersteller zurück. Agenten führen die volle Testsuite dann nicht selbst aus. Nur bei Landung „Merge“.')}
             </p>
           </Show>
         </section>
         <section class="section">
           <div class="section-head">
-            <h3>Landing</h3>
+            <h3>{t('Landung')}</h3>
             <Select
-              aria-label="Landing"
+              aria-label={t('Landung')}
               value={project().settings.landing.mode}
-              options={LANDING_MODES}
+              options={tl(LANDING_MODES)}
               onChange={(mode) => saveSettings((s) => void (s.landing.mode = mode))}
             />
           </div>
           <p class="muted">
-            After the last approval, AgentDeck brings the issue's branch into the base branch. Agents never
-            land on their own.
+            {t('Nach der letzten Freigabe bringt AgentDeck den Branch des Issues in den Basis-Branch. Agenten landen nie selbst.')}
           </p>
           <Show when={project().settings.landing.mode !== 'off'}>
             <div class="row">
-              <Field label="Base branch" hint="Empty = the branch checked out in the repository">
+              <Field label={t('Basis-Branch')} hint={t('Leer = der im Repository ausgecheckte Branch')}>
                 <input
                   placeholder="main"
                   value={project().settings.landing.baseBranch}
@@ -303,24 +319,24 @@ export function ProjectSettings() {
               </Field>
               <Show when={project().settings.landing.mode === 'merge'}>
                 <Toggle
-                  label="Push after merge"
+                  label={t('Nach dem Merge pushen')}
                   checked={project().settings.landing.push}
                   onChange={(on) => saveSettings((s) => void (s.landing.push = on))}
                 />
               </Show>
               <Show when={project().settings.landing.mode === 'pr'}>
-                <Field label="Merge-Art">
+                <Field label={t('Merge-Art')}>
                   <Select
                     value={project().settings.landing.mergeMethod}
-                    options={MERGE_METHODS}
+                    options={tl(MERGE_METHODS)}
                     onChange={(method) => saveSettings((s) => void (s.landing.mergeMethod = method))}
                   />
                 </Field>
               </Show>
             </div>
             <Field
-              label="Protected paths"
-              hint="One path per line. If a branch changes anything under them, it does not land automatically and waits for you instead."
+              label={t('Geschützte Pfade')}
+              hint={t('Ein Pfad pro Zeile. Ändert ein Branch etwas darunter, landet er nicht automatisch, sondern wartet auf deine Freigabe.')}
             >
               <textarea
                 rows="3"
@@ -337,23 +353,23 @@ export function ProjectSettings() {
               />
             </Field>
             <Field
-              label="Approval before landing"
-              hint='What matches here does not land automatically but waits for "Approve landing" in the issue. The approval holds for exactly one state of the branch; if it changes after that, it needs a new one.'
+              label={t('Freigabe vor der Landung')}
+              hint={t('Was hier zutrifft, landet nicht automatisch, sondern wartet auf „Landung freigeben“ im Issue. Die Freigabe gilt für genau einen Stand des Branches; ändert er sich danach, braucht er eine neue.')}
             >
               <div class="row">
                 <Toggle
-                  label="Every landing"
+                  label={t('Jede Landung')}
                   checked={project().settings.landing.approval.merge}
                   onChange={(on) => saveSettings((s) => void (s.landing.approval.merge = on))}
                 />
                 <Toggle
-                  label="New dependencies"
-                  title="package.json, requirements*.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile, composer.json: new packages, not plain version changes"
+                  label={t('Neue Abhängigkeiten')}
+                  title={t('package.json, requirements*.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile, composer.json: neue Pakete, nicht reine Versionswechsel')}
                   checked={project().settings.landing.approval.dependencies}
                   onChange={(on) => saveSettings((s) => void (s.landing.approval.dependencies = on))}
                 />
                 <Toggle
-                  label="Infrastructure files"
+                  label={t('Infrastruktur-Dateien')}
                   checked={project().settings.landing.approval.infra}
                   onChange={(on) => saveSettings((s) => void (s.landing.approval.infra = on))}
                 />
@@ -361,8 +377,8 @@ export function ProjectSettings() {
             </Field>
             <Show when={project().settings.landing.approval.infra}>
               <Field
-                label="Infrastructure patterns"
-                hint='One pattern per line. Without "/" it applies to the file name in any folder (*.tf), with "/" from the root of the repository (docker/**). ** includes subfolders.'
+                label={t('Infrastruktur-Muster')}
+                hint={t('Ein Muster pro Zeile. Ohne „/“ gilt es für den Dateinamen in jedem Ordner (*.tf), mit „/“ ab der Wurzel des Repositorys (docker/**). ** umfasst Unterordner.')}
               >
                 <textarea
                   rows="4"
@@ -377,8 +393,8 @@ export function ProjectSettings() {
             </Show>
             <div class="row">
               <Field
-                label="Evidence required for"
-                hint="Paths, one per line. If a branch changes anything under them, the agent's summary must contain one of the evidence lines on the right, otherwise the issue goes back to the agent."
+                label={t('Nachweis nötig für')}
+                hint={t('Pfade, einer pro Zeile. Ändert ein Branch etwas darunter, muss die Zusammenfassung des Agenten einen der Nachweise rechts enthalten, sonst geht das Issue an ihn zurück.')}
               >
                 <textarea
                   rows="3"
@@ -391,11 +407,11 @@ export function ProjectSettings() {
                   }}
                 />
               </Field>
-              <Field label="Evidence lines" hint='Text, one per line, e.g. "Screenshot:".'>
+              <Field label={t('Nachweis-Zeilen')} hint={t('Text, einer pro Zeile, z. B. „Screenshot:“.')}>
                 <textarea
                   rows="3"
                   class="mono"
-                  placeholder={'Screenshot:\nUI unchanged'}
+                  placeholder={t('Screenshot:\nOberfläche unverändert')}
                   value={project().settings.landing.evidence.markers.join('\n')}
                   onChange={(e) => {
                     const markers = splitLines(e.currentTarget.value)
@@ -405,8 +421,8 @@ export function ProjectSettings() {
               </Field>
             </div>
             <Field
-              label="GitHub token file"
-              hint="Optional. Path in the container to a token for this project only, such as a GitHub App token that a host job renews. Agents get it as GH_TOKEN, and landing uses it. Empty = GitHub connection or gh login."
+              label={t('GitHub-Token-Datei')}
+              hint={t('Optional. Pfad im Container zu einem Token nur für dieses Projekt, etwa einem GitHub-App-Token, das ein Host-Job erneuert. Die Agenten bekommen es als GH_TOKEN, gelandet wird damit. Leer = GitHub-Verbindung oder gh-Login.')}
             >
               <input
                 class="mono"
@@ -422,15 +438,15 @@ export function ProjectSettings() {
         </section>
 
         <Toggle
-          label="Fully autonomous: nothing waits for a human"
-          title="The agent below decides blocked issues and open reviews. Whatever it cannot resolve goes to the backlog and is retried later."
+          label={t('Vollautonom: nichts wartet auf einen Menschen')}
+          title={t('Blockierte Issues und offene Prüfungen entscheidet der Agent unten. Was auch er nicht klären kann, wird ins Backlog geparkt und später erneut versucht.')}
           checked={project().settings.autonomous}
           onChange={(on) => saveSettings((s) => void (s.autonomous = on))}
         />
 
         <Field
-          label="Blocked issues go first to"
-          hint="This agent decides once how to proceed. Only what it cannot resolve comes to you."
+          label={t('Blockierte Issues gehen zuerst an')}
+          hint={t('Dieser Agent entscheidet einmal, wie es weitergeht. Erst was er nicht klären kann, landet bei dir.')}
         >
           <select
             onChange={(e) => {
@@ -438,7 +454,7 @@ export function ProjectSettings() {
               saveSettings((s) => void (s.escalationAgentId = agentId))
             }}
           >
-            <option value="0">Straight to me</option>
+            <option value="0">{t('direkt an mich')}</option>
             <For each={board.agents}>
               {(agent) => (
                 <option value={agent.id} selected={agent.id === project().settings.escalationAgentId}>
@@ -450,15 +466,15 @@ export function ProjectSettings() {
         </Field>
 
         <Toggle
-          label="Open groups in order"
-          title="When nothing is left open, the backlog of the next group (sorted by name) moves to To do"
+          label={t('Gruppen nacheinander öffnen')}
+          title={t('Ist nichts mehr offen, wandert das Backlog der nächsten Gruppe (nach Name sortiert) auf To Do')}
           checked={project().settings.openGroupsInOrder}
           onChange={(on) => saveSettings((s) => void (s.openGroupsInOrder = on))}
         />
 
         <Toggle
-          label="Email me when an issue waits for me"
-          title="Inbox and recipient are set under Providers and access"
+          label={t('Mail an mich, wenn ein Issue auf mich wartet')}
+          title={t('Postfach und Empfänger stehen unter „Anbieter und Zugänge“')}
           checked={project().settings.notifyOwner}
           onChange={(on) => saveSettings((s) => void (s.notifyOwner = on))}
         />
@@ -467,14 +483,13 @@ export function ProjectSettings() {
 
         <section class="section">
           <div class="section-head">
-            <h3>Cost cap per issue</h3>
+            <h3>{t('Kosten-Deckel pro Issue')}</h3>
           </div>
           <p class="muted">
-            If an issue uses more, it is parked after the current run and you get notified. "Allow another
-            round" lets it use the same amount again. 0 = no cap.
+            {t('Verbraucht ein Issue mehr, wird es nach dem laufenden Lauf geparkt und du bekommst Bescheid. Mit „Weitere Runde freigeben“ darf es noch einmal so viel verbrauchen. 0 = kein Deckel.')}
           </p>
           <div class="row">
-            <Field label="Dollars" hint="As reported by the provider, also on a subscription">
+            <Field label={t('Dollar')} hint={t('Wie vom Anbieter gemeldet, auch im Abo')}>
               <input
                 type="number"
                 min="0"
@@ -486,7 +501,7 @@ export function ProjectSettings() {
                 }}
               />
             </Field>
-            <Field label="Thousand tokens" hint="New tokens, without cache">
+            <Field label={t('Tausend Tokens')} hint={t('Neue Tokens, ohne Cache')}>
               <input
                 type="number"
                 min="0"
@@ -503,14 +518,13 @@ export function ProjectSettings() {
 
         <section class="section">
           <div class="section-head">
-            <h3>Preview with screenshots</h3>
+            <h3>{t('Vorschau mit Screenshots')}</h3>
           </div>
           <p class="muted">
-            When work goes to review, AgentDeck starts the app from the branch, takes a desktop and a phone
-            screenshot and stops it again. The images show in the issue, and the reviewer gets them too.
+            {t('Geht Arbeit ins Review, startet AgentDeck die App aus dem Branch, macht einen Desktop- und einen Handy-Screenshot und beendet sie wieder. Die Bilder stehen im Issue, der Prüfer bekommt sie mit.')}
           </p>
           <div class="row">
-            <Field label="Start command" hint="$PORT is replaced by a free port. Empty = off.">
+            <Field label={t('Startbefehl')} hint={t('$PORT wird durch einen freien Port ersetzt. Leer = aus.')}>
               <input
                 class="mono"
                 placeholder="npm run dev -- --port $PORT"
@@ -521,7 +535,7 @@ export function ProjectSettings() {
                 }}
               />
             </Field>
-            <Field label="Page" hint="Path that gets captured">
+            <Field label={t('Seite')} hint={t('Pfad, der fotografiert wird')}>
               <input
                 class="mono"
                 value={project().settings.preview.path}
@@ -538,9 +552,9 @@ export function ProjectSettings() {
 
         <section class="section">
           <div class="section-head">
-            <h3>Showcase</h3>
+            <h3>{t('Schaufenster')}</h3>
             <Toggle
-              label="Public page"
+              label={t('Öffentliche Seite')}
               checked={project().settings.showcase.enabled}
               onChange={(on) =>
                 saveSettings((s) => {
@@ -551,8 +565,7 @@ export function ProjectSettings() {
             />
           </div>
           <p class="muted">
-            A page without login that shows which agents are working right now and what got done. No code, no
-            comments, no costs. Anyone with the link can see it.
+            {t('Eine Seite ohne Login, die zeigt, welche Agenten gerade arbeiten und was erledigt wurde. Kein Code, keine Kommentare, keine Kosten. Wer den Link kennt, kann sie sehen.')}
           </p>
           <Show when={project().settings.showcase.enabled}>
             <div class="inline-row">
@@ -566,14 +579,14 @@ export function ProjectSettings() {
               </a>
               <button
                 class="ghost"
-                title="The old link stops working afterwards"
+                title={t('Der alte Link funktioniert danach nicht mehr')}
                 onClick={() => saveSettings((s) => void (s.showcase.slug = randomSlug()))}
               >
-                New link
+                {t('Neuer Link')}
               </button>
             </div>
             <Toggle
-              label="Show issue titles"
+              label={t('Issue-Titel zeigen')}
               checked={project().settings.showcase.titles}
               onChange={(on) => saveSettings((s) => void (s.showcase.titles = on))}
             />
@@ -586,7 +599,7 @@ export function ProjectSettings() {
 
         <Lessons projectId={project().id} />
 
-        <Field label="Context for all agents">
+        <Field label={t('Kontext für alle Agenten')}>
           <textarea
             rows="6"
             value={project().description}
@@ -595,7 +608,7 @@ export function ProjectSettings() {
         </Field>
         <footer>
           <button class="ghost danger" onClick={remove}>
-            Delete project
+            {t('Projekt löschen')}
           </button>
         </footer>
       </div>
@@ -604,8 +617,8 @@ export function ProjectSettings() {
 }
 
 const INTAKE_STATUSES = [
-  ['backlog', 'Backlog: look first'],
-  ['todo', 'To Do: agents start at once'],
+  ['backlog', 'Backlog: erst ansehen'],
+  ['todo', 'To do: Agenten starten sofort'],
 ] as const
 
 const GITHUB_REPO = /^[\w.-]{1,39}\/[\w.-]{1,100}$/
@@ -614,23 +627,21 @@ const GITHUB_REPO = /^[\w.-]{1,39}\/[\w.-]{1,100}$/
 function GithubIntake() {
   const intake = () => board.project!.settings.intake
   const switchOn = (on: boolean) => {
-    if (on && !GITHUB_REPO.test(intake().repo)) return fail(new Error('Enter the repository as owner/name first.'))
+    if (on && !GITHUB_REPO.test(intake().repo)) return fail(new Error(t('Erst das Repository als owner/name eintragen.')))
     saveSettings((s) => void (s.intake.enabled = on))
   }
 
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Take in GitHub issues</h3>
-        <Toggle label="Take in issues with the label" checked={intake().enabled} onChange={switchOn} />
+        <h3>{t('GitHub-Issues übernehmen')}</h3>
+        <Toggle label={t('Issues mit Label übernehmen')} checked={intake().enabled} onChange={switchOn} />
       </div>
       <p class="muted">
-        When an issue in the repository gets the label, AgentDeck creates it here and the agents take over. On
-        GitHub only people who work on the repository may set a label: strangers can write an issue, but cannot
-        hand it to the agents. The text still comes from outside, so the backlog is the default.
+        {t('Bekommt ein Issue im Repository das Label, legt AgentDeck es hier an und die Agenten übernehmen. Ein Label setzen darf auf GitHub nur, wer im Repository mitarbeitet: Fremde können ein Issue schreiben, aber nicht an die Agenten geben. Der Text kommt trotzdem von außen, darum ist das Backlog die Vorgabe.')}
       </p>
       <div class="row">
-        <Field label="Repository" hint="owner/name, as in the address on GitHub">
+        <Field label={t('Repository')} hint={t('owner/name, wie in der Adresse auf GitHub')}>
           <input
             class="mono"
             placeholder="acme/shop"
@@ -644,23 +655,24 @@ function GithubIntake() {
             }}
           />
         </Field>
-        <Field label="Label">
+        <Field label={t('Label')}>
           <input
             value={intake().label}
             onChange={(e) => saveSettings((s) => void (s.intake.label = e.currentTarget.value.trim() || 'agentdeck'))}
           />
         </Field>
-        <Field label="Lands in">
+        <Field label={t('Landet in')}>
           <Select
             value={intake().status}
-            options={INTAKE_STATUSES}
+            options={tl(INTAKE_STATUSES)}
             onChange={(status) => saveSettings((s) => void (s.intake.status = status))}
           />
         </Field>
       </div>
       <p class="muted">
-        Needs the GitHub webhook of this server (<span class="mono">{location.origin}/api/github/webhook</span>) with
-        the "Issues" event. Setup: README, "Approval gates and GitHub webhooks".
+        {t('Braucht den GitHub-Webhook dieses Servers (')}
+        <span class="mono">{location.origin}/api/github/webhook</span>
+        {t(') mit dem Event „Issues“. Einrichtung: README, „Freigaben und GitHub-Webhooks“.')}
       </p>
     </section>
   )
@@ -680,38 +692,37 @@ function Connect() {
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Control from outside</h3>
+        <h3>{t('Von außen steuern')}</h3>
       </div>
       <p class="muted">
-        AgentDeck is an MCP server itself. Claude Code, Codex, Cursor or a chat app use it to read the boards,
-        create issues, comment on them, move and stop them, with the rights of the token used. Applies to
-        all projects.
+        {t('AgentDeck ist selbst ein MCP-Server. Claude Code, Codex, Cursor oder eine Chat-App lesen darüber die Boards, legen Issues an, kommentieren, verschieben und stoppen sie, mit den Rechten des verwendeten Tokens. Gilt für alle Projekte.')}
       </p>
       <div class="inline-row">
         <code class="connect-command">{command}</code>
         <button class="ghost" onClick={copy}>
-          {copied() ? 'Copied' : 'Copy'}
+          {copied() ? t('Kopiert') : t('Kopieren')}
         </button>
       </div>
       <p class="muted">
-        Numbers for Prometheus and Grafana (issues, runs, costs, tokens, quotas):{' '}
-        <span class="mono">{location.origin}/api/metrics</span>, with a bearer token as well.
+        {t('Zahlen für Prometheus und Grafana (Issues, Läufe, Kosten, Tokens, Kontingente):')}{' '}
+        <span class="mono">{location.origin}/api/metrics</span>
+        {t(', ebenfalls mit Bearer-Token.')}
       </p>
     </section>
   )
 }
 
 const WEBHOOK_EVENTS: readonly (readonly [WebhookEvent, string])[] = [
-  ['review', 'Ready for review'],
-  ['blocked', 'Blocked'],
-  ['done', 'Done'],
-  ['failed', 'Run failed'],
-  ['owner', 'Waits for you'],
+  ['review', 'Zur Prüfung'],
+  ['blocked', 'Blockiert'],
+  ['done', 'Erledigt'],
+  ['failed', 'Lauf fehlgeschlagen'],
+  ['owner', 'Wartet auf dich'],
 ]
 
 const WEBHOOK_KINDS = [
   ['slack', 'Slack'],
-  ['generic', 'Generic (JSON, signed)'],
+  ['generic', 'Allgemein (JSON, signiert)'],
 ] as const
 
 /** Slack or any HTTPS endpoint. The URL is sent once and stays on the server, like the secret. */
@@ -743,7 +754,7 @@ function Webhooks(props: { projectId: number }) {
   }
 
   function remove(hook: Webhook) {
-    if (!confirm(`Delete the webhook to ${hook.host}?`)) return
+    if (!confirm(t('Webhook an {host} löschen?', { host: hook.host }))) return
     api
       .del(`/projects/${props.projectId}/webhooks/${hook.id}`)
       .then(() => setBoard('project', 'settings', 'webhooks', (list) => list.filter((h) => h.id !== hook.id)))
@@ -754,32 +765,30 @@ function Webhooks(props: { projectId: number }) {
     setResult('')
     api
       .post<{ status: number }>(`/projects/${props.projectId}/webhooks/${hook.id}/test`)
-      .then((r) => setResult(`${hook.host}: delivered (HTTP ${r.status})`))
+      .then((r) => setResult(t('{host}: angekommen (HTTP {status})', { host: hook.host, status: r.status })))
       .catch(fail)
   }
 
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Webhooks</h3>
+        <h3>{t('Webhooks')}</h3>
       </div>
       <p class="muted">
-        Reports status changes to Slack or an endpoint of your own. Only https, no addresses in a private network.
-        Project, issue number, title and status are sent, never code or comments. Generic webhooks
-        are signed with HMAC-SHA256 (header X-AgentDeck-Signature).
+        {t('Meldet Statuswechsel an Slack oder einen eigenen Endpunkt. Nur https, keine Adressen im privaten Netz. Gesendet werden Projekt, Issue-Nummer, Titel und Status, nie Code oder Kommentare. Allgemeine Webhooks sind mit HMAC-SHA256 signiert (Header X-AgentDeck-Signature).')}
       </p>
       <ul class="lessons">
-        <For each={hooks()} fallback={<li class="muted">No webhooks yet.</li>}>
+        <For each={hooks()} fallback={<li class="muted">{t('Noch keine Webhooks.')}</li>}>
           {(hook) => (
             <li class="webhook">
               <span>
-                <strong>{hook.kind === 'slack' ? 'Slack' : 'Generic'}</strong>{' '}
+                <strong>{hook.kind === 'slack' ? 'Slack' : t('Allgemein')}</strong>{' '}
                 <span class="mono">{hook.host}</span>
                 <span class="webhook-events">
                   <For each={WEBHOOK_EVENTS}>
                     {([event, label]) => (
                       <Toggle
-                        label={label}
+                        label={t(label)}
                         checked={hook.events.includes(event)}
                         onChange={(on) =>
                           saveSettings((s) => {
@@ -793,12 +802,12 @@ function Webhooks(props: { projectId: number }) {
                 </span>
               </span>
               <button class="ghost" onClick={() => test(hook)}>
-                Test
+                {t('Testen')}
               </button>
               <button
                 class="ghost icon-button"
-                title="Delete webhook"
-                aria-label="Delete webhook"
+                title={t('Webhook löschen')}
+                aria-label={t('Webhook löschen')}
                 onClick={() => remove(hook)}
               >
                 <Icon name="close" size={14} />
@@ -812,9 +821,9 @@ function Webhooks(props: { projectId: number }) {
       </Show>
       <Show when={secret()}>
         <div class="notice">
-          Signing secret, shown only now: <code class="mono">{secret()}</code>{' '}
+          {t('Signatur-Secret, wird nur jetzt angezeigt:')} <code class="mono">{secret()}</code>{' '}
           <button class="ghost" onClick={() => setSecret('')}>
-            Noted
+            {t('Notiert')}
           </button>
         </div>
       </Show>
@@ -822,19 +831,19 @@ function Webhooks(props: { projectId: number }) {
         <input
           class="mono"
           placeholder="https://hooks.slack.com/services/…"
-          aria-label="Webhook address"
+          aria-label={t('Webhook-Adresse')}
           value={url()}
           onInput={(e) => setUrl(e.currentTarget.value)}
           onKeyDown={(e) => e.key === 'Enter' && add()}
         />
-        <Select aria-label="Kind" value={kind()} options={WEBHOOK_KINDS} onChange={setKind} />
-        <button onClick={add}>Add</button>
+        <Select aria-label={t('Art')} value={kind()} options={tl(WEBHOOK_KINDS)} onChange={setKind} />
+        <button onClick={add}>{t('Hinzufügen')}</button>
       </div>
       <div class="webhook-events">
         <For each={WEBHOOK_EVENTS}>
           {([event, label]) => (
             <Toggle
-              label={label}
+              label={t(label)}
               checked={events().includes(event)}
               onChange={(on) => setEvents((list) => toggle(list, event, on))}
             />
@@ -870,36 +879,36 @@ function Egress(props: { projectId: number }) {
   }
 
   const firewallText = (s: EgressStatus) => {
-    if (!s.sandbox) return 'No sandbox: the setting only takes effect in the container.'
-    if (s.mode === 'open') return 'Open: the agents reach every host.'
-    if (s.firewall === 'active') return 'Firewall active: other targets and DNS are blocked.'
+    if (!s.sandbox) return t('Keine Sandbox: die Einstellung wirkt nur im Container.')
+    if (s.mode === 'open') return t('Offen: die Agenten erreichen jeden Host.')
+    if (s.firewall === 'active') return t('Firewall aktiv: andere Ziele und DNS sind gesperrt.')
     if (s.firewall === 'unavailable')
-      return `Firewall not available, the project is open (${s.error || 'error'}). The container needs iptables and NET_ADMIN, see the README.`
-    return 'Setting up the firewall…'
+      return t('Firewall nicht verfügbar, das Projekt ist offen ({error}). Der Container braucht iptables und NET_ADMIN, siehe README.', {
+        error: s.error || t('Fehler||Status'),
+      })
+    return t('Firewall wird eingerichtet …')
   }
 
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Network of the agents</h3>
+        <h3>{t('Netzwerk der Agenten')}</h3>
       </div>
       <p class="muted">
-        With an allowlist the agents of this project reach only the listed hosts, through a proxy in
-        AgentDeck. The container's firewall blocks everything else, DNS too. Git over SSH does not work then, Git
-        over HTTPS does. AgentDeck itself (board, API) stays reachable.
+        {t('Mit Allowlist erreichen die Agenten dieses Projekts nur die eingetragenen Hosts, über einen Proxy in AgentDeck. Alles andere sperrt die Firewall des Containers, auch DNS. Git über SSH geht dann nicht, Git über HTTPS schon. AgentDeck selbst (Board, API) bleibt erreichbar.')}
       </p>
       <div class="row">
-        <Field label="Outbound connections">
+        <Field label={t('Ausgehende Verbindungen')}>
           <Select
             value={egress().mode}
-            options={EGRESS_MODES}
+            options={tl(EGRESS_MODES)}
             onChange={(mode) => saveSettings((s) => void (s.egress.mode = mode))?.then(later)}
           />
         </Field>
       </div>
       <Field
-        label="Allowed hosts"
-        hint="One entry per line: github.com, *.example.com (subdomains only), host:8443, 192.0.2.7. Without a port, 80 and 443 apply. Invalid entries are dropped."
+        label={t('Erlaubte Hosts')}
+        hint={t('Ein Eintrag pro Zeile: github.com, *.example.com (nur Subdomains), host:8443, 192.0.2.7. Ohne Port gelten 80 und 443. Ungültige Einträge fallen weg.')}
       >
         <textarea
           rows="6"
@@ -916,12 +925,12 @@ function Egress(props: { projectId: number }) {
           <>
             <p class="muted">{firewallText(s())}</p>
             <Show when={s().blocked.length}>
-              <p class="muted">Blocked recently:</p>
+              <p class="muted">{t('Zuletzt blockiert:')}</p>
               <div class="chips">
                 <For each={s().blocked}>
                   {(b) => (
-                    <button class="ghost" title="Put on the allowlist" onClick={() => allow(b.target)}>
-                      Allow {b.target}
+                    <button class="ghost" title={t('Auf die Allowlist setzen')} onClick={() => allow(b.target)}>
+                      {t('{target} erlauben', { target: b.target })}
                     </button>
                   )}
                 </For>
@@ -962,22 +971,21 @@ function Lessons(props: { projectId: number }) {
   return (
     <section class="section">
       <div class="section-head">
-        <h3>Lessons learned</h3>
+        <h3>{t('Gelerntes')}</h3>
       </div>
       <p class="muted">
-        Every run reads the latest 15 notes. Agents write them themselves when they find out something that is
-        not in the repository.
+        {t('Jeder Lauf liest die neuesten 15 Notizen. Agenten schreiben sie selbst, wenn sie etwas herausfinden, das nicht im Repository steht.')}
       </p>
       <ul class="lessons">
-        <For each={lessons()} fallback={<li class="muted">Nothing learned yet.</li>}>
+        <For each={lessons()} fallback={<li class="muted">{t('Noch nichts gelernt.')}</li>}>
           {(lesson) => (
             <li>
               <span>{lesson.body}</span>
               <small class="muted">{lesson.source}</small>
               <button
                 class="ghost icon-button"
-                title="Delete note"
-                aria-label="Delete note"
+                title={t('Notiz löschen')}
+                aria-label={t('Notiz löschen')}
                 onClick={() => remove(lesson)}
               >
                 <Icon name="close" size={14} />
@@ -988,13 +996,13 @@ function Lessons(props: { projectId: number }) {
       </ul>
       <div class="inline-row">
         <input
-          placeholder='e.g. tests run with "npm test -- --run"'
-          aria-label="New note"
+          placeholder={t('z. B. Tests laufen mit „npm test -- --run“')}
+          aria-label={t('Neue Notiz')}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => e.key === 'Enter' && add()}
         />
-        <button onClick={add}>Add</button>
+        <button onClick={add}>{t('Hinzufügen')}</button>
       </div>
     </section>
   )

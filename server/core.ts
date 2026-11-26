@@ -8,6 +8,7 @@ import { restOf } from './recovery.ts'
 import { resetsOf } from './resets.ts'
 import { modelLimitReached, quotaWindows } from './pacing.ts'
 import { SANDBOX } from './sandbox.ts'
+import { currentLang, instanceLang, isLang, setInstanceLang, t, tIn, type Lang } from './i18n.ts'
 
 export const PROVIDERS: Record<
   string,
@@ -30,6 +31,16 @@ export const PROVIDERS: Record<
   },
 }
 if (process.env.AGENTDECK_MOCK) PROVIDERS.mock = { label: 'Mock (Test)', cli: 'mock', defaultModel: '' }
+
+// The language of the instance: AGENTDECK_LANG when set, else what the first start chose. An
+// instance that already has projects was run in German before there was a choice, so it stays
+// German; a fresh one starts in English.
+if (!isLang(process.env.AGENTDECK_LANG)) {
+  const stored = get('SELECT value FROM settings WHERE key=?', 'language')?.value
+  const chosen: Lang = isLang(stored) ? stored : get('SELECT 1 FROM projects LIMIT 1') ? 'de' : 'en'
+  if (chosen !== stored) run('INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)', 'language', chosen)
+  setInstanceLang(chosen)
+}
 
 export const STATUSES = ['backlog', 'todo', 'in_progress', 'review', 'blocked', 'done']
 /** A GitHub repository as "owner/name". */
@@ -87,8 +98,12 @@ export type Settings = {
   adhd: boolean
   /** Caveman mode: agents write all prose terse to save output tokens; code and blocks stay exact. */
   caveman: boolean
+  /** What the agents are prompted in and what the server writes on this project's issues. */
+  language: Lang
   /** Record each run's steps for its replay timeline (runEvents.ts). */
   replay: boolean
+  /** Load large MCP connections only for issues that need them (mcp.ts, connectionsFor). */
+  mcpOnDemand: boolean
   /** 'issue': a fresh worktree per issue. 'agent': each agent keeps one checkout and switches branches. */
   workspace: 'issue' | 'agent'
   /** After this many change requests between maker and reviewers a human has to decide. */
@@ -157,7 +172,14 @@ export type Settings = {
   egress: EgressSettings
 }
 
-export function defaultSettings(): Settings {
+/** What the watchdog's model checks in a new project. */
+const watchdogCheck = (lang: Lang) =>
+  tIn(
+    lang,
+    'Prüfe, ob die Aufgabe vollständig umgesetzt wurde, ob Tests ausgeführt wurden und ob nichts außerhalb des Auftrags geändert wurde.',
+  )
+
+export function defaultSettings(language: Lang = instanceLang()): Settings {
   const budgets: Record<string, Budget> = {}
   for (const p of Object.keys(PROVIDERS))
     budgets[p] = {
@@ -173,7 +195,9 @@ export function defaultSettings(): Settings {
     maxConcurrent: 3,
     adhd: false,
     caveman: false,
+    language,
     replay: true,
+    mcpOnDemand: true,
     workspace: 'issue',
     maxReviewRounds: 3,
     checklists: { enabled: false, templates: '' },
@@ -216,8 +240,7 @@ export function defaultSettings(): Settings {
       llm: {
         enabled: false,
         provider: 'anthropic',
-        prompt:
-          'Check that the task is fully done, that tests were run and that nothing outside the task was changed.',
+        prompt: watchdogCheck(language),
         onFail: 'todo',
       },
     },
@@ -266,8 +289,10 @@ function withOldFallbackModels(tiers: ModelTiers, raw: any): ModelTiers {
 }
 
 export function mergeSettings(raw: any): Settings {
-  const d = defaultSettings()
   const s = raw ?? {}
+  const d = defaultSettings(isLang(s.language) ? s.language : undefined)
+  // The watchdog's prompt as it came with a new project follows the project's language.
+  const untouchedPrompt = [watchdogCheck('de'), watchdogCheck('en')].includes(s.watchdog?.llm?.prompt)
   const budgets = { ...d.budgets }
   for (const p of Object.keys(budgets)) budgets[p] = { ...budgets[p], ...(s.budgets?.[p] ?? {}) }
   const fallback = [...new Set<string>((Array.isArray(s.fallback) ? s.fallback : []).filter(
@@ -278,7 +303,9 @@ export function mergeSettings(raw: any): Settings {
     maxConcurrent: Math.max(1, Number(s.maxConcurrent ?? d.maxConcurrent) || 1),
     adhd: !!s.adhd,
     caveman: !!s.caveman,
+    language: d.language,
     replay: s.replay !== false,
+    mcpOnDemand: s.mcpOnDemand !== false,
     workspace: s.workspace === 'agent' ? 'agent' : 'issue',
     maxReviewRounds: Math.max(1, Number(s.maxReviewRounds ?? d.maxReviewRounds) || 3),
     checklists: {
@@ -355,7 +382,7 @@ export function mergeSettings(raw: any): Settings {
     watchdog: {
       enabled: s.watchdog?.enabled ?? d.watchdog.enabled,
       rules: Array.isArray(s.watchdog?.rules) ? s.watchdog.rules : d.watchdog.rules,
-      llm: { ...d.watchdog.llm, ...(s.watchdog?.llm ?? {}) },
+      llm: { ...d.watchdog.llm, ...(s.watchdog?.llm ?? {}), ...(untouchedPrompt ? { prompt: d.watchdog.llm.prompt } : {}) },
     },
     egress: normalizeEgress(s.egress),
   }
@@ -378,6 +405,7 @@ export const mapIssue = (r: any) =>
     blocked_by: JSON.parse(r.blocked_by || '[]') as number[],
     reviewers: JSON.parse(r.reviewers || '[]') as number[],
     ...('checklist' in r ? { checklist: JSON.parse(r.checklist || '[]') as string[] } : {}),
+    ...('mcp_wanted' in r ? { mcp_wanted: JSON.parse(r.mcp_wanted || '[]') as string[] } : {}),
   }
 
 const ISSUE_LIGHT =
@@ -537,8 +565,9 @@ const ISSUE_FIELDS = [
   'review_interim',
   'precheck_fails',
   'arena_winner',
+  'mcp_wanted',
 ]
-const JSON_ISSUE_FIELDS = ['blocked_by', 'reviewers', 'checklist']
+const JSON_ISSUE_FIELDS = ['blocked_by', 'reviewers', 'checklist', 'mcp_wanted']
 /** Fields whose changes the issue page lists in its history. Internal bookkeeping stays out. */
 const HISTORY_FIELDS = [
   'title',
@@ -640,7 +669,7 @@ export function createIssue(
   },
 ) {
   const p = get('SELECT next_number FROM projects WHERE id=?', pid)
-  if (!p) throw new Error('Project not found')
+  if (!p) throw new Error(t('Projekt nicht gefunden'))
   const now = Date.now()
   run('UPDATE projects SET next_number=next_number+1 WHERE id=?', pid)
   const r = run(
@@ -767,16 +796,19 @@ export function routeProvider(
       ? Math.max(state.budget.stopAtPct, s.fallbackReservePct)
       : state.budget.stopAtPct
     const result = { provider: p, model, fallback: differentProvider }
-    const reason = state.unsupported ? 'disabled in this environment'
-      : !state.ready ? 'not set up'
-      : state.resting ? `${state.resting.reason} until ${new Date(state.resting.until).toLocaleString('en-US')}`
-      : !aboveStop(state.left, stop) ? `${Math.round(state.left)}% left, stop at ${stop}%`
-      : modelLimitReached(p, model) ? `model limit reached (${model})`
+    const reason = state.unsupported ? t('in dieser Umgebung deaktiviert')
+      : !state.ready ? t('nicht eingerichtet')
+      : state.resting ? t('{reason} bis {time}', {
+          reason: state.resting.reason,
+          time: new Date(state.resting.until).toLocaleString(currentLang() === 'de' ? 'de-DE' : 'en-US'),
+        })
+      : !aboveStop(state.left, stop) ? t('{left} % übrig, Stopp bei {stop} %', { left: Math.round(state.left), stop })
+      : modelLimitReached(p, model) ? t('Modelllimit erreicht ({model})', { model })
       : ''
     if (reason) skipped.push(`${PROVIDERS[p].label}: ${reason}`)
     else if (p === avoid && !agent.provider_override) {
       retry = { pick: result, skipped: [...skipped] }
-      skipped.push(`${PROVIDERS[p].label}: held back for a rerun after a repeated error`)
+      skipped.push(`${PROVIDERS[p].label}: ${t('erneuter Lauf nach wiederholtem Fehler zurückgestellt')}`)
     } else return { pick: result, skipped }
   }
   return retry ?? { pick: null, skipped }

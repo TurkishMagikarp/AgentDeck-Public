@@ -57,6 +57,36 @@ it can reach, create projects with `repo_path` under `/repos` through the API, a
 probes from the issue comments. Run test containers with `--init`, otherwise killed processes
 stay as zombies.
 
+## A feature is finished when it is on main
+
+Deploying is not finishing. The deployed source once grew far apart from `main` because features
+were built on side branches and snapshots, deployed, and never merged. Do not repeat that.
+
+- Start every piece of work in a worktree of its own, cut from a freshly fetched `origin/main`.
+  Never work on a copy of the deployed source that has no shared history with `main`.
+- When the feature works (`npm test` and `npx tsc --noEmit -p .` are green), merge it into `main`
+  and push `main` yourself, without waiting to be asked. Do this before the deploy, or right
+  after it at the latest.
+- Deploy only what `main` holds. If you had to deploy from a branch, merge that branch into `main`
+  in the same session.
+- A branch that is not merged at the end of your session is unfinished work: say so in your
+  summary, with the branch name and what is missing.
+- Every text a person or a model reads exists in German and English (see "Two languages").
+
+## Two languages
+
+Every text a person or a model reads exists in German and English.
+
+- German is the source text and the key: `t('Geparkt: {reason}', { reason })`. The English entry
+  goes into `server/i18n/en.*.ts` or `web/src/i18n/en.*.ts`. `test/i18n.test.ts` and
+  `test/i18nServer.test.ts` fail on a missing entry.
+- Prompts for models live side by side in `server/prompts/de.ts` and `server/prompts/en.ts`.
+  What code parses (blocks, status values, checklist marks) is the same in both.
+- Never call `t()` in a module-level constant. Work for a project runs in that project's language:
+  enter it through `forProject(project, …)`. Requests run in the language of the person asking.
+- Code that recognizes stored text (a comment that starts with "Geparkt:") matches both languages
+  with `variants()`.
+
 ## Deploying
 
 A deploy is: build the image, run the tests in it, pause the projects, restart, resume.

@@ -87,7 +87,7 @@ describe('users', () => {
     assert.throws(() => createUser('<script>', 'viewer'))
     assert.throws(() => createUser('Bob', 'root'))
     const { user } = createUser('Bob', 'viewer')
-    assert.throws(() => createUser('bob', 'viewer'), /already exists/)
+    assert.throws(() => createUser('bob', 'viewer'), /schon/)
     assert.throws(() => setUserRole(user.id, 'owner'))
     deleteUser(user.id)
   })

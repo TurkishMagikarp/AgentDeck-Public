@@ -11,6 +11,7 @@ import { BlockList, isIP } from 'node:net'
 import { getSecret, setSecret } from './auth.ts'
 import { getProject, onStatusChange, WEBHOOK_EVENTS, type WebhookEvent } from './core.ts'
 import { get } from './db.ts'
+import { forProject, t } from './i18n.ts'
 
 export type Webhook = { id: string; kind: 'slack' | 'generic'; host: string; events: WebhookEvent[] }
 type Target = { pid: number; url: string; secret: string }
@@ -33,20 +34,21 @@ const PUBLIC_URL = (process.env.AGENTDECK_PUBLIC_URL ?? '').replace(/\/$/, '')
 const allowLocal = () => process.env.AGENTDECK_ALLOW_OPEN === '1' || process.env.AGENTDECK_MOCK === '1'
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1'])
 
+// German keys, translated where a message is built (slackBody).
 const STATUS_LABEL: Record<string, string> = {
   backlog: 'Backlog',
   todo: 'To Do',
-  in_progress: 'In progress',
+  in_progress: 'In Arbeit',
   review: 'Review',
-  blocked: 'Blocked',
-  done: 'Done',
+  blocked: 'Blockiert',
+  done: 'Erledigt',
 }
 export const EVENT_LABEL: Record<WebhookEvent, string> = {
-  review: 'Ready for review',
-  blocked: 'Blocked',
-  done: 'Done',
-  failed: 'Run failed',
-  owner: 'Waits for you',
+  review: 'Zur Prüfung',
+  blocked: 'Blockiert',
+  done: 'Erledigt',
+  failed: 'Lauf fehlgeschlagen',
+  owner: 'Wartet auf dich',
 }
 
 // ---------- SSRF guard ----------
@@ -105,22 +107,26 @@ export function isBlockedAddress(address: string, local = false) {
   return family === 4 ? blocked4.check(address, 'ipv4') : blocked6.check(address, 'ipv6')
 }
 
-/** Parses and checks a webhook URL without the network. Throws a message for the user. */
+/** An address a webhook may not use. Trying again does not change that, so it is never retried. */
+class Refused extends Error {}
+
+/** Parses and checks a webhook URL without the network. Throws a message for the person. */
 export function checkUrl(raw: string, local = allowLocal()) {
-  if (typeof raw !== 'string' || raw.length > 2048) throw new Error('Invalid webhook address')
+  if (typeof raw !== 'string' || raw.length > 2048) throw new Refused(t('Ungültige Webhook-Adresse'))
   let url: URL
   try {
     url = new URL(raw.trim())
   } catch {
-    throw new Error('Invalid webhook address')
+    throw new Refused(t('Ungültige Webhook-Adresse'))
   }
-  if (url.username || url.password) throw new Error('Credentials do not belong in the webhook address')
+  if (url.username || url.password) throw new Error(t('Zugangsdaten gehören nicht in die Webhook-Adresse'))
   const host = url.hostname.replace(/^\[|\]$/g, '')
-  if (!host) throw new Error('Invalid webhook address')
+  if (!host) throw new Refused(t('Ungültige Webhook-Adresse'))
   const isLocal = local && LOCAL_HOSTS.has(host)
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocal))
-    throw new Error('Only https addresses are allowed')
-  if (isIP(host) && isBlockedAddress(host, isLocal)) throw new Error('An address in a private network is not allowed')
+    throw new Refused(t('Nur https-Adressen sind erlaubt'))
+  if (isIP(host) && isBlockedAddress(host, isLocal))
+    throw new Refused(t('Adresse im privaten Netz ist nicht erlaubt'))
   return { url, host, isLocal }
 }
 
@@ -132,9 +138,9 @@ export async function resolveChecked(host: string, local: boolean) {
   const addresses = isIP(host)
     ? [{ address: host, family: isIP(host) }]
     : await lookup(host, { all: true, verbatim: true })
-  if (!addresses.length) throw new Error('Host not found')
+  if (!addresses.length) throw new Error(t('Host nicht gefunden'))
   for (const { address } of addresses)
-    if (isBlockedAddress(address, local)) throw new Error('An address in a private network is not allowed')
+    if (isBlockedAddress(address, local)) throw new Refused(t('Adresse im privaten Netz ist nicht erlaubt'))
   return addresses[0]
 }
 
@@ -146,6 +152,7 @@ export async function post(raw: string, body: string, headers: Record<string, st
   const { url, host, isLocal } = checkUrl(raw)
   const target = await resolveChecked(host, isLocal)
   const client = url.protocol === 'https:' ? https : http
+  const timedOut = t('Zeitüberschreitung (5 s)')
   return new Promise((resolve, reject) => {
     const req = client.request(
       {
@@ -166,7 +173,7 @@ export async function post(raw: string, body: string, headers: Record<string, st
         resolve(res.statusCode ?? 0)
       },
     )
-    const timer = setTimeout(() => req.destroy(new Error('Timeout (5 s)')), TIMEOUT_MS)
+    const timer = setTimeout(() => req.destroy(new Error(timedOut)), TIMEOUT_MS)
     req.on('error', reject)
     req.on('close', () => clearTimeout(timer))
     req.end(body)
@@ -194,11 +201,9 @@ export function slackBody(projectKey: string, items: Item[]) {
     const ref = `${projectKey}-${item.issue.number}`
     const url = link(projectKey, item.issue.number)
     const name = url ? `<${url}|${ref}>` : ref
-    const move =
-      item.oldStatus && item.newStatus
-        ? ` (${STATUS_LABEL[item.oldStatus] ?? item.oldStatus} → ${STATUS_LABEL[item.newStatus] ?? item.newStatus})`
-        : ''
-    return `*${EVENT_LABEL[item.event]}*: ${name} ${slackEscape(item.issue.title)}${move}`
+    const status = (value: string) => (STATUS_LABEL[value] ? t(STATUS_LABEL[value]) : value)
+    const move = item.oldStatus && item.newStatus ? ` (${status(item.oldStatus)} → ${status(item.newStatus)})` : ''
+    return `*${t(EVENT_LABEL[item.event])}*: ${name} ${slackEscape(item.issue.title)}${move}`
   })
   return JSON.stringify({ text: lines.join('\n') })
 }
@@ -221,7 +226,7 @@ export function createWebhook(pid: number, input: { url?: unknown; kind?: unknow
   const { url } = checkUrl(String(input.url ?? ''))
   const kind: Webhook['kind'] = input.kind === 'slack' ? 'slack' : 'generic'
   const events = WEBHOOK_EVENTS.filter((e) => Array.isArray(input.events) && input.events.includes(e))
-  if (!events.length) throw new Error('Pick at least one event')
+  if (!events.length) throw new Error(t('Mindestens ein Ereignis wählen'))
   const id = randomBytes(8).toString('hex')
   const secret = randomBytes(32).toString('hex')
   const target: Target = { pid, url: url.href, secret }
@@ -286,8 +291,9 @@ function flush(id: string) {
   const batch = pending.get(id)
   if (!batch) return
   pending.delete(id)
-  send(batch.hook, batch.pid, batch.projectKey, [...batch.items.values()]).catch((error) =>
-    console.error('webhook', batch.hook.host, error.message),
+  // The receiver reads the message in the project's language, whoever moved the issue.
+  forProject(getProject(batch.pid), () => send(batch.hook, batch.pid, batch.projectKey, [...batch.items.values()])).catch(
+    (error) => console.error('webhook', batch.hook.host, error.message),
   )
 }
 
@@ -316,9 +322,10 @@ async function send(hook: Webhook, pid: number, projectKey: string, items: Item[
       retry = status >= 500 || status === 429
     } catch (error: any) {
       reason = error.message
-      retry = !/not allowed|Only https|Invalid/.test(reason)
+      retry = !(error instanceof Refused)
     }
-    if (!retry || attempt >= MAX_ATTEMPTS) throw new Error(`${reason} after ${attempt} attempt(s)`)
+    if (!retry || attempt >= MAX_ATTEMPTS)
+      throw new Error(t('{reason} nach {attempt} Versuch(en)', { reason, attempt }))
     await new Promise((resolve) => setTimeout(resolve, timing.backoffMs * 4 ** (attempt - 1)).unref())
   }
 }
@@ -326,18 +333,21 @@ async function send(hook: Webhook, pid: number, projectKey: string, items: Item[
 /** The test button: one request right away, no queue, no retry. Returns the HTTP status. */
 export async function testWebhook(pid: number, hook: Webhook) {
   const project = getProject(pid)
-  const req = request(hook, pid, project.key, [
-    {
-      event: hook.events[0] ?? 'done',
-      issue: { number: 0, title: 'Test from AgentDeck' },
-      oldStatus: null,
-      newStatus: null,
-      at: Date.now(),
-    },
-  ])
-  if (!req) throw new Error('Webhook not found, please create it again')
+  // The message itself is in the project's language, the errors in the language of who pressed the button.
+  const req = forProject(project, () =>
+    request(hook, pid, project.key, [
+      {
+        event: hook.events[0] ?? 'done',
+        issue: { number: 0, title: t('Test von AgentDeck') },
+        oldStatus: null,
+        newStatus: null,
+        at: Date.now(),
+      },
+    ]),
+  )
+  if (!req) throw new Error(t('Webhook nicht gefunden, bitte neu anlegen'))
   const status = await post(req.url, req.body, req.headers)
-  if (status < 200 || status >= 300) throw new Error(`The receiver answered with HTTP ${status}`)
+  if (status < 200 || status >= 300) throw new Error(t('Der Empfänger antwortet mit HTTP {status}', { status }))
   return status
 }
 

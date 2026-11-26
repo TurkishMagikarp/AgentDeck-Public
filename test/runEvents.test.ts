@@ -48,7 +48,7 @@ test('Claude stream-json: messages, tool calls and their results by name', () =>
       type: 'assistant',
       message: {
         content: [
-          { type: 'text', text: 'I read the file.' },
+          { type: 'text', text: 'Ich lese die Datei.' },
           { type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'src/a.ts' } },
         ],
       },
@@ -58,14 +58,14 @@ test('Claude stream-json: messages, tool calls and their results by name', () =>
       message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'export {}' }] }] },
     },
     { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'zz', content: 'nope', is_error: true }] } },
-    { type: 'result', total_cost_usd: 0.1, result: 'broken', is_error: true, usage: {} },
+    { type: 'result', total_cost_usd: 0.1, result: 'kaputt', is_error: true, usage: {} },
   ])
   assert.deepEqual(events, [
-    { kind: 'assistant', text: 'I read the file.' },
+    { kind: 'assistant', text: 'Ich lese die Datei.' },
     { kind: 'tool_call', name: 'Read', text: '{"file_path":"src/a.ts"}' },
     { kind: 'tool_result', name: 'Read', text: 'export {}' },
     { kind: 'error', name: 'tool', text: 'nope' },
-    { kind: 'error', text: 'broken' },
+    { kind: 'error', text: 'kaputt' },
   ])
 })
 
@@ -91,16 +91,16 @@ test('Codex JSON: commands with their output, other items, messages and errors',
 
 test('opencode JSON: a finished tool brings its output along', () => {
   const events = capture('opencode', [
-    { type: 'text', part: { text: 'Go.' } },
+    { type: 'text', part: { text: 'Los.' } },
     { type: 'tool_use', part: { tool: 'bash', state: { status: 'completed', input: { command: 'ls' }, output: 'a\nb' } } },
-    { type: 'tool_use', part: { tool: 'read', state: { status: 'error', input: {}, error: 'missing' } } },
+    { type: 'tool_use', part: { tool: 'read', state: { status: 'error', input: {}, error: 'fehlt' } } },
   ])
   assert.deepEqual(events, [
-    { kind: 'assistant', text: 'Go.' },
+    { kind: 'assistant', text: 'Los.' },
     { kind: 'tool_call', name: 'bash', text: '{"command":"ls"}' },
     { kind: 'tool_result', name: 'bash', text: 'a\nb' },
     { kind: 'tool_call', name: 'read', text: '{}' },
-    { kind: 'error', name: 'read', text: 'missing' },
+    { kind: 'error', name: 'read', text: 'fehlt' },
   ])
 })
 
@@ -115,15 +115,15 @@ test('redaction removes keys, tokens of the run and private keys with their body
     '-----BEGIN RSA PRIVATE KEY-----',
     'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun',
     '-----END RSA PRIVATE KEY-----',
-    'remote.origin.pushurl stays',
+    'remote.origin.pushurl bleibt',
   ].join('\n')
   const out = redact(text, known)
   for (const secret of [ANTHROPIC, GITHUB, 'run-token-0123456789', 'MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun'])
     assert.ok(!out.includes(secret), secret.slice(0, 8))
-  assert.match(out, /\[SECRET: anthropic\]/)
-  assert.match(out, /\[SECRET: github\]/)
-  assert.match(out, /\[SECRET: private-key\]/)
-  assert.match(out, /remote\.origin\.pushurl stays/)
+  assert.match(out, /\[GEHEIM: anthropic\]/)
+  assert.match(out, /\[GEHEIM: github\]/)
+  assert.match(out, /\[GEHEIM: private-key\]/)
+  assert.match(out, /remote\.origin\.pushurl bleibt/)
   // Placeholders are not secrets.
   assert.equal(redact('api_key = "your-api-key-goes-here-123"'), 'api_key = "your-api-key-goes-here-123"')
 })
@@ -141,11 +141,11 @@ test('a secret in a very long line and one across the cut are still found', () =
 
 test('events are buffered, capped per event and redacted before they are stored', () => {
   const runId = newRun()
-  const recorder = recordRun(runId, ['secret-token-123'])
-  recorder.add({ kind: 'prompt', name: 'sha256:abc', text: 'Prompt with secret-token-123' })
+  const recorder = recordRun(runId, ['geheimes-token-123'])
+  recorder.add({ kind: 'prompt', name: 'sha256:abc', text: 'Auftrag mit geheimes-token-123' })
   recorder.add({ kind: 'tool_result', name: 'Bash', text: 'z'.repeat(EVENT_CAP * 3) })
-  recorder.add({ kind: 'assistant', text: `My key: ${ANTHROPIC}` })
-  recorder.add({ kind: 'bogus' as any, text: 'never' })
+  recorder.add({ kind: 'assistant', text: `Mein Key: ${ANTHROPIC}` })
+  recorder.add({ kind: 'bogus' as any, text: 'nie' })
 
   // Still in the buffer: nothing written yet, but the timeline already shows it.
   assert.equal(Number(run('UPDATE run_events SET at=at WHERE run_id=?', runId).changes), 0)
@@ -161,14 +161,14 @@ test('events are buffered, capped per event and redacted before they are stored'
       [3, 'assistant', ''],
     ],
   )
-  assert.equal(events[0].payload, 'Prompt with [SECRET: run token]')
+  assert.equal(events[0].payload, 'Auftrag mit [GEHEIM: Token des Laufs]')
   assert.equal(events[1].payload.length, EVENT_CAP)
   assert.equal(events[1].size, EVENT_CAP * 3)
   assert.ok(!events[2].payload.includes(ANTHROPIC))
   assert.deepEqual(runEvents(runId, 'assistant').map((e) => e.seq), [3])
 
   // Closed: later events are dropped.
-  recorder.add({ kind: 'assistant', text: 'too late' })
+  recorder.add({ kind: 'assistant', text: 'zu spät' })
   assert.equal(runEvents(runId).length, 3)
 })
 
@@ -179,14 +179,14 @@ test('a run stops being recorded at its cap, but its end is kept', () => {
   const fits = Math.floor(RUN_CAP / EVENT_CAP)
   for (let i = 0; i < fits + 20; i++) recorder.add({ kind: 'tool_result', text: chunk })
   recorder.add({ kind: 'changes', text: 'Commits:\nabc123 fix' })
-  recorder.add({ kind: 'end', text: 'Run finished.' })
+  recorder.add({ kind: 'end', text: 'Lauf abgeschlossen.' })
   recorder.close()
 
   const events = runEvents(runId)
   const results = events.filter((e) => e.kind === 'tool_result')
   assert.ok(results.length <= fits)
   assert.ok(results.reduce((sum, e) => sum + e.payload.length, 0) <= RUN_CAP)
-  assert.equal(events.filter((e) => e.kind === 'error' && /Recording cut/.test(e.payload)).length, 1)
+  assert.equal(events.filter((e) => e.kind === 'error' && /Aufzeichnung gekürzt/.test(e.payload)).length, 1)
   assert.deepEqual(events.slice(-2).map((e) => e.kind), ['changes', 'end'])
 })
 
@@ -198,7 +198,7 @@ test('old timelines go with the run retention', () => {
   run('UPDATE runs SET started_at=? WHERE id < ?', longAgo, recent)
   for (const id of [old, recent]) {
     const recorder = recordRun(id)
-    recorder.add({ kind: 'assistant', text: 'hello' })
+    recorder.add({ kind: 'assistant', text: 'hallo' })
     recorder.close()
   }
   pruneRunEvents(Date.now() - 30 * 86_400_000)

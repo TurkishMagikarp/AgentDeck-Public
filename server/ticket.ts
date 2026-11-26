@@ -1,25 +1,34 @@
 // How an issue is written, so that the agent doing it needs no guessing: a smaller model can then
 // do the work, and the strong models are left for planning and review. Agents that file issues
 // get this format in their prompt, and the agent API refuses an issue without its core sections.
+import { say } from './i18n.ts'
+import { prompts } from './prompts/index.ts'
 
-export const TICKET_FORMAT = `## How to write an issue
-Write it so that a junior developer with no context could do it without asking. Use these headings:
-- \`## Goal\`: why this matters, one to three sentences.
-- \`## Task\`: what to do, as numbered steps.
-- \`## Files\`: the files and folders to change or read, with paths. Name an existing example to copy from where one exists.
-- \`## Done when\`: acceptance criteria as a checklist. Each item can be checked by reading the code, running a command or looking at a screenshot.
-- \`## Out of scope\`: what not to touch.
-- \`## Notes\`: optional. Pitfalls, decisions already made, commands to run.
-One issue is one result. Split anything bigger.`
+/** The format in the language of the run, with that language's headings. */
+export const TICKET_FORMAT = () => prompts().ticketFormat
 
-const REQUIRED = ['Task', 'Files', 'Done when']
+/** The sections an issue must have, each under its English or its German heading. */
+const REQUIRED = [
+  ['Task', 'Aufgabe'],
+  ['Files', 'Dateien'],
+  ['Done when', 'Fertig wenn'],
+]
 
 /** A section counts as a heading ("## Task") or as a bold label ("**Done when:**"). */
 function hasSection(description: string, name: string) {
-  const escaped = name.replace(/ /g, '\\s+')
-  return new RegExp(`^\\s*(#{1,4}\\s*${escaped}\\b|\\*\\*${escaped}:?\\*\\*)`, 'im').test(description)
+  const escaped = name.replace(/ /g, ',?\\s+')
+  // Not \b: it does not know umlauts, and a heading must not match a longer word either.
+  const end = '(?![\\p{L}\\p{N}_])'
+  return new RegExp(`^\\s*(#{1,4}\\s*${escaped}${end}|\\*\\*${escaped}:?\\*\\*)`, 'imu').test(description)
 }
 
+/** The missing sections by their English names. */
 export function missingSections(description: string) {
-  return REQUIRED.filter((name) => !hasSection(description, name))
+  return REQUIRED.filter((names) => !names.some((name) => hasSection(description, name))).map(
+    ([english]) => english,
+  )
 }
+
+/** The heading to name in a message about a missing section, in the language of the reader. */
+export const sectionHeading = (english: string) =>
+  say({ de: REQUIRED.find(([name]) => name === english)?.[1] ?? english, en: english })

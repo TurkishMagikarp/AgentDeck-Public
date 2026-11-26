@@ -55,30 +55,30 @@ describe('SSRF guard', () => {
   })
 
   test('only https URLs without credentials, http only for localhost in test mode', () => {
-    assert.throws(() => checkUrl('http://example.com/hook', false), /Only https/)
-    assert.throws(() => checkUrl('ftp://example.com/hook', false), /Only https/)
-    assert.throws(() => checkUrl('https://user:pw@example.com/hook', false), /Credentials/)
-    assert.throws(() => checkUrl('https://127.0.0.1/hook', false), /private network/)
-    assert.throws(() => checkUrl('https://[::1]/hook', false), /private network/)
-    assert.throws(() => checkUrl('https://169.254.169.254/latest', false), /private network/)
-    assert.throws(() => checkUrl('http://localhost:3000/hook', false), /Only https/)
-    assert.throws(() => checkUrl('not a url', false), /Invalid/)
+    assert.throws(() => checkUrl('http://example.com/hook', false), /Nur https/)
+    assert.throws(() => checkUrl('ftp://example.com/hook', false), /Nur https/)
+    assert.throws(() => checkUrl('https://user:pw@example.com/hook', false), /Zugangsdaten/)
+    assert.throws(() => checkUrl('https://127.0.0.1/hook', false), /privaten Netz/)
+    assert.throws(() => checkUrl('https://[::1]/hook', false), /privaten Netz/)
+    assert.throws(() => checkUrl('https://169.254.169.254/latest', false), /privaten Netz/)
+    assert.throws(() => checkUrl('http://localhost:3000/hook', false), /Nur https/)
+    assert.throws(() => checkUrl('kein url', false), /Ungültige/)
     assert.equal(checkUrl('https://hooks.slack.com/services/x', false).host, 'hooks.slack.com')
     assert.equal(checkUrl('http://127.0.0.1:3000/hook', true).isLocal, true)
-    assert.throws(() => checkUrl('http://10.0.0.1/hook', true), /Only https/)
+    assert.throws(() => checkUrl('http://10.0.0.1/hook', true), /Nur https/)
   })
 
   test('every resolved address is checked, not only the URL text', async () => {
-    await assert.rejects(resolveChecked('localhost', false), /private network/)
-    await assert.rejects(resolveChecked('127.0.0.1', false), /private network/)
+    await assert.rejects(resolveChecked('localhost', false), /privaten Netz/)
+    await assert.rejects(resolveChecked('127.0.0.1', false), /privaten Netz/)
     assert.equal((await resolveChecked('127.0.0.1', true)).address, '127.0.0.1')
   })
 })
 
 test('signature is HMAC-SHA256 of the exact body', () => {
   const body = '{"project":"AD"}'
-  assert.equal(sign('secret', body), 'sha256=' + createHmac('sha256', 'secret').update(body).digest('hex'))
-  assert.notEqual(sign('other', body), sign('secret', body))
+  assert.equal(sign('geheim', body), 'sha256=' + createHmac('sha256', 'geheim').update(body).digest('hex'))
+  assert.notEqual(sign('anders', body), sign('geheim', body))
 })
 
 test('settings keep only well-formed webhooks and known events', () => {
@@ -144,12 +144,12 @@ describe('delivery', () => {
     received.length = 0
     const { pid, secret } = project('WH', 'generic', ['done'])
     assert.match(secret!, /^[0-9a-f]{64}$/)
-    const issue = createIssue(pid, { title: 'Repair login', status: 'todo' })!
+    const issue = createIssue(pid, { title: 'Login reparieren', status: 'todo' })!
     patchIssue(issue.id, { status: 'review' }) // not chosen
     patchIssue(issue.id, { status: 'done' })
     patchIssue(issue.id, { status: 'review' })
     patchIssue(issue.id, { status: 'done' }) // same issue and event: told once
-    patchIssue(issue.id, { title: 'title only' }) // no status change
+    patchIssue(issue.id, { title: 'nur Titel' }) // no status change
     await until(() => received.length > 0)
     await new Promise((r) => setTimeout(r, 80))
 
@@ -163,7 +163,7 @@ describe('delivery', () => {
       { ...payload.events[0], at: 0 },
       {
         event: 'done',
-        issue: { number: issue.number, title: 'Repair login' },
+        issue: { number: issue.number, title: 'Login reparieren' },
         oldStatus: 'review',
         newStatus: 'done',
         at: 0,
@@ -184,7 +184,7 @@ describe('delivery', () => {
     assert.equal(received.length, 3, 'two 503 answers, then success')
     assert.equal(received[2].headers['x-agentdeck-signature'], undefined)
     const { text } = JSON.parse(received[2].body)
-    assert.match(text, /^\*Blocked\*: SL-1 A &lt;b&gt; &amp; c \(To Do → Blocked\)$/)
+    assert.match(text, /^\*Blockiert\*: SL-1 A &lt;b&gt; &amp; c \(To Do → Blockiert\)$/)
   })
 
   test('a webhook id copied into another project sends nothing', () => {

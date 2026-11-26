@@ -1,5 +1,6 @@
 import { createResource, createSignal, For, Show } from 'solid-js'
 import { api } from './api'
+import { t, locale } from './i18n'
 import { RunLog } from './RunLog'
 import { RunReplay } from './RunReplay'
 import { fail, providerLabel } from './store'
@@ -12,7 +13,7 @@ export function CommentItem(props: { comment: Comment }) {
       <div class="comment-head">
         <span class="avatar small">{props.comment.author.slice(0, 2).toUpperCase()}</span>
         <strong>{props.comment.author}</strong>
-        <span class="muted" title={new Date(props.comment.created_at).toLocaleString('en-US')}>
+        <span class="muted" title={new Date(props.comment.created_at).toLocaleString(locale())}>
           {timeAgo(props.comment.created_at)}
         </span>
       </div>
@@ -30,26 +31,32 @@ export function RunItem(props: { run: Run }) {
     (run().input_tokens ?? 0) - (run().cached_tokens ?? 0) + (run().output_tokens ?? 0)
   const seconds = () => Math.round(((run().ended_at ?? Date.now()) - run().started_at) / 1000)
   const label = () =>
-    ({ done: 'finished', failed: 'failed', stopped: 'stopped', running: 'running' })[
-      run().status ?? ''
-    ] ?? run().status
+    ({
+      done: t('abgeschlossen'),
+      failed: t('fehlgeschlagen'),
+      stopped: t('gestoppt'),
+      running: t('läuft'),
+    } as Record<string, string>)[run().status ?? ''] ?? run().status
 
   return (
     <li class={`run-item ${run().status}`}>
-      Run by {run().agent_name} {label()} · {providerLabel(run().provider)}
+      {t('Lauf von {agent} {status}', { agent: run().agent_name, status: label() ?? '' })} · {providerLabel(run().provider)}
       {run().model ? ` (${run().model})` : ''} · {seconds()} s ·{' '}
-      <span title="An agent resends its whole context on every step. This part comes from the cache and costs about a tenth.">
-        {formatTokens(freshTokens())} tokens new, {formatTokens(run().cached_tokens ?? 0)} from the cache
+      <span title={t('Ein Agent schickt bei jedem Schritt seinen ganzen Kontext erneut mit. Dieser Teil kommt aus dem Cache und kostet etwa ein Zehntel.')}>
+        {t('{fresh} Tokens neu, {cached} aus dem Cache', {
+          fresh: formatTokens(freshTokens()),
+          cached: formatTokens(run().cached_tokens ?? 0),
+        })}
       </span>
       <Show when={run().cost_usd}> · ${run().cost_usd!.toFixed(2)}</Show>
       <Show when={run().note}>
         <span class="muted"> · {run().note}</span>
       </Show>{' '}
       <button class="link" onClick={() => setShowsOutput(!showsOutput())}>
-        {showsOutput() ? 'Hide output' : 'Show output'}
+        {showsOutput() ? t('Ausgabe ausblenden') : t('Ausgabe zeigen')}
       </button>{' '}
       <button class="link" onClick={() => setShowsReplay(!showsReplay())}>
-        {showsReplay() ? 'Hide history' : 'Show history'}
+        {showsReplay() ? t('Verlauf ausblenden') : t('Verlauf zeigen')}
       </button>
       <Show when={showsOutput()}>
         <RunLog runId={run().id} />
@@ -77,7 +84,7 @@ export function Screenshots(props: { issueId: number; comments: number }) {
   return (
     <Show when={latest().length}>
       <section class="issue-section">
-        <h3>Preview</h3>
+        <h3>{t('Vorschau')}</h3>
         <div class="shots-row">
           <For each={latest()}>
             {(file) => {
@@ -86,7 +93,7 @@ export function Screenshots(props: { issueId: number; comments: number }) {
                 <a href={url} target="_blank" rel="noreferrer" classList={{ phone: file.includes('phone') }}>
                   <img
                     src={url}
-                    alt={file.includes('phone') ? 'Preview phone' : 'Preview desktop'}
+                    alt={file.includes('phone') ? t('Vorschau Handy') : t('Vorschau Desktop')}
                     loading="lazy"
                   />
                 </a>
@@ -115,14 +122,18 @@ export function CostForecast(props: { issueId: number; version: number }) {
     () => ({ id: props.issueId, version: props.version }),
     ({ id }) => api.get<ForecastInfo>(`/issues/${id}/forecast`),
   )
-  const thousands = (tokens: number) => `${Math.round(tokens / 1000).toLocaleString('en-US')}k`
+  const thousands = (tokens: number) => `${Math.round(tokens / 1000).toLocaleString(locale())}k`
   const text = (info: ForecastInfo) => {
     const f = info.forecast!
     const amount =
       f.usd.high > 0
         ? `~$${f.usd.median.toFixed(2)} (${f.usd.low.toFixed(2)}–${f.usd.high.toFixed(2)})`
-        : `~${thousands(f.tokens.median)} tokens (${thousands(f.tokens.low)}–${thousands(f.tokens.high)})`
-    return `Expected: ${amount}, from ${f.sample} similar issues`
+        : t('~{median} Tokens ({low}–{high})', {
+            median: thousands(f.tokens.median),
+            low: thousands(f.tokens.low),
+            high: thousands(f.tokens.high),
+          })
+    return t('Erwartet: {amount}, aus {n} ähnlichen Issues', { amount, n: f.sample })
   }
 
   return (
@@ -130,7 +141,7 @@ export function CostForecast(props: { issueId: number; version: number }) {
       {(info) => (
         <span class="spending" classList={{ capped: info().overCap }}>
           {text(info())}
-          <Show when={info().overCap}> · above the cost cap</Show>
+          <Show when={info().overCap}> · {t('über dem Kosten-Deckel')}</Show>
         </span>
       )}
     </Show>
@@ -145,21 +156,22 @@ export function Spending(props: { issueId: number; version: number }) {
     () => ({ id: props.issueId, version: props.version }),
     ({ id }) => api.get<Spent>(`/issues/${id}/spent`),
   )
-  const thousands = (tokens: number) => `${Math.round(tokens / 1000).toLocaleString('en-US')}k`
+  const thousands = (tokens: number) => `${Math.round(tokens / 1000).toLocaleString(locale())}k`
 
   return (
     <Show when={data()} fallback={<span class="muted">–</span>}>
       {(info) => (
         <span class="spending" classList={{ capped: info().capped }}>
           ${info().spent.usd.toFixed(2)}
-          {info().cap.usd ? ` of $${info().cap.usd.toFixed(2)}` : ''} · {thousands(info().spent.tokens)}
-          {info().cap.tokens ? ` of ${thousands(info().cap.tokens)}` : ''} tokens
+          {info().cap.usd ? ' ' + t('von {cap}', { cap: '$' + info().cap.usd.toFixed(2) }) : ''} ·{' '}
+          {thousands(info().spent.tokens)}
+          {info().cap.tokens ? ' ' + t('von {cap}', { cap: thousands(info().cap.tokens) }) : ''} Tokens
           <Show when={info().capped}>
             <button
               class="link"
               onClick={() => api.post(`/issues/${props.issueId}/raise-cap`).then(refetch).catch(fail)}
             >
-              Allow another round
+              {t('Weitere Runde freigeben')}
             </button>
           </Show>
         </span>

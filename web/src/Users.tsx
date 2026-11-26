@@ -2,15 +2,16 @@ import { createSignal, For, onMount, Show } from 'solid-js'
 import { api } from './api'
 import { fail } from './store'
 import { Modal } from './ui'
+import { locale, t } from './i18n'
 
 type Role = 'viewer' | 'operator' | 'admin'
 type User = { id: number; name: string; role: Role; created_at: number; last_used_at: number | null }
 
-export const ROLE_LABELS: Record<Role, string> = { viewer: 'Viewer', operator: 'Operator', admin: 'Admin' }
+export const ROLE_LABELS: Record<Role, string> = { viewer: 'Lesen', operator: 'Bedienen', admin: 'Verwalten' }
 const ROLE_HINTS: Record<Role, string> = {
-  viewer: 'sees the board, issues and numbers',
-  operator: 'works the board: issues, comments, stopping runs, approving landings',
-  admin: 'everything, including projects, agents, providers, keys and users',
+  viewer: 'sieht Board, Issues und Zahlen',
+  operator: 'arbeitet am Board: Issues, Kommentare, Läufe stoppen, Landungen freigeben',
+  admin: 'alles, auch Projekte, Agenten, Anbieter, Keys und Benutzer',
 }
 
 /** People with their own token and role (server/users.ts, server/roles.ts). */
@@ -35,33 +36,33 @@ export function Users(props: { onClose: () => void }) {
     await load()
   }
   async function remove(user: User) {
-    if (!confirm(`Remove ${user.name}? The token stops working after that.`)) return
+    if (!confirm(t('{name} entfernen? Das Token gilt danach nicht mehr.', { name: user.name }))) return
     await api.del(`/users/${user.id}`)
     await load()
   }
 
   return (
-    <Modal title="Users" wide onClose={props.onClose}>
+    <Modal title={t('Benutzer')} wide onClose={props.onClose}>
       <p class="muted">
-        Every user logs in with a token of their own. The board token stays the access of the
-        owner. Behind the proxy, the name the proxy reports counts.
+        {t('Jeder Benutzer meldet sich mit seinem eigenen Token an. Das Board-Token bleibt der Zugang des Besitzers. Hinter dem Proxy zählt der Name, den der Proxy meldet.')}
       </p>
       <Show when={created()}>
         {(fresh) => (
           <div class="notice">
-            Token for <strong>{fresh().name}</strong>, shown only now:
+            {t('Token für')} <strong>{fresh().name}</strong>
+            {t(', wird nur jetzt angezeigt:')}
             <pre class="mono">{fresh().token}</pre>
-            <button onClick={() => setCreated(null)}>Noted</button>
+            <button onClick={() => setCreated(null)}>{t('Notiert')}</button>
           </div>
         )}
       </Show>
-      <Show when={users().length} fallback={<p class="muted">No users yet.</p>}>
+      <Show when={users().length} fallback={<p class="muted">{t('Noch keine Benutzer.')}</p>}>
         <table class="audit">
           <thead>
             <tr>
               <th>Name</th>
-              <th>Role</th>
-              <th>Last active</th>
+              <th>{t('Rolle')}</th>
+              <th>{t('Zuletzt aktiv')}</th>
               <th />
             </tr>
           </thead>
@@ -76,16 +77,16 @@ export function Users(props: { onClose: () => void }) {
                       onChange={(e) => changeRole(user, e.currentTarget.value as Role).catch(fail)}
                     >
                       <For each={Object.keys(ROLE_LABELS) as Role[]}>
-                        {(option) => <option value={option}>{ROLE_LABELS[option]}</option>}
+                        {(option) => <option value={option}>{t(ROLE_LABELS[option])}</option>}
                       </For>
                     </select>
                   </td>
                   <td class="audit-time">
-                    {user.last_used_at ? new Date(user.last_used_at).toLocaleString('en-US') : '–'}
+                    {user.last_used_at ? new Date(user.last_used_at).toLocaleString(locale()) : '–'}
                   </td>
                   <td>
                     <button class="ghost" onClick={() => remove(user).catch(fail)}>
-                      Remove
+                      {t('Entfernen')}
                     </button>
                   </td>
                 </tr>
@@ -104,12 +105,12 @@ export function Users(props: { onClose: () => void }) {
         />
         <select value={role()} onChange={(e) => setRole(e.currentTarget.value as Role)}>
           <For each={Object.keys(ROLE_LABELS) as Role[]}>
-            {(option) => <option value={option}>{ROLE_LABELS[option]}</option>}
+            {(option) => <option value={option}>{t(ROLE_LABELS[option])}</option>}
           </For>
         </select>
-        <button type="submit">Create</button>
+        <button type="submit">{t('Anlegen')}</button>
       </form>
-      <p class="muted">{ROLE_LABELS[role()]}: {ROLE_HINTS[role()]}.</p>
+      <p class="muted">{t(ROLE_LABELS[role()])}: {t(ROLE_HINTS[role()])}.</p>
     </Modal>
   )
 }

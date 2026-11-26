@@ -11,7 +11,7 @@ let clock = 1_000_000
 
 function park() {
   run(
-    "INSERT INTO comments (issue_id, author, kind, body, created_at) VALUES (?, 'Watchdog', 'watchdog', 'Parked: reason', ?)",
+    "INSERT INTO comments (issue_id, author, kind, body, created_at) VALUES (?, 'Watchdog', 'watchdog', 'Geparkt: Grund', ?)",
     issueId,
     (clock += 1000),
   )

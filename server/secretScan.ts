@@ -3,6 +3,7 @@
 // precheck and once more before landing. The added lines of every commit are scanned, not only
 // the end state: a key that a later commit deletes is still in the history that gets pushed.
 // Findings never repeat the secret; they name the kind, the file, the commit and a masked hint.
+import { t } from './i18n.ts'
 import { gitIn } from './sandbox.ts'
 
 export type SecretFinding = { rule: string; file: string; commit: string; hint: string }
@@ -23,21 +24,22 @@ export function entropy(value: string) {
   return bits
 }
 
-// Ordered: the first rule that matches a line names it.
+// Ordered: the first rule that matches a line names it. The labels are German keys, translated
+// where a finding is written (scanPatch).
 const RULES: Rule[] = [
-  { id: 'private-key', label: 'private key', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/ },
-  { id: 'anthropic', label: 'Anthropic API key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
-  { id: 'openai', label: 'OpenAI/DeepSeek API key', pattern: /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/ },
-  { id: 'github', label: 'GitHub token', pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})/ },
-  { id: 'aws', label: 'AWS access key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
-  { id: 'google', label: 'Google API key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
-  { id: 'slack', label: 'Slack token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/ },
-  { id: 'stripe', label: 'Stripe key', pattern: /\b(?:sk|rk)_live_[0-9A-Za-z]{20,}/ },
-  { id: 'npm', label: 'npm token', pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
+  { id: 'private-key', label: 'privater Schlüssel', pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP |ENCRYPTED )?PRIVATE KEY(?: BLOCK)?-----/ },
+  { id: 'anthropic', label: 'Anthropic-API-Key', pattern: /\bsk-ant-[A-Za-z0-9_-]{20,}/ },
+  { id: 'openai', label: 'OpenAI-/DeepSeek-API-Key', pattern: /\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{32,}/ },
+  { id: 'github', label: 'GitHub-Token', pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})/ },
+  { id: 'aws', label: 'AWS-Access-Key', pattern: /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/ },
+  { id: 'google', label: 'Google-API-Key', pattern: /\bAIza[0-9A-Za-z_-]{35}\b/ },
+  { id: 'slack', label: 'Slack-Token', pattern: /\bxox[abposr]-[A-Za-z0-9-]{10,}/ },
+  { id: 'stripe', label: 'Stripe-Key', pattern: /\b(?:sk|rk)_live_[0-9A-Za-z]{20,}/ },
+  { id: 'npm', label: 'npm-Token', pattern: /\bnpm_[A-Za-z0-9]{36}\b/ },
   { id: 'jwt', label: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{16,}/ },
   {
     id: 'assignment',
-    label: 'Password or token in the code',
+    label: 'Passwort oder Token im Code',
     pattern: /(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)["']?\s*[:=]\s*["']([^"'\s]{16,200})["']/i,
     check: (value) => entropy(value) >= 3.5 && /\d/.test(value) && /[A-Za-z]/.test(value),
   },
@@ -46,7 +48,7 @@ const RULES: Rule[] = [
 const MAX_LINE = 10_000
 const MAX_FINDINGS = 20
 
-const mask = (value: string) => `${value.slice(0, 4)}… (${value.length} characters)`
+const mask = (value: string) => t('{start}… ({n} Zeichen)', { start: value.slice(0, 4), n: value.length })
 
 /** The secret a line holds, or null. Documentation values (AWS's ...EXAMPLE keys) do not count. */
 export function secretIn(line: string): { rule: Rule; value: string } | null {
@@ -82,7 +84,7 @@ export function scanPatch(patch: string, commit = ''): SecretFinding[] {
     } else if (line.startsWith('+')) {
       const hit = secretIn(line.slice(1))
       if (hit) {
-        found.push({ rule: hit.rule.label, file, commit, hint: mask(hit.value) })
+        found.push({ rule: t(hit.rule.label), file, commit, hint: mask(hit.value) })
         if (found.length >= MAX_FINDINGS) break
       }
     }
@@ -120,8 +122,14 @@ export const findingsList = (findings: SecretFinding[]) =>
 
 /** For the maker: take it out of every commit, not only out of the last one. */
 export const secretsNoteForMaker = (findings: SecretFinding[], base: string) =>
-  `Your branch contains what looks like a secret (API key, token or private key):\n${findingsList(findings)}\n\nTake it out of the code and out of every commit: a commit that only deletes it again is not enough, the history is pushed too. To do that, branch off ${base} anew and bring your work over without the secret. Values the code needs come from environment variables. For test data use values that are plainly fake (with "example" in them). Then hand in again.`
+  t(
+    'Dein Branch enthält, was wie ein Geheimnis aussieht (API-Key, Token oder privater Schlüssel):\n{findings}\n\nNimm es aus dem Code und aus allen Commits heraus: Ein Commit, der es nur wieder löscht, reicht nicht, die Historie wird mitgepusht. Zweige dazu neu von {base} ab und übernimm deine Arbeit ohne das Geheimnis. Werte, die der Code braucht, kommen aus Umgebungsvariablen. Für Testdaten nimm erkennbar falsche Werte (mit "example" darin). Gib dann erneut ab.',
+    { findings: findingsList(findings), base },
+  )
 
 /** For the owner: nothing lands, and a real key has to be replaced. */
 export const secretsNoteForOwner = (findings: SecretFinding[]) =>
-  `The branch contains what looks like a secret, so it does not land automatically:\n${findingsList(findings)}\n\nIf it is real: revoke and replace the key at the provider, then hand the issue back. If it is a false alarm: check and merge it yourself.`
+  t(
+    'Der Branch enthält, was wie ein Geheimnis aussieht, deshalb landet er nicht automatisch:\n{findings}\n\nIst es echt: den Key beim Anbieter sperren und ersetzen, dann das Issue zurückgeben. Ist es ein Fehlalarm: selbst prüfen und mergen.',
+    { findings: findingsList(findings) },
+  )

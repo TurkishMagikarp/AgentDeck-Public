@@ -3,6 +3,7 @@ import { api } from './api'
 import { Arena } from './Arena'
 import { PRIORITIES } from './Board'
 import { Changes } from './Changes'
+import { Dossier } from './Dossier'
 import { Icon } from './icons'
 import { CommentItem, CostForecast, RunItem, Screenshots, Spending } from './IssueParts'
 import { ModelSelect } from './ModelSelect'
@@ -23,40 +24,43 @@ import {
   weights,
 } from './store'
 import type { Comment, IssueEvent, IssueLink, Run, Status } from './types'
+import { t, locale } from './i18n'
 import { Select, timeAgo } from './ui'
 
 const STATUS_OPTIONS: [Status, string][] = [
   ['backlog', 'Backlog'],
   ['todo', 'To Do'],
-  ['in_progress', 'In progress'],
+  ['in_progress', 'In Arbeit'],
   ['review', 'Review'],
-  ['blocked', 'Waits for a human'],
-  ['done', 'Done'],
+  ['blocked', 'Wartet auf Mensch'],
+  ['done', 'Fertig'],
 ]
-const STATUS_LABEL = Object.fromEntries(STATUS_OPTIONS) as Record<string, string>
+const STATUS_RAW = Object.fromEntries(STATUS_OPTIONS) as Record<string, string>
+const statusLabel = (status: string) => (STATUS_RAW[status] ? t(STATUS_RAW[status]) : status)
+const statusOptions = (): [Status, string][] => STATUS_OPTIONS.map(([id, label]) => [id, t(label)])
 
 const FIELD_LABEL: Record<string, string> = {
-  title: 'Title',
+  title: 'Titel',
   status: 'Status',
   assignee_id: 'Agent',
-  priority: 'Priority',
-  blocked_by: 'Waiting on',
-  reviewers: 'Reviewers',
-  grp: 'Group',
-  model: 'Model',
+  priority: 'Priorität',
+  blocked_by: 'Wartet auf',
+  reviewers: 'Prüfer',
+  grp: 'Gruppe',
+  model: 'Modell',
 }
 
 type Tab = 'all' | 'comments' | 'history' | 'runs'
 const TABS: [Tab, string][] = [
-  ['all', 'All'],
-  ['comments', 'Comments'],
-  ['history', 'History'],
-  ['runs', 'Runs'],
+  ['all', 'Alle'],
+  ['comments', 'Kommentare'],
+  ['history', 'Verlauf'],
+  ['runs', 'Läufe'],
 ]
 
 type Entry = { at: number; comment?: Comment; event?: IssueEvent; run?: Run }
 
-const when = (at: number) => new Date(at).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })
+const when = (at: number) => new Date(at).toLocaleString(locale(), { dateStyle: 'medium', timeStyle: 'short' })
 
 /**
  * The page of one issue, laid out like Jira: what the issue is about on the left (description,
@@ -86,15 +90,15 @@ export function IssuePage() {
   }
 
   async function remove() {
-    if (!confirm(`Really delete ${key()}?`)) return
+    if (!confirm(t('{key} wirklich löschen?', { key: key() }))) return
     await api.del(`/issues/${issue().id}`).catch(fail)
     leaveIssuePage()
   }
 
   return (
-    <div class="issue-page" role="main" aria-label={`Issue ${key()}`}>
+    <div class="issue-page" role="main" aria-label={t('Issue {key}', { key: key() })}>
       <header class="issue-page-bar">
-        <nav class="breadcrumb" aria-label="Breadcrumb">
+        <nav class="breadcrumb" aria-label={t('Pfad')}>
           <button class="ghost" onClick={leaveIssuePage}>
             {board.project?.name}
           </button>
@@ -103,19 +107,19 @@ export function IssuePage() {
         </nav>
         <span class="spacer" />
         <Show when={copied()}>
-          <span class="muted copied">Link copied</span>
+          <span class="muted copied">{t('Link kopiert')}</span>
         </Show>
-        <button class="ghost icon-button" title="Copy link" aria-label="Copy link" onClick={copyLink}>
+        <button class="ghost icon-button" title={t('Link kopieren')} aria-label={t('Link kopieren')} onClick={copyLink}>
           <Icon name="link" />
         </button>
         <button class="ghost danger" onClick={remove}>
-          Delete
+          {t('Löschen')}
         </button>
         <button
           class="ghost icon-button"
           onClick={leaveIssuePage}
-          aria-label="Back to the board"
-          title="Back to the board (Esc)"
+          aria-label={t('Zurück zum Board')}
+          title={t('Zurück zum Board (Esc)')}
         >
           <Icon name="close" />
         </button>
@@ -130,7 +134,7 @@ export function IssuePage() {
               <p class={`wait-reason large ${reason().kind}`}>
                 <Icon name="clock" size={14} />
                 <span>
-                  <strong>Waiting:</strong> {reason().text}
+                  <strong>{t('Wartet:')}</strong> {reason().text}
                 </span>
               </p>
             )}
@@ -142,10 +146,10 @@ export function IssuePage() {
                 <div class="run-banner">
                   <span class="pulse" />
                   <div>
-                    <strong>{run().agent_name}</strong> is working ({providerLabel(run().provider)})
-                    <p class="muted">{liveLine[issue().id] ?? 'starting…'}</p>
+                    <strong>{run().agent_name}</strong> {t('arbeitet')} ({providerLabel(run().provider)})
+                    <p class="muted">{liveLine[issue().id] ?? t('startet…')}</p>
                   </div>
-                  <button onClick={() => api.post(`/issues/${issue().id}/stop`).catch(fail)}>Stop</button>
+                  <button onClick={() => api.post(`/issues/${issue().id}/stop`).catch(fail)}>{t('Stoppen')}</button>
                 </div>
                 <RunLog runId={run().id} live />
               </section>
@@ -161,17 +165,18 @@ export function IssuePage() {
 
           <Show when={issue().handoff}>
             <section class="issue-section">
-              <h3>Handoff note</h3>
+              <h3>{t('Übergabenotiz')}</h3>
               <p class="prose">{issue().handoff}</p>
             </section>
           </Show>
 
           <Screenshots issueId={issue().id} comments={detail.current!.comments.length} />
           <Changes issueId={issue().id} version={version()} />
+          <Dossier issueId={issue().id} version={version()} />
           <Activity />
         </div>
 
-        <aside class="issue-side" aria-label="Details">
+        <aside class="issue-side" aria-label={t('Details')}>
           <Details />
         </aside>
       </div>
@@ -193,18 +198,18 @@ export function IssuePage() {
     return (
       <section class="issue-section">
         <div class="issue-section-head">
-          <h3>Description</h3>
+          <h3>{t('Beschreibung')}</h3>
           <Show when={!editing()}>
             <button class="ghost" onClick={start}>
-              Edit
+              {t('Bearbeiten')}
             </button>
           </Show>
         </div>
         <Show
           when={editing()}
           fallback={
-            <div class="prose description-view" onDblClick={start} title="Double-click to edit">
-              <Show when={issue().description} fallback={<span class="muted">No description.</span>}>
+            <div class="prose description-view" onDblClick={start} title={t('Doppelklick zum Bearbeiten')}>
+              <Show when={issue().description} fallback={<span class="muted">{t('Keine Beschreibung.')}</span>}>
                 {issue().description}
               </Show>
             </div>
@@ -212,7 +217,7 @@ export function IssuePage() {
         >
           <textarea
             class="description"
-            aria-label="Description"
+            aria-label={t('Beschreibung')}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && save()}
@@ -220,10 +225,10 @@ export function IssuePage() {
           />
           <div class="inline-row end">
             <button class="ghost" onClick={() => setEditing(false)}>
-              Cancel
+              {t('Abbrechen')}
             </button>
             <button class="primary" onClick={save}>
-              Save
+              {t('Speichern')}
             </button>
           </div>
         </Show>
@@ -256,10 +261,10 @@ export function IssuePage() {
     return (
       <section class="issue-section">
         <div class="issue-section-head">
-          <h3>Acceptance checklist</h3>
+          <h3>{t('Abnahme-Checkliste')}</h3>
           <Show when={!editing()}>
             <button class="ghost" onClick={start}>
-              Edit
+              {t('Bearbeiten')}
             </button>
           </Show>
         </div>
@@ -270,7 +275,7 @@ export function IssuePage() {
               when={items().length}
               fallback={
                 <p class="muted">
-                  None yet. It is created at the next start from "Done when" and the templates.
+                  {t('Noch keine. Sie entsteht beim nächsten Start aus „Done when“ und den Vorlagen.')}
                 </p>
               }
             >
@@ -278,7 +283,7 @@ export function IssuePage() {
                 <For each={items()}>
                   {(item, index) => (
                     <li classList={{ met: met(index() + 1) }}>
-                      <span class="checklist-mark" aria-label={met(index() + 1) ? 'met' : 'open'}>
+                      <span class="checklist-mark" aria-label={met(index() + 1) ? t('erfüllt') : t('offen')}>
                         {met(index() + 1) ? '✓' : '○'}
                       </span>
                       <span>
@@ -296,7 +301,7 @@ export function IssuePage() {
         >
           <textarea
             class="description"
-            aria-label="Checklist, one item per line"
+            aria-label={t('Checkliste, ein Punkt pro Zeile')}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
             onKeyDown={(e) => e.key === 'Enter' && (e.ctrlKey || e.metaKey) && save()}
@@ -304,10 +309,10 @@ export function IssuePage() {
           />
           <div class="inline-row end">
             <button class="ghost" onClick={() => setEditing(false)}>
-              Cancel
+              {t('Abbrechen')}
             </button>
             <button class="primary" onClick={save}>
-              Save
+              {t('Speichern')}
             </button>
           </div>
         </Show>
@@ -315,7 +320,7 @@ export function IssuePage() {
     )
   }
 
-  /** "Waiting on" and "Holding up" as lists, each editable. */
+  /** "Wartet auf" and "Hält auf" as lists, each editable. */
   function Dependencies() {
     const links = () => detail.current!.links
     const holdsInTotal = () => weights().get(issue().number)?.blocks ?? 0
@@ -330,7 +335,7 @@ export function IssuePage() {
     function removeBlocker(number: number) {
       updateIssue(issue().id, { blocked_by: issue().blocked_by.filter((other) => other !== number) })
     }
-    // "Holding up" is stored on the other issue: it lists this one among its blockers.
+    // "Hält auf" is stored on the other issue: it lists this one among its blockers.
     function addDependent(text: string) {
       const other = board.issues.find((candidate) => candidate.number === numberFrom(text))
       if (!other || other.id === issue().id || other.blocked_by.includes(issue().number)) return
@@ -345,21 +350,21 @@ export function IssuePage() {
     return (
       <section class="issue-section">
         <div class="issue-section-head">
-          <h3>Dependencies</h3>
+          <h3>{t('Abhängigkeiten')}</h3>
           <Show when={holdsInTotal() > links().dependents.length}>
-            <span class="muted">holds up {holdsInTotal()} issues through the chain</span>
+            <span class="muted">{t('hält über die Kette {n} Issues auf', { n: holdsInTotal() })}</span>
           </Show>
         </div>
         <LinkList
-          title="Waiting on"
-          empty="Not waiting on anything."
+          title={t('Wartet auf')}
+          empty={t('Wartet auf nichts.')}
           links={links().blockers}
           onRemove={(link) => removeBlocker(link.number)}
           onAdd={addBlocker}
         />
         <LinkList
-          title="Holding up"
-          empty="Nothing is waiting on this issue."
+          title={t('Hält auf')}
+          empty={t('Niemand wartet auf dieses Issue.')}
           links={links().dependents}
           onRemove={removeDependent}
           onAdd={addDependent}
@@ -388,12 +393,12 @@ export function IssuePage() {
                   <span class="mono">{key(link.number)}</span>
                   <span class="link-title">{link.title}</span>
                 </button>
-                <span class="muted link-status">{STATUS_LABEL[link.status] ?? link.status}</span>
+                <span class="muted link-status">{statusLabel(link.status)}</span>
                 <span class="muted link-agent">{agentById(link.assignee_id)?.name ?? ''}</span>
                 <button
                   class="ghost icon-button"
-                  title="Remove link"
-                  aria-label={`Remove ${key(link.number)}`}
+                  title={t('Verknüpfung entfernen')}
+                  aria-label={t('{key} entfernen', { key: key(link.number) })}
                   onClick={() => props.onRemove(link)}
                 >
                   <Icon name="close" size={14} />
@@ -411,8 +416,8 @@ export function IssuePage() {
           }}
         >
           <input
-            aria-label={`${props.title}: add issue`}
-            placeholder={`Add issue, e.g. ${board.project?.key}-12`}
+            aria-label={t('{title}: Issue hinzufügen', { title: props.title })}
+            placeholder={t('Issue hinzufügen, z. B. {key}', { key: `${board.project?.key}-12` })}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
           />
@@ -457,8 +462,8 @@ export function IssuePage() {
     return (
       <section class="issue-section activity">
         <div class="issue-section-head">
-          <h3>Activity</h3>
-          <div class="segmented" role="tablist" aria-label="Filter activity">
+          <h3>{t('Aktivität')}</h3>
+          <div class="segmented" role="tablist" aria-label={t('Aktivität filtern')}>
             <For each={TABS}>
               {([id, label]) => (
                 <button
@@ -467,7 +472,7 @@ export function IssuePage() {
                   classList={{ active: tab() === id }}
                   onClick={() => setTab(id)}
                 >
-                  {label}
+                  {t(label)}
                 </button>
               )}
             </For>
@@ -477,11 +482,12 @@ export function IssuePage() {
         <ul class="timeline">
           <li class="history-item created">
             <span class="muted">
-              Created {issue().created_by ? `by ${issue().created_by} ` : ''}
-              {issue().created_at ? `on ${when(issue().created_at!)}` : ''}
+              {issue().created_by
+                ? t('Angelegt von {by} am {date}', { by: issue().created_by!, date: when(issue().created_at ?? 0) })
+                : t('Angelegt am {date}', { date: when(issue().created_at ?? 0) })}
             </span>
           </li>
-          <For each={entries()} fallback={<li class="muted">Nothing yet.</li>}>
+          <For each={entries()} fallback={<li class="muted">{t('Noch nichts.')}</li>}>
             {(entry) =>
               entry.comment ? (
                 <CommentItem comment={entry.comment} />
@@ -496,8 +502,8 @@ export function IssuePage() {
 
         <form class="comment-form inline" onSubmit={send}>
           <textarea
-            aria-label="Comment"
-            placeholder="Comment or instruction for the agent… (Ctrl+Enter sends)"
+            aria-label={t('Kommentar')}
+            placeholder={t('Kommentar oder Anweisung an den Agenten… (Strg+Enter sendet)')}
             value={comment()}
             onInput={(e) => setComment(e.currentTarget.value)}
             onKeyDown={(e) =>
@@ -505,7 +511,7 @@ export function IssuePage() {
             }
           />
           <button class="primary" type="submit" disabled={!comment().trim()}>
-            Send
+            {t('Senden')}
           </button>
         </form>
       </section>
@@ -516,23 +522,25 @@ export function IssuePage() {
     const value = (raw: string | null): string => {
       const field = props.event.field
       if (raw === null || raw === '') return '–'
-      if (field === 'status') return STATUS_LABEL[raw] ?? raw
-      if (field === 'priority') return PRIORITIES[Number(raw)] ?? raw
-      if (field === 'assignee_id') return agentById(Number(raw))?.name ?? 'any agent'
+      if (field === 'status') return statusLabel(raw)
+      if (field === 'priority') return PRIORITIES[Number(raw)] ? t(PRIORITIES[Number(raw)]) : raw
+      if (field === 'assignee_id') return agentById(Number(raw))?.name ?? t('beliebiger Agent')
       if (field === 'blocked_by') {
         const numbers: number[] = JSON.parse(raw)
-        return numbers.length ? numbers.map((number) => key(number)).join(', ') : 'nothing'
+        return numbers.length ? numbers.map((number) => key(number)).join(', ') : t('nichts')
       }
       if (field === 'reviewers') {
         const ids: number[] = JSON.parse(raw)
-        return ids.length ? ids.map((id) => agentById(id)?.name ?? '?').join(', ') : 'none'
+        return ids.length ? ids.map((id) => agentById(id)?.name ?? '?').join(', ') : t('keine')
       }
       return raw
     }
     return (
       <li class="history-item">
-        <strong>{props.event.actor === 'Owner' ? 'You' : props.event.actor}</strong> changed{' '}
-        {FIELD_LABEL[props.event.field] ?? props.event.field}:{' '}
+        <strong>{props.event.actor === 'Owner' ? t('Du') : props.event.actor}</strong>{' '}
+        {t(props.event.actor === 'Owner' ? 'hast {field} geändert:' : 'hat {field} geändert:', {
+          field: FIELD_LABEL[props.event.field] ? t(FIELD_LABEL[props.event.field]) : props.event.field,
+        })}{' '}
         <span class="history-old">{value(props.event.old)}</span>
         <Icon name="chevronRight" size={12} />
         <span class="history-new">{value(props.event.new)}</span>
@@ -563,19 +571,19 @@ export function IssuePage() {
       <div class="issue-details">
         <Select
           class={`status-select ${issue().status}`}
-          aria-label="Status"
+          aria-label={t('Status')}
           value={issue().status}
-          options={STATUS_OPTIONS}
+          options={statusOptions()}
           onChange={(status) => updateIssue(issue().id, { status })}
         />
-        <h3>Details</h3>
+        <h3>{t('Details')}</h3>
         {row(
-          'Agent',
+          t('Agent'),
           <select
-            aria-label="Agent"
+            aria-label={t('Agent')}
             onChange={(e) => updateIssue(issue().id, { assignee_id: Number(e.currentTarget.value) || null })}
           >
-            <option value="">Any free agent</option>
+            <option value="">{t('Beliebiger freier Agent')}</option>
             <For each={board.agents}>
               {(agent) => (
                 <option value={agent.id} selected={agent.id === issue().assignee_id}>
@@ -586,39 +594,39 @@ export function IssuePage() {
           </select>,
         )}
         {row(
-          'Priority',
+          t('Priorität'),
           <select
-            aria-label="Priority"
+            aria-label={t('Priorität')}
             onChange={(e) => updateIssue(issue().id, { priority: Number(e.currentTarget.value) })}
           >
             <For each={PRIORITIES}>
               {(label, index) => (
                 <option value={index()} selected={index() === issue().priority}>
-                  {label}
+                  {t(label)}
                 </option>
               )}
             </For>
           </select>,
         )}
         {row(
-          'Reviewers',
+          t('Prüfer'),
           <div class="reviewers">
             <For each={issue().reviewers}>
               {(agentId, index) => (
-                <button class="chip" title="Remove" onClick={() => removeReviewer(agentId)}>
+                <button class="chip" title={t('Entfernen')} onClick={() => removeReviewer(agentId)}>
                   {index() + 1}. {agentById(agentId)?.name ?? '?'}
                   <Icon name="close" size={11} />
                 </button>
               )}
             </For>
             <select
-              aria-label="Add reviewer"
+              aria-label={t('Prüfer hinzufügen')}
               onChange={(e) => {
                 addReviewer(Number(e.currentTarget.value))
                 e.currentTarget.value = ''
               }}
             >
-              <option value="">+ Reviewer</option>
+              <option value="">{t('+ Prüfer')}</option>
               <For each={board.agents.filter((agent) => !issue().reviewers.includes(agent.id))}>
                 {(agent) => <option value={agent.id}>{agent.name}</option>}
               </For>
@@ -626,49 +634,49 @@ export function IssuePage() {
           </div>,
         )}
         {row(
-          'Group',
+          t('Gruppe'),
           <input
-            aria-label="Group"
-            placeholder="e.g. Milestone 1"
+            aria-label={t('Gruppe')}
+            placeholder={t('z. B. Meilenstein 1')}
             value={issue().grp}
             onChange={(e) => updateIssue(issue().id, { grp: e.currentTarget.value })}
           />,
         )}
         {row(
-          'Model',
+          t('Modell'),
           <ModelSelect
             provider={agentById(issue().assignee_id)?.provider ?? ''}
             value={issue().model ?? ''}
-            emptyLabel="Agent's model"
+            emptyLabel={t('Modell des Agenten')}
             onChange={(model) => updateIssue(issue().id, { model })}
           />,
         )}
-        {row('Spent', <Spending issueId={issue().id} version={version()} />)}
+        {row(t('Verbrauch'), <Spending issueId={issue().id} version={version()} />)}
         <Show when={issue().status !== 'done'}>
-          {row('Forecast', <CostForecast issueId={issue().id} version={version()} />)}
+          {row(t('Prognose'), <CostForecast issueId={issue().id} version={version()} />)}
         </Show>
 
-        <h3>History</h3>
-        {row('Built by', <span>{maker()?.name ?? '–'}</span>)}
-        {row('Created', <span>{issue().created_at ? when(issue().created_at!) : '–'}</span>)}
-        {row('Updated', <span>{issue().updated_at ? when(issue().updated_at!) : '–'}</span>)}
-        <Show when={issue().done_at}>{row('Done', <span>{when(issue().done_at!)}</span>)}</Show>
+        <h3>{t('Verlauf')}</h3>
+        {row(t('Gebaut von'), <span>{maker()?.name ?? '–'}</span>)}
+        {row(t('Angelegt'), <span>{issue().created_at ? when(issue().created_at!) : '–'}</span>)}
+        {row(t('Geändert'), <span>{issue().updated_at ? when(issue().updated_at!) : '–'}</span>)}
+        <Show when={issue().done_at}>{row(t('Erledigt'), <span>{when(issue().done_at!)}</span>)}</Show>
         <Show when={issue().landing === 'waiting'}>
-          {row('Landing', <span>Pull request waiting for checks</span>)}
+          {row(t('Landung'), <span>{t('Pull Request wartet auf Checks')}</span>)}
         </Show>
         <Show when={issue().landing === 'approval' && issue().gate_sha}>
           {row(
-            'Landing',
+            t('Landung'),
             <span>
-              Waits for your approval of state <code>{issue().gate_sha!.slice(0, 10)}</code>{' '}
+              {t('Wartet auf deine Freigabe für Stand')} <code>{issue().gate_sha!.slice(0, 10)}</code>{' '}
               <button
                 class="link"
-                title="Lets exactly this state land once. If the branch changes, it needs a new approval."
+                title={t('Lässt genau diesen Stand einmal landen. Ändert sich der Branch, braucht er eine neue Freigabe.')}
                 onClick={() =>
                   api.post(`/issues/${issue().id}/approve-landing`, { sha: issue().gate_sha }).catch(fail)
                 }
               >
-                Approve landing
+                {t('Landung freigeben')}
               </button>
             </span>,
           )}
@@ -705,7 +713,7 @@ function IssueTitle(props: { title: string; onSave: (title: string) => void }) {
     <textarea
       ref={field}
       class="title-input issue-title"
-      aria-label="Title"
+      aria-label={t('Titel')}
       rows={1}
       value={props.title}
       onInput={fitHeight}

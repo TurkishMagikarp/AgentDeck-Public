@@ -3,7 +3,7 @@
 //
 // Without these rules an issue could circle for an hour: the maker hands in a part, the first
 // reviewer approves the part, the maker starts again, cannot do more because it waits for another
-// issue, hands in the same part, and so on.
+// issue, hands in the same part, and so on (SHOP-710, 22 Nov 2026).
 
 export type PartialStep =
   /** The maker says it waits for these open issues: the issue waits for them, nobody runs. */

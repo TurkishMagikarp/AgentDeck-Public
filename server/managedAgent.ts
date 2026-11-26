@@ -15,15 +15,17 @@ import { prepareMcp } from './mcp.ts'
 import { openManagedMcp, type ManagedMcp } from './managedMcp.ts'
 import type { BetaRunnableTool } from '@anthropic-ai/sdk/lib/tools/BetaRunnableTool'
 import { SANDBOX } from './sandbox.ts'
+import { t } from './i18n.ts'
+import { en as english } from './prompts/en.ts'
+import { prompts } from './prompts/index.ts'
 
 export const MANAGED = 'claude-managed'
 export const ENVIRONMENT_KEY_SECRET = 'claude-managed.environment-key'
 export const DEFAULT_RUN_LIMIT_USD = 5
 
-const AGENT_SYSTEM = `You are a coding agent working for AgentDeck, a board where several agents share issues.
-Your tools run in the issue's own git checkout on a Linux server; that checkout is your current directory.
-You may install what you need (sudo apt-get, uv, npm). Work autonomously: nobody answers questions during a run.
-When the task is finished, reply with your final message.`
+// The Managed Agent is one for all projects and keeps the English system prompt; every session
+// replaces it with the prompt in the language of its run.
+const AGENT_SYSTEM = english.managedSystem
 
 const WEB_TOOLS_OFF = [
   { name: 'web_search' as const, enabled: false },
@@ -58,7 +60,7 @@ export function managedRunLimitUsd() {
 }
 
 export function setManagedRunLimitUsd(usd: number) {
-  if (!(usd > 0 && usd <= 1000)) throw new Error('The limit per run must be between 0 and 1000 USD')
+  if (!(usd > 0 && usd <= 1000)) throw new Error(t('Das Limit pro Lauf muss zwischen 0 und 1000 USD liegen'))
   saveSetting('managed.run_limit_usd', String(Math.round(usd * 100) / 100))
 }
 
@@ -72,7 +74,7 @@ export function managedStatus() {
 
 function controlClient() {
   const key = apiKey(MANAGED)
-  if (!key) throw new Error('No API key is stored for Claude Managed Agents')
+  if (!key) throw new Error(t('Für Claude Managed Agents ist kein API-Key hinterlegt'))
   return new Anthropic({ apiKey: key, authToken: null })
 }
 
@@ -135,7 +137,7 @@ function ensureWorker(environmentId: string) {
   const environmentKey = getSecret(ENVIRONMENT_KEY_SECRET)
   if (!environmentKey) {
     throw new Error(
-      'The environment key for Claude Managed Agents is missing (create it at the environment in the Claude Console)',
+      t('Für Claude Managed Agents fehlt der Environment-Key (in der Claude Console beim Environment erzeugen)'),
     )
   }
   if (worker?.key === environmentKey && !worker.abort.signal.aborted) return
@@ -200,12 +202,12 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
   // stay off there until the worker runs its tools as the project user.
   if (SANDBOX) {
     throw new Error(
-      "Claude Managed Agents are locked in the sandbox: their tools would run with the server's rights. Switch the agent to another provider.",
+      t('Claude Managed Agents sind in der Sandbox gesperrt: ihre Werkzeuge liefen mit den Rechten des Servers. Stell den Agenten auf einen anderen Anbieter um.'),
     )
   }
   if (process.platform === 'win32') {
     throw new Error(
-      'Claude Managed Agents only run on the Linux server (the tools need /bin/bash)',
+      t('Claude Managed Agents laufen nur auf dem Linux-Server (die Werkzeuge brauchen /bin/bash)'),
     )
   }
 
@@ -237,10 +239,11 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
           type: 'agent_with_overrides',
           id: setup.agentId,
           model: { id: model, effort: effort as any },
+          system: prompts().managedSystem,
           ...(tools ? { tools } : {}),
         },
         environment_id: setup.environmentId,
-        title: short(opts.prompt.match(/## Issue [^\n]*/)?.[0] ?? 'AgentDeck run', 200),
+        title: short(opts.prompt.match(/## Issue [^\n]*/)?.[0] ?? t('AgentDeck-Lauf'), 200),
         budget: {
           type: 'limit',
           max_list_cost: { amount: String(Math.round(managedRunLimitUsd() * 100)), currency: 'USD' },
@@ -297,8 +300,8 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
           opts.onEvent?.({ kind: 'tool_call', name: String(event.name ?? 'tool'), text: JSON.stringify(event.input ?? {}) })
           return
         case 'session.error': {
-          const message = event.error?.message ?? event.error?.type ?? 'error'
-          activity(`Error: ${message}`)
+          const message = event.error?.message ?? event.error?.type ?? t('Fehler')
+          activity(t('Fehler: {message}', { message: String(message) }))
           opts.onEvent?.({ kind: 'error', text: String(message) })
           if (event.error?.retry_status?.type !== 'retrying') error = short(String(message))
           return
@@ -309,9 +312,9 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
           if (reason === 'requires_action') return
           if (reason === 'end_turn') return 'done'
           if (reason === 'budget_reached')
-            error = `Limit per run (${managedRunLimitUsd()} USD) reached, the run was stopped`
-          else if (reason === 'refusal') error = 'Claude refused the task'
-          else error = error ?? `Session stopped (${reason ?? 'unknown'})`
+            error = t('Limit pro Lauf ({limit} USD) erreicht, der Lauf wurde angehalten', { limit: managedRunLimitUsd() })
+          else if (reason === 'refusal') error = t('Claude hat die Aufgabe abgelehnt')
+          else error = error ?? t('Session angehalten ({reason})', { reason: reason ?? t('unbekannt') })
           return 'done'
         }
         case 'session.status_terminated':
@@ -339,14 +342,14 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
       } catch (err: any) {
         if (abort.signal.aborted) throw err
         if (attempt >= 20) throw err
-        activity(`Connection to the session lost, reconnecting…`)
+        activity(t('Verbindung zur Session unterbrochen, verbinde neu…'))
       }
       await new Promise((resolve) => setTimeout(resolve, Math.min(30_000, 1_000 * 2 ** attempt)))
     }
 
     async function finish(): Promise<RunResult> {
       const usage = usageOf(await client.beta.sessions.retrieve(sessionId))
-      return { ok: !error && !!text, text, usage, error: error ?? (text ? undefined : 'No answer') }
+      return { ok: !error && !!text, text, usage, error: error ?? (text ? undefined : t('Keine Antwort')) }
     }
   }
 
@@ -363,7 +366,7 @@ export function startManagedRun(opts: RunOpts, model: string): RunHandle {
         ok: false,
         text: '',
         usage,
-        error: stoppedByUs ? 'gestoppt' : short(String(err?.message ?? err)),
+        error: stoppedByUs ? t('gestoppt') : short(String(err?.message ?? err)),
       }
     })
     .finally(() => mcp?.close())

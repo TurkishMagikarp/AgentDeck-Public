@@ -154,9 +154,9 @@ describe('pickProvider', () => {
       s.budgets.anthropic.stopAtPct = 2
     })
     assert.equal(pickProvider(p, opus)?.provider, 'openai')
-    assert.match(routeProvider(p, opus).skipped[0], /Anthropic.*2% left, stop at 2%/)
+    assert.match(routeProvider(p, opus).skipped[0], /Anthropic.*2 % übrig, Stopp bei 2 %/)
     assert.equal(pickProvider(p, { ...opus, provider_override: true }), null)
-    assert.match(routeProvider(p, { ...opus, provider_override: true }).skipped[1], /Codex.*40% left, stop at 50%/)
+    assert.match(routeProvider(p, { ...opus, provider_override: true }).skipped[1], /Codex.*40 % übrig, Stopp bei 50 %/)
   })
 
   test('model limits are checked against the model actually requested for the issue', () => {

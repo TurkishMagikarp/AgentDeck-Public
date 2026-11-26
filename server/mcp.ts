@@ -3,50 +3,59 @@
 import { join } from 'node:path'
 import { decrypt, encrypt } from './auth.ts'
 import { DATA_DIR, all, get, run } from './db.ts'
+import { t } from './i18n.ts'
 
 type Connection = {
   label: string
+  /** German; translated where the list is handed out (listConnections). */
   description: string
   keyLabel: string
   /** Name of the environment variable that carries the key into the agent process. */
   envVar: string
+  /**
+   * The tool definitions of a connection travel with every step of a run, used or not. One whose
+   * definitions are large is loaded only for issues that name it or whose agent asked for it.
+   */
+  onDemand?: boolean
 } & ({ url: string } | { command: string; args: string[] })
 
 export const CONNECTIONS: Record<string, Connection> = {
   github: {
     label: 'GitHub',
-    description: 'Issues, pull requests, code search and Actions',
+    description: 'Issues, Pull Requests, Code-Suche und Actions',
     keyLabel: 'Personal Access Token',
     envVar: 'GITHUB_MCP_TOKEN',
     url: 'https://api.githubcopilot.com/mcp/',
   },
   pixellab: {
     label: 'PixelLab',
-    description: 'Pixel art: characters, animations, tilesets',
+    description: 'Pixel-Art: Charaktere, Animationen, Tilesets',
     keyLabel: 'API-Token',
     envVar: 'PIXELLAB_API_KEY',
     url: 'https://api.pixellab.ai/mcp',
+    // Measured with opencode: about 90k tokens in every step, 105k instead of 15k at the start.
+    onDemand: true,
   },
   elevenlabs: {
     label: 'ElevenLabs',
-    description: 'Speech, voices, sound effects',
-    keyLabel: 'API key',
+    description: 'Sprachausgabe, Stimmen, Soundeffekte',
+    keyLabel: 'API-Key',
     envVar: 'ELEVENLABS_API_KEY',
     command: 'uvx',
     args: ['elevenlabs-mcp'],
   },
   recraft: {
     label: 'Recraft',
-    description: 'Create and edit images and vector graphics',
-    keyLabel: 'API key',
+    description: 'Bilder und Vektorgrafiken erzeugen und bearbeiten',
+    keyLabel: 'API-Key',
     envVar: 'RECRAFT_API_KEY',
     command: 'npx',
     args: ['-y', '@recraft-ai/mcp-recraft-server@latest'],
   },
   meshy: {
     label: 'Meshy',
-    description: '3D models from text and images',
-    keyLabel: 'API key',
+    description: '3D-Modelle aus Text und Bildern',
+    keyLabel: 'API-Key',
     envVar: 'MESHY_API_KEY',
     command: 'npx',
     args: ['-y', '@meshy-ai/meshy-mcp-server'],
@@ -60,14 +69,14 @@ export function listConnections() {
   return Object.entries(CONNECTIONS).map(([id, connection]) => ({
     id,
     label: connection.label,
-    description: connection.description,
-    keyLabel: connection.keyLabel,
+    description: t(connection.description),
+    keyLabel: t(connection.keyLabel),
     hasKey: stored.has(id),
   }))
 }
 
 export function setConnectionKey(id: string, key: string) {
-  if (!CONNECTIONS[id]) throw new Error('Unknown connection')
+  if (!CONNECTIONS[id]) throw new Error(t('Unbekannte Verbindung'))
   if (key)
     run(
       'INSERT OR REPLACE INTO mcp_auth (id, secret, updated_at) VALUES (?,?,?)',
@@ -99,6 +108,23 @@ export function connectionKeys() {
     if (key) env[connection.envVar] = key
   }
   return env
+}
+
+type IssueText = { title?: string; description?: string; checklist?: string[]; mcp_wanted?: string[] }
+
+/**
+ * The connections of an agent that one run on this issue gets. An on-demand connection comes
+ * along when the issue names it (key or label) or an earlier run asked for it with
+ * `agentdeck connect`. The keys reach every run either way (connectionKeys).
+ */
+export function connectionsFor(ids: string[], issue: IssueText) {
+  const text = [issue.title, issue.description, ...(issue.checklist ?? [])].join('\n').toLowerCase()
+  const wanted = issue.mcp_wanted ?? []
+  return ids.filter((id) => {
+    const connection = CONNECTIONS[id]
+    if (!connection?.onDemand) return true
+    return wanted.includes(id) || text.includes(id) || text.includes(connection.label.toLowerCase())
+  })
 }
 
 /** npx and uvx are .cmd shims on Windows and cannot be started directly by the CLIs. */

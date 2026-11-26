@@ -2,6 +2,7 @@
 // Everything is grouped by local calendar day, the way a person reads a week.
 import { PROVIDERS } from './core.ts'
 import { all, get } from './db.ts'
+import { t } from './i18n.ts'
 
 const DAY_MS = 86_400_000
 const DAY_SQL = (column: string) => `date(${column}/1000, 'unixepoch', 'localtime')`
@@ -14,18 +15,36 @@ function dayStart(daysAgo: number) {
   return day.getTime()
 }
 
-/** "2026-11-21" for every day of the range, oldest first, so charts have no holes. */
-function dayLabels(days: number) {
-  return Array.from({ length: days }, (_, index) => {
-    const day = new Date(dayStart(days - 1 - index))
-    const pad = (value: number) => String(value).padStart(2, '0')
-    return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
-  })
+/** "2026-11-21" for a local date. */
+function dayLabel(day: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`
 }
 
-export function projectStats(projectId: number, days: number) {
-  const labels = dayLabels(days)
-  const since = dayStart(days - 1)
+/** Local midnight of "2026-11-21", or null when the text is not a real date. */
+export function parseDay(text: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
+  if (!match) return null
+  const day = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  return dayLabel(day) === text ? day : null
+}
+
+/** The last `days` days up to and including today, or an explicit range of local days. */
+export type StatsRange = { days: number } | { from: Date; to: Date }
+
+export const MAX_RANGE_DAYS = 366
+
+export function projectStats(projectId: number, range: StatsRange) {
+  // Every day of the range, oldest first, so charts have no holes. `until` is the first
+  // millisecond after the last day, so a custom range that ends in the past stays closed.
+  const first = 'days' in range ? new Date(dayStart(range.days - 1)) : new Date(range.from)
+  const last = 'days' in range ? new Date(dayStart(0)) : new Date(range.to)
+  const labels: string[] = []
+  for (const day = new Date(first); day <= last && labels.length < MAX_RANGE_DAYS; day.setDate(day.getDate() + 1)) {
+    labels.push(dayLabel(day))
+  }
+  const since = first.getTime()
+  const until = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1).getTime()
   const countByDay = (rows: { day: string; count: number }[]) => {
     const byDay = new Map(rows.map((row) => [row.day, row.count]))
     return labels.map((day) => byDay.get(day) ?? 0)
@@ -34,17 +53,19 @@ export function projectStats(projectId: number, days: number) {
   const done = countByDay(
     all(
       `SELECT ${DAY_SQL('done_at')} AS day, COUNT(*) AS count FROM issues
-       WHERE project_id=? AND done_at>=? GROUP BY day`,
+       WHERE project_id=? AND done_at>=? AND done_at<? GROUP BY day`,
       projectId,
       since,
+      until,
     ),
   )
   const created = countByDay(
     all(
       `SELECT ${DAY_SQL('created_at')} AS day, COUNT(*) AS count FROM issues
-       WHERE project_id=? AND created_at>=? GROUP BY day`,
+       WHERE project_id=? AND created_at>=? AND created_at<? GROUP BY day`,
       projectId,
       since,
+      until,
     ),
   )
 
@@ -63,9 +84,10 @@ export function projectStats(projectId: number, days: number) {
     `SELECT ${DAY_SQL('started_at')} AS day, agent_name AS agent, COUNT(*) AS runs,
             SUM(input_tokens - cached_tokens + output_tokens) AS fresh, SUM(cached_tokens) AS cached,
             SUM(status='failed') AS failed, SUM(COALESCE(ended_at, started_at) - started_at) AS ms
-     FROM runs WHERE project_id=? AND started_at>=? GROUP BY day, agent`,
+     FROM runs WHERE project_id=? AND started_at>=? AND started_at<? GROUP BY day, agent`,
     projectId,
     since,
+    until,
   )
   const agents = [...new Set(agentDays.map((row) => row.agent))].sort()
   const perAgent = (pick: (row: any) => number) =>
@@ -81,16 +103,33 @@ export function projectStats(projectId: number, days: number) {
     `SELECT agent_name AS agent, COUNT(*) AS runs, SUM(status='failed') AS failed,
             SUM(input_tokens - cached_tokens + output_tokens) AS fresh, SUM(cached_tokens) AS cached,
             SUM(cost_usd) AS cost, AVG(COALESCE(ended_at, started_at) - started_at) AS avgMs
-     FROM runs WHERE project_id=? AND started_at>=? AND status!='running' GROUP BY agent ORDER BY runs DESC`,
+     FROM runs WHERE project_id=? AND started_at>=? AND started_at<? AND status!='running'
+     GROUP BY agent ORDER BY runs DESC`,
     projectId,
     since,
+    until,
   )
+
+  // The same numbers per agent and model, so a row of the table can be split by what ran.
+  const agentModels = all(
+    `SELECT agent_name AS agent, provider, CASE WHEN model = '' THEN ? ELSE model END AS model,
+            COUNT(*) AS runs, SUM(status='failed') AS failed,
+            SUM(input_tokens - cached_tokens + output_tokens) AS fresh, SUM(cached_tokens) AS cached,
+            SUM(cost_usd) AS cost, AVG(COALESCE(ended_at, started_at) - started_at) AS avgMs
+     FROM runs WHERE project_id=? AND started_at>=? AND started_at<? AND status!='running'
+     GROUP BY agent_name, provider, model ORDER BY runs DESC`,
+    t('(Standard)'),
+    projectId,
+    since,
+    until,
+  ).map((row) => ({ ...row, label: PROVIDERS[row.provider]?.label ?? row.provider }))
 
   // Quota left at the end of each day, per provider. A day without a reading keeps the last one.
   const readings = all(
     `SELECT provider, ${DAY_SQL('at')} AS day, utilization FROM quota_history
-     WHERE at>=? ORDER BY at`,
+     WHERE at>=? AND at<? ORDER BY at`,
     since,
+    until,
   )
   const quota = Object.keys(PROVIDERS)
     .map((provider) => {
@@ -112,13 +151,14 @@ export function projectStats(projectId: number, days: number) {
   const runs = get(
     `SELECT COUNT(*) AS runs, COALESCE(SUM(status='failed'), 0) AS failed,
             AVG(COALESCE(ended_at, started_at) - started_at) AS avgMs
-     FROM runs WHERE project_id=? AND started_at>=? AND status!='running'`,
+     FROM runs WHERE project_id=? AND started_at>=? AND started_at<? AND status!='running'`,
     projectId,
     since,
+    until,
   )!
 
   return {
-    ...outcomes(projectId, since),
+    ...outcomes(projectId, since, until),
     days: labels,
     totals: {
       doneToday: count('SELECT COUNT(*) AS count FROM issues WHERE project_id=? AND done_at>=?', today),
@@ -138,6 +178,7 @@ export function projectStats(projectId: number, days: number) {
     freshTokens: perAgent((row) => row.fresh),
     runsPerDay: perAgent((row) => row.runs),
     agentTotals,
+    agentModels,
     quota,
   }
 }
@@ -146,21 +187,25 @@ export function projectStats(projectId: number, days: number) {
  * What the runs achieved, not only what they cost: per agent how much of its work landed and how
  * often reviewers approved it, per model how often a run ended with a usable result.
  */
-function outcomes(projectId: number, since: number) {
+function outcomes(projectId: number, since: number, until: number) {
   const outcomeByAgent = all(
     `SELECT a.name AS agent,
-       (SELECT COUNT(*) FROM issues i WHERE i.maker_id = a.id AND i.done_at >= ?) AS landed,
+       (SELECT COUNT(*) FROM issues i WHERE i.maker_id = a.id AND i.done_at >= ? AND i.done_at < ?) AS landed,
        (SELECT COUNT(*) FROM runs r JOIN issues i ON i.id = r.issue_id
-          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'approve' AND r.started_at >= ?) AS approved,
+          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'approve' AND r.started_at >= ? AND r.started_at < ?) AS approved,
        (SELECT COUNT(*) FROM runs r JOIN issues i ON i.id = r.issue_id
-          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'changes' AND r.started_at >= ?) AS changes,
+          WHERE i.maker_id = a.id AND r.kind = 'review' AND r.verdict = 'changes' AND r.started_at >= ? AND r.started_at < ?) AS changes,
        (SELECT COALESCE(SUM(r.cost_usd), 0) FROM runs r JOIN issues i ON i.id = r.issue_id
-          WHERE i.maker_id = a.id AND i.done_at >= ?) AS landedCost
+          WHERE i.maker_id = a.id AND i.done_at >= ? AND i.done_at < ?) AS landedCost
      FROM agents a WHERE a.project_id = ?`,
     since,
+    until,
     since,
+    until,
     since,
+    until,
     since,
+    until,
     projectId,
   )
     .filter((row) => row.landed || row.approved || row.changes)
@@ -176,15 +221,17 @@ function outcomes(projectId: number, since: number) {
   // when they reached a verdict. Failed runs, stops and "blocked" are not usable. Finished runs
   // without a verdict are from before verdicts were recorded; they say nothing either way.
   const outcomeByModel = all(
-    `SELECT provider, CASE WHEN model = '' THEN '(Standard)' ELSE model END AS model, COUNT(*) AS runs,
+    `SELECT provider, CASE WHEN model = '' THEN ? ELSE model END AS model, COUNT(*) AS runs,
        SUM(status = 'failed') AS failed,
        SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'partial', 'approve', 'changes')) AS usable,
        COALESCE(SUM(cost_usd), 0) AS cost
-     FROM runs WHERE project_id = ? AND started_at >= ? AND status != 'running' AND agent_name != 'Watchdog'
+     FROM runs WHERE project_id = ? AND started_at >= ? AND started_at < ? AND status != 'running' AND agent_name != 'Watchdog'
        AND NOT (status = 'done' AND verdict = '')
      GROUP BY provider, model ORDER BY runs DESC`,
+    t('(Standard)'),
     projectId,
     since,
+    until,
   ).map((row) => ({
     provider: row.provider,
     label: PROVIDERS[row.provider]?.label ?? row.provider,
@@ -201,11 +248,12 @@ function outcomes(projectId: number, since: number) {
        SUM(status = 'done' AND verdict IN ('done', 'review', 'handoff', 'partial', 'approve', 'changes')) AS usable,
        COALESCE(SUM(cost_usd), 0) AS cost,
        AVG(ended_at - started_at) AS avgMs
-     FROM runs WHERE project_id = ? AND started_at >= ? AND status != 'running' AND agent_name != 'Watchdog'
+     FROM runs WHERE project_id = ? AND started_at >= ? AND started_at < ? AND status != 'running' AND agent_name != 'Watchdog'
        AND NOT (status = 'done' AND verdict = '')
      GROUP BY provider ORDER BY runs DESC`,
     projectId,
     since,
+    until,
   ).map((row) => ({
     provider: row.provider,
     label: PROVIDERS[row.provider]?.label ?? row.provider,

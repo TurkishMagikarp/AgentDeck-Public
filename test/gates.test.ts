@@ -169,7 +169,7 @@ describe('gates at landing', () => {
     assert.equal(held.status, 'blocked')
     assert.equal(held.needsOwner, true)
     assert.equal(held.gate?.sha, git(added, 'rev-parse', 'agentdeck/G-1'))
-    assert.match(held.note, /new dependencies: b \(package\.json\)/)
+    assert.match(held.note, /neue Abhängigkeiten: b \(package\.json\)/)
     assert.equal(git(added, 'rev-parse', 'main'), before)
 
     const bumped = repoWith('G', 1, { 'package.json': pkg({ a: '1' }) }, { 'package.json': pkg({ a: '2' }) })
@@ -185,7 +185,7 @@ describe('gates at landing', () => {
     const repo = repoWith('H', 1, {}, { '.github/workflows/ci.yml': 'on: push\n' })
     const on = await landIssue(projectFor(repo, 'H', (s) => (s.landing.approval.infra = true)), { id: 1, number: 1, title: 'x' })
     assert.equal(on.status, 'blocked')
-    assert.match(on.note, /infrastructure files: \.github\/workflows\/ci\.yml/)
+    assert.match(on.note, /Infrastruktur-Dateien: \.github\/workflows\/ci\.yml/)
     const off = await landIssue(projectFor(repo, 'H', () => {}), { id: 1, number: 1, title: 'x' })
     assert.equal(off.status, 'done')
   })
@@ -199,7 +199,7 @@ describe('gates at landing', () => {
     })
     assert.equal(held.status, 'blocked')
     assert.ok(held.gate?.sha)
-    assert.match(held.note, /protected files: CLAUDE\.md/)
+    assert.match(held.note, /geschützte Dateien: CLAUDE\.md/)
   })
 
   test('an approval lets exactly the approved commit land, once', async () => {
@@ -212,7 +212,7 @@ describe('gates at landing', () => {
     run('UPDATE issues SET approved_sha=? WHERE id=?', 'f'.repeat(40), issue.id)
     const held = await landIssue(project, issue)
     assert.equal(held.status, 'blocked')
-    assert.match(held.note, /every landing/)
+    assert.match(held.note, /jede Landung/)
     assert.equal(get('SELECT approved_sha FROM issues WHERE id=?', issue.id).approved_sha, '')
 
     run('UPDATE issues SET approved_sha=? WHERE id=?', tip, issue.id)
@@ -251,13 +251,13 @@ describe('approving a held landing', () => {
     const tip = git(repo, 'rev-parse', 'agentdeck/AP-4')
     run("UPDATE issues SET status='blocked', landing='approval', gate_sha=? WHERE id=?", tip, issue.id)
 
-    await assert.rejects(approveLanding(issue.id, 'a'.repeat(40), 'Owner'), /moved/)
+    await assert.rejects(approveLanding(issue.id, 'a'.repeat(40), 'Owner'), /bewegt/)
     assert.equal(get('SELECT approved_sha FROM issues WHERE id=?', issue.id).approved_sha, '')
 
     await approveLanding(issue.id, tip, 'Owner')
-    await assert.rejects(approveLanding(issue.id, tip, 'Owner'), /does not wait for an approval/)
+    await assert.rejects(approveLanding(issue.id, tip, 'Owner'), /keine Freigabe/)
     // The landing runs in the background; its note marks the end.
-    const landed = () => get("SELECT 1 FROM comments WHERE issue_id=? AND body LIKE 'Landed in main%'", issue.id)
+    const landed = () => get("SELECT 1 FROM comments WHERE issue_id=? AND body LIKE 'In main gelandet%'", issue.id)
     for (let i = 0; i < 200 && !landed(); i++) await new Promise((resolve) => setTimeout(resolve, 50))
     assert.equal(git(repo, 'show', 'main:feature.txt'), 'x')
     const row = get('SELECT status, landing, approved_sha FROM issues WHERE id=?', issue.id)

@@ -7,6 +7,7 @@ import type { BetaManagedAgentsCustomToolParams } from '@anthropic-ai/sdk/resour
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { t } from './i18n.ts'
 import { apiKeyOfConnection, CONNECTIONS } from './mcp.ts'
 
 export type ManagedMcp = {
@@ -76,9 +77,14 @@ export async function openManagedMcp(
         const runnable = mcpTool(tool, client as unknown as MCPClientLike)
         tools.push({ ...runnable, name } as BetaRunnableTool)
       }
-      report(`MCP ${CONNECTIONS[id].label}: ${listed.tools.length} Werkzeuge`)
+      report(t('MCP {name}: {n} Werkzeuge', { name: CONNECTIONS[id].label, n: listed.tools.length }))
     } catch (err: any) {
-      report(`MCP ${CONNECTIONS[id].label} not reachable: ${err?.message ?? err}`)
+      report(
+        t('MCP {name} nicht erreichbar: {message}', {
+          name: CONNECTIONS[id].label,
+          message: String(err?.message ?? err),
+        }),
+      )
       await client.close().catch(() => {})
     }
   }

@@ -9,6 +9,7 @@
 import { existsSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { proofPaths, type Report } from './checklist.ts'
+import { t } from './i18n.ts'
 import { gitIn, runShellIn } from './sandbox.ts'
 import { scanBranch, secretsNoteForMaker } from './secretScan.ts'
 const IDENTITY = ['-c', 'user.name=AgentDeck', '-c', 'user.email=agentdeck@localhost']
@@ -28,8 +29,8 @@ const tail = (text: string) => (text.length > OUTPUT_TAIL ? `…${text.slice(-OU
 
 async function missingProofFiles(cwd: string, report: Report) {
   const missing: string[] = []
-  // A pattern like data/maps/harbor_*.json is found when one committed file matches it.
-  // Before, git looked for a file with a star in its name and never found one.
+  // A pattern like data/maps/sahilkoy_*.json is found when one committed file matches it.
+  // Before, git looked for a file with a star in its name and never found one (SHOP-708).
   let committed: string[] | null = null
   for (const proof of report.proofs.values()) {
     for (const path of proofPaths(proof)) {
@@ -64,7 +65,7 @@ export function globPattern(glob: string) {
 /**
  * Other issue branches whose not yet landed commits are in this branch. A maker that merges a
  * neighbour's branch to build on it drags that work into its own review, and the reviewer sends
- * it back.
+ * it back (SHOP-706, SHOP-710 on 22 Nov 2026).
  *
  * The maker's own commits lie on the first-parent line of its branch. Commits that came in through
  * a merge and are not in the base yet are someone else's unlanded work; the branches holding them
@@ -103,7 +104,15 @@ async function conflictsWithBase(cwd: string, base: string): Promise<PrecheckRes
   if (!conflicts) return null
   return {
     ok: false,
-    note: `${base} does not merge into the branch without conflicts${conflicts.length ? `. Conflicts in: ${conflicts.slice(0, 8).join(', ')}` : ''}. Merge ${base} into your branch, resolve the conflicts so that both sides are kept, and hand in again.`,
+    note: conflicts.length
+      ? t(
+          '{base} lässt sich nicht konfliktfrei in den Branch mergen. Konflikte in: {files}. Merge {base} in deinen Branch, löse die Konflikte so, dass beide Seiten erhalten bleiben, und gib erneut ab.',
+          { base, files: conflicts.slice(0, 8).join(', ') },
+        )
+      : t(
+          '{base} lässt sich nicht konfliktfrei in den Branch mergen. Merge {base} in deinen Branch, löse die Konflikte so, dass beide Seiten erhalten bleiben, und gib erneut ab.',
+          { base },
+        ),
   }
 }
 
@@ -135,13 +144,16 @@ export async function runCommand(
     return null
   } catch (error: any) {
     const output = tail(`${error.stdout ?? ''}\n${error.stderr ?? ''}`)
-    const why = error.killed
-      ? `was stopped after ${timeoutMin} minutes`
-      : `failed (exit code ${error.code})`
-    return {
-      ok: false,
-      note: `The project check \`${command}\` ${why} on the merged state. Fix that and hand in again.\n\n\`\`\`\n${output}\n\`\`\``,
-    }
+    const what = error.killed
+      ? t(
+          'Die Projektprüfung `{command}` ist auf dem gemergten Stand nach {minutes} Minuten abgebrochen. Behebe das und gib erneut ab.',
+          { command, minutes: timeoutMin },
+        )
+      : t(
+          'Die Projektprüfung `{command}` ist auf dem gemergten Stand fehlgeschlagen (Exit-Code {code}). Behebe das und gib erneut ab.',
+          { command, code: String(error.code) },
+        )
+    return { ok: false, note: `${what}\n\n\`\`\`\n${output}\n\`\`\`` }
   }
 }
 
@@ -161,14 +173,19 @@ export async function precheck(input: {
     if (missing.length) {
       return {
         ok: false,
-        note: `These proof files from your checklist are missing from your commit: ${missing
-          .slice(0, 8)
-          .map((path) => `\`${path}\``)
-          .join(', ')}. Create and commit them (path relative to the repo) and hand in again.`,
+        note: t(
+          'Diese Nachweis-Dateien aus deiner Checkliste fehlen in deinem Commit: {files}. Erzeuge und committe sie (Pfad relativ zum Repo) und gib erneut ab.',
+          {
+            files: missing
+              .slice(0, 8)
+              .map((path) => `\`${path}\``)
+              .join(', '),
+          },
+        ),
       }
     }
     const named = new Set([...report.proofs.values()].flatMap(proofPaths)).size
-    if (named) done.push(named === 1 ? '1 proof file present' : `${named} proof files present`)
+    if (named) done.push(named === 1 ? t('1 Nachweis-Datei vorhanden') : t('{n} Nachweis-Dateien vorhanden', { n: named }))
   }
 
   if (branch) {
@@ -180,26 +197,32 @@ export async function precheck(input: {
         .slice(0, 8)
       return {
         ok: false,
-        note: `Uncommitted changes in ${files.join(', ')}. Commit what belongs to the issue, discard the rest and hand in again.`,
+        note: t(
+          'Nicht committete Änderungen in {files}. Committe, was zum Issue gehört, verwirf den Rest und gib erneut ab.',
+          { files: files.join(', ') },
+        ),
       }
     }
     const foreign = await foreignWork(cwd, base, branch)
     if (foreign.length) {
       return {
         ok: false,
-        note: `Your branch contains work from other branches that has not landed in ${base} yet: ${foreign.join(', ')}. Take it out again (branch off ${base} anew and keep only your commits). If you need that work, do not merge the branch; report <status>blocked</status> with "waits for ..." and the issue instead: then it carries on by itself once that has landed.`,
+        note: t(
+          'Dein Branch enthält Arbeit aus anderen Branches, die noch nicht in {base} gelandet ist: {branches}. Nimm sie wieder heraus (neu von {base} abzweigen und nur deine Commits übernehmen). Brauchst du diese Arbeit, merge den Branch nicht, sondern melde <status>blocked</status> mit "wartet auf ..." und dem Issue: dann geht es von selbst weiter, sobald es gelandet ist.',
+          { base, branches: foreign.join(', ') },
+        ),
       }
     }
     const conflict = await conflictsWithBase(cwd, base)
     if (conflict) return conflict
-    done.push(`no conflicts with ${base}`)
+    done.push(t('mit {base} konfliktfrei', { base }))
     // The landing scans again and stops there; a scan that fails here only loses the early hint.
     const secrets = await scanBranch(cwd, base).catch((error) => {
       console.error('secret scan', error.message)
       return null
     })
     if (secrets?.length) return { ok: false, note: secretsNoteForMaker(secrets, base) }
-    if (secrets) done.push('no secrets')
+    if (secrets) done.push(t('keine Geheimnisse'))
   }
 
   if (command) {
@@ -207,8 +230,8 @@ export async function precheck(input: {
       ? await runOnMergedState(cwd, base, command, timeoutMin)
       : await runCommand(cwd, command, timeoutMin)
     if (failed) return failed
-    done.push(`\`${command}\` green`)
+    done.push(t('`{command}` grün', { command }))
   }
 
-  return { ok: true, note: done.length ? `Precheck passed: ${done.join(', ')}.` : '' }
+  return { ok: true, note: done.length ? t('Vorcheck bestanden: {checks}.', { checks: done.join(', ') }) : '' }
 }

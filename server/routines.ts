@@ -1,7 +1,8 @@
 // Routines: work that comes back on a schedule, like a daily report. When a routine is due it
 // files an issue for its agent. The agent then handles it like any other issue.
-import { createIssue, touch } from './core.ts'
+import { createIssue, getProject, touch } from './core.ts'
 import { all, get, run, tx } from './db.ts'
+import { currentLang, forProject, t } from './i18n.ts'
 
 type Routine = {
   id: number
@@ -46,14 +47,14 @@ function fire(routine: Routine, now: Date) {
   const stillOpen = get("SELECT 1 FROM issues WHERE routine_id=? AND status NOT IN ('done')", routine.id)
   if (stillOpen) return false
 
-  const date = now.toLocaleDateString('en-US')
+  const date = now.toLocaleDateString(currentLang() === 'en' ? 'en-US' : 'de-DE')
   tx(() =>
     createIssue(routine.project_id, {
       title: `${routine.name} (${date})`,
       description: routine.prompt,
       status: 'todo',
       assignee_id: routine.agent_id,
-      grp: 'Routines',
+      grp: t('Routinen'),
       routine_id: routine.id,
       created_by: 'Routine',
     }),
@@ -68,7 +69,9 @@ export function runDueRoutines(now = new Date()) {
   )
   let filed = false
   for (const routine of routines) {
-    if (isDue(routine, now) && fire(routine, now)) filed = true
+    if (!isDue(routine, now)) continue
+    // The issue is read by the project's agents, so it is filed in the project's language.
+    if (forProject(getProject(routine.project_id), () => fire(routine, now))) filed = true
   }
   return filed
 }
@@ -89,9 +92,9 @@ const text = (value: unknown, max: number) => String(value ?? '').slice(0, max)
 
 function fields(body: any, current: Partial<Routine> = {}) {
   const name = text(body.name ?? current.name, 120).trim()
-  if (!name) throw new Error('Name is missing')
+  if (!name) throw new Error(t('Name fehlt'))
   const at = text(body.at ?? current.at ?? '07:00', 5)
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error('Give the time as HH:MM')
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(at)) throw new Error(t('Uhrzeit im Format HH:MM angeben'))
 
   return [
     name,

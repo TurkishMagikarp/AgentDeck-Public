@@ -12,10 +12,13 @@ You set a project up by writing one JSON **blueprint** and applying it. One call
 
 ## Connection
 
-The client script next to this file talks to the API. It reads two environment variables:
+The client script next to this file talks to the API. It reads three environment variables:
 
 - `AGENTDECK_URL` (default `http://localhost:8790`)
 - `AGENTDECK_TOKEN` (only if the server requires one)
+- `AGENTDECK_LANG` (`de` or `en`, default `en`): the language of its output and of the server's answers
+
+A German version of this file is next to it: `SKILL.de.md`.
 
 If a call fails with `unauthorized` or a connection error, ask the user for the URL or token. Do not guess.
 
@@ -44,6 +47,7 @@ If a call fails with `unauthorized` or a connection error, ask the user for the 
    - Shared conventions (stack, testing, commit style) belong in a skill that several agents reference.
    - Use only providers the user named or that `guide` lists. If the user gave limits ("stop OpenAI at
      10 % left", "fall back to Deepseek"), express them in `project.settings.budgets` and `fallback`.
+   - Set `project.settings.language` to `de` when the team should work in German, otherwise to `en`.
    - Issues that need a human decision stay in `backlog`. Everything in `todo` starts immediately.
 
 4. Unless the user asked you to just do it, show a short summary (agents, number of issues, what starts

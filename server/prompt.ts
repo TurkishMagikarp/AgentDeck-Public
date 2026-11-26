@@ -4,40 +4,31 @@ import { join } from 'node:path'
 import { checklistSection, MAKER_RULES, reviewSection } from './checklist.ts'
 import { all } from './db.ts'
 import { lessonsForPrompt } from './lessons.ts'
+import { CONNECTIONS } from './mcp.ts'
 import { listShots, shotsDir } from './preview.ts'
 import type { FileChange } from './diff.ts'
 import type { Workdir } from './workspace.ts'
 import { TICKET_FORMAT } from './ticket.ts'
 import { SANDBOX } from './sandbox.ts'
+import { forProject } from './i18n.ts'
+import { prompts } from './prompts/index.ts'
 
 export type RunKind = 'work' | 'review'
 
-const ADHD_SUMMARY =
-  'STRICT FORMAT, max 45 words total: line 1 = the outcome in one plain sentence. ' +
-  'Then at most 3 bullets of max 8 words each. No intro, no explanations, no code.'
+// The texts live in server/prompts, once per language, and are picked when a prompt is built.
+// Caveman is the same idea as the Caveman skill (github.com/JuliusBrussee/caveman): fewer output
+// tokens, same technical content. Only prose shrinks, everything an agent or tool parses stays exact.
+export const ADHD_SUMMARY = () => prompts().adhdSummary
+export const CAVEMAN = () => prompts().caveman
+export const AGENT_CLI = () => prompts().agentCli(SANDBOX ? prompts().install : '', TICKET_FORMAT())
+export const DECIDE_ALONE = () => prompts().decideAlone
 
-// Same idea as the Caveman skill (github.com/JuliusBrussee/caveman): fewer output tokens,
-// same technical content. Only prose shrinks, everything an agent or tool parses stays exact.
-const CAVEMAN = `## Writing style: caveman
-Write all prose terse, like a caveman: drop articles, filler, pleasantries, hedging and restating. Fragments are fine, short words over long ones.
-Keep exact and unchanged: code, commands, paths, identifiers, error messages, numbers, and the required blocks and status values.
-Use full sentences only for security warnings and irreversible actions.`
-
-const INSTALL = `- \`node "$AGENTDECK_CLI" install <package> [...]\` installs Debian packages (apt names, e.g. \`ffmpeg libsdl2-dev\`). You have no sudo; this is how system packages get in. Python and Node packages need no root: use uv, venv or npm.
-`
-
-const AGENT_CLI = `## Board commands
-You can read and write the shared board from the shell:
-- \`node "$AGENTDECK_CLI" list [--status todo]\` lists issues.
-- \`node "$AGENTDECK_CLI" show <number>\` prints an issue with its comments.
-- \`node "$AGENTDECK_CLI" comment <number> "text"\` comments on an issue.
-- \`node "$AGENTDECK_CLI" unblock <number> <blocker>\` removes a dependency: issue <number> no longer waits for <blocker>.
-- \`node "$AGENTDECK_CLI" learn "text"\` records a lesson for every later run of this project: a build or test command, a pitfall, a tool you had to install. One sentence, only what is not obvious from the repo.
-- \`node "$AGENTDECK_CLI" create --title "..." --description "..." [--assignee "Agent name"] [--status backlog|todo] [--blocked-by 12,13] [--reviewers "Name, Name"] [--group "..."] [--checklist "item | item"]\` files a new issue. \`--checklist\` lists what "done" means, each item checkable with a file or a command result. Give the issues it waits for with \`--blocked-by\`. If a similar open issue exists, the command names it and refuses; add \`--force yes\` only when yours is really different.
-${SANDBOX ? INSTALL : ''}A bug or doubt outside your issue becomes a new issue, it is not fixed on the side.
-If your issue cannot go on until another issue is done, name that issue as KEY-number in your summary and end with status "blocked": your issue then waits for it and goes on by itself.
-
-${TICKET_FORMAT}`
+/** Connections this run does not carry (mcp.ts, connectionsFor) and how the agent gets them. */
+function heldBackSection(ids: string[], agentName: string) {
+  if (!ids.length) return ''
+  const names = ids.map((id) => `${CONNECTIONS[id]?.label ?? id} (\`${id}\`)`).join(', ')
+  return prompts().heldBack(names, agentName)
+}
 
 /** The diff a reviewer gets in its prompt. Larger changes are cut; the file list stays complete. */
 const MAX_REVIEW_DIFF_CHARS = 40_000
@@ -48,14 +39,6 @@ export type ReviewChanges = {
   commits: { hash: string; subject: string }[]
   files: FileChange[]
 }
-
-const DECIDE_ALONE = `## You decide in the owner's place
-This issue got stuck and there is no human to ask. Nobody will answer a question you leave open.
-Read the comments to see why it hangs, then take exactly one of these ways:
-- Settle what was open (answer the question, make the decision, fix the cause) and hand the issue back to the agent who does the work: status \`handoff:AGENT_NAME\`, with your decision in the handoff note.
-- Finish it yourself: status \`done\`.
-- Drop it because it is not worth doing or cannot be done: status \`done\`, say why in the summary, and file new issues with the board commands for whatever is still worth doing.
-Do not use status \`blocked\`.`
 
 function skillsOf(agent: any) {
   if (!agent.skill_ids.length) return []
@@ -78,44 +61,30 @@ function latestComments(issueId: number) {
 function testRule(project: any, kind: RunKind) {
   const check = project.settings.precheck
   if (!check?.enabled || !check.command || check.commandAt !== 'landing') return ''
-  return kind === 'work'
-    ? `\n- Do not run \`${check.command}\` or other full test suites: the server runs it on the merged state after the review and sends the issue back if it fails. Run only quick checks of what you changed. This overrides any instruction to run the full tests yourself.`
-    : `\n- Do not run \`${check.command}\` or other full test suites: the server runs it after your approval and before landing. Judge the result against the issue. This overrides any instruction to run the tests yourself.`
+  return kind === 'work' ? prompts().testRuleWork(check.command) : prompts().testRuleReview(check.command)
 }
 
 function workRules(project: any, branch?: string, checklist = false) {
-  const summary = project.settings.adhd
-    ? `${ADHD_SUMMARY} Start line 1 with "Done:", "Partial:" or "Blocked:".`
-    : 'What you did and the result, concise.'
-  const where = branch ? ` (branch ${branch}); commit your changes on this branch, do not push` : ''
-
-  return `## Rules
-- Work only inside the current directory${where}.
-- Stay within the scope of this issue. If something essential is unclear or needs a human decision, stop and use status "blocked".${testRule(project, 'work')}
-- Answer in the language of the issue.
-${checklist ? `${MAKER_RULES}\n` : ''}- End your final message with exactly these three blocks:
-<summary>${summary}</summary>
-<handoff>State of the work, open points, relevant files/commands. Max 120 words. The next worker reads only this.</handoff>
-<status>done | review | blocked | handoff:AGENT_NAME</status>`
+  const text = prompts()
+  return text.workRules({
+    where: branch ? text.onBranch(branch) : '',
+    testRule: testRule(project, 'work'),
+    makerRules: checklist ? `${MAKER_RULES()}\n` : '',
+    summary: project.settings.adhd ? `${text.adhdSummary} ${text.adhdWorkStart}` : text.workSummary,
+  })
 }
 
 function reviewRules(project: any, makerName: string, branch?: string) {
-  const summary = project.settings.adhd
-    ? `${ADHD_SUMMARY} Start line 1 with "Approved:" or "Changes:".`
-    : 'Your verdict. For "changes": each point concrete enough that the maker can fix it without asking.'
-  const where = branch ? ` It holds the state of branch ${branch}.` : ''
-
-  return `## Your task: review
-${makerName} finished this issue and you are its reviewer. Check the result in the current directory against the issue and its source docs.${where}
-- Review only. Do not change or commit anything.${testRule(project, 'review')}
-- "approve" when it meets the issue. "changes" when the maker has to fix something. "blocked" only when a human must decide.
-- Answer in the language of the issue.
-- End your final message with exactly these two blocks:
-<summary>${summary}</summary>
-<status>approve | changes | blocked</status>`
+  const text = prompts()
+  return text.reviewRules({
+    maker: makerName,
+    where: branch ? text.holdsBranch(branch) : '',
+    testRule: testRule(project, 'review'),
+    summary: project.settings.adhd ? `${text.adhdSummary} ${text.adhdReviewStart}` : text.reviewSummary,
+  })
 }
 
-export function buildPrompt(input: {
+type PromptInput = {
   project: any
   issue: any
   agent: any
@@ -126,8 +95,16 @@ export function buildPrompt(input: {
   decides?: boolean
   /** For a review: what the branch changed, so the reviewer does not have to search for it. */
   changes?: ReviewChanges
-}) {
+  /** Connections of the agent that this run does not load. */
+  heldBack?: string[]
+}
+
+/** The prompt comes in the project's language, whatever language the caller runs in. */
+export const buildPrompt = (input: PromptInput) => forProject(input.project, () => promptFor(input))
+
+function promptFor(input: PromptInput) {
   const { project, issue, agent, team, workdir, kind } = input
+  const text = prompts()
   const skills = skillsOf(agent)
   const comments = latestComments(issue.id)
   const others = team
@@ -137,28 +114,30 @@ export function buildPrompt(input: {
   const checklist: string[] = project.settings.checklists.enabled ? (issue.checklist ?? []) : []
 
   const sections = [
-    `You are "${agent.name}"${agent.role ? `, ${agent.role},` : ''} working autonomously in the project "${project.name}".`,
-    project.description && `Project context: ${project.description}`,
-    agent.instructions && `## Your instructions\n${agent.instructions}`,
+    text.intro(agent.name, agent.role, project.name),
+    project.description && text.projectContext(project.description),
+    agent.instructions && `${text.yourInstructions}\n${agent.instructions}`,
     skills.length &&
-      `## Skills\n${skills.map((skill) => `### ${skill.name}\n${skill.content}`).join('\n\n')}`,
-    `## Issue ${project.key}-${issue.number}: ${issue.title}\n${issue.description || '(no description)'}`,
+      `${text.skills}\n${skills.map((skill) => `### ${skill.name}\n${skill.content}`).join('\n\n')}`,
+    // "## Issue KEY-1: title" is the same in every language: the run's title is read from it.
+    `## Issue ${project.key}-${issue.number}: ${issue.title}\n${issue.description || text.noDescription}`,
     kind === 'work' && checklistSection(checklist),
     lessonsForPrompt(project.id),
-    issue.handoff && `## Handoff note from the previous worker\n${issue.handoff}`,
+    issue.handoff && `${text.handoffNote}\n${issue.handoff}`,
     comments.length &&
-      `## Latest comments\n${comments.map((comment) => `**${comment.author}:** ${comment.body}`).join('\n\n')}`,
-    others.length && `## Team\n${others.join('\n')}`,
-    AGENT_CLI,
-    input.decides && DECIDE_ALONE,
+      `${text.latestComments}\n${comments.map((comment) => `**${comment.author}:** ${comment.body}`).join('\n\n')}`,
+    others.length && `${text.team}\n${others.join('\n')}`,
+    AGENT_CLI(),
+    kind === 'work' && heldBackSection(input.heldBack ?? [], agent.name),
+    input.decides && DECIDE_ALONE(),
     kind === 'review' && input.changes && changesSection(input.changes),
     kind === 'review' && screenshots(issue.id),
     kind === 'review' &&
       checklist.length &&
       reviewSection(checklist, issue.checklist_report ?? '', !!issue.review_interim),
-    project.settings.caveman && CAVEMAN,
+    project.settings.caveman && CAVEMAN(),
     kind === 'review'
-      ? reviewRules(project, maker?.name ?? 'A teammate', workdir.branch)
+      ? reviewRules(project, maker?.name ?? text.teammate, workdir.branch)
       : workRules(project, workdir.branch, checklist.length > 0),
   ]
   return sections.filter(Boolean).join('\n\n')
@@ -166,12 +145,13 @@ export function buildPrompt(input: {
 
 function changesSection({ base, commits, files }: ReviewChanges) {
   if (!files.length) return ''
+  const text = prompts()
   const list = files
     .slice(0, MAX_LISTED_FILES)
     .map((file) =>
-      file.binary ? `- ${file.path} (binary)` : `- ${file.path} (+${file.added} −${file.removed})`,
+      file.binary ? `- ${file.path} (${text.binary})` : `- ${file.path} (+${file.added} −${file.removed})`,
     )
-  if (files.length > MAX_LISTED_FILES) list.push(`- and ${files.length - MAX_LISTED_FILES} more files`)
+  if (files.length > MAX_LISTED_FILES) list.push(text.moreFiles(files.length - MAX_LISTED_FILES))
   let budget = MAX_REVIEW_DIFF_CHARS
   const patches: string[] = []
   const tooBig: string[] = []
@@ -185,11 +165,12 @@ function changesSection({ base, commits, files }: ReviewChanges) {
   }
 
   const parts = [
-    `## What the branch changed against ${base}`,
-    'This is the complete change. Review it here; open other files only where the diff is not enough.',
-    commits.length && `Commits:\n${commits.map((commit) => `- ${commit.hash} ${commit.subject}`).join('\n')}`,
-    `Files:\n${list.join('\n')}`,
-    tooBig.length && `Not shown because of size, read them yourself if needed: ${tooBig.join(', ')}`,
+    text.changesHeading(base),
+    text.changesIntro,
+    commits.length &&
+      `${text.commits}\n${commits.map((commit) => `- ${commit.hash} ${commit.subject}`).join('\n')}`,
+    `${text.files}\n${list.join('\n')}`,
+    tooBig.length && text.notShown(tooBig.join(', ')),
     patches.length && '```diff\n' + patches.join('\n') + '\n```',
   ]
   return parts.filter(Boolean).join('\n')
@@ -200,7 +181,7 @@ function screenshots(issueId: number) {
   const latest = listShots(issueId).slice(0, 2)
   if (!latest.length) return ''
   const paths = latest.map((file) => `- ${join(shotsDir(issueId), file)}`).join('\n')
-  return `## Screenshots of this branch\nThe server started the app of this branch and captured it. Open the images and judge the visible result too:\n${paths}`
+  return prompts().screenshots(paths)
 }
 
 export const tag = (text: string, name: string) =>

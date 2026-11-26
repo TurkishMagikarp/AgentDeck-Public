@@ -41,7 +41,7 @@ const stuck = issue(alpha, 1, 'blocked', 'Needs an owner')
 issue(alpha, 2, 'done')
 issue(alpha, 3, 'todo')
 issue(beta, 1, 'backlog')
-run("INSERT INTO comments (issue_id, author, kind, body, created_at) VALUES (?,?,?,?,?)", stuck, 'Lead', 'system', 'I am stuck.', now)
+run("INSERT INTO comments (issue_id, author, kind, body, created_at) VALUES (?,?,?,?,?)", stuck, 'Lead', 'system', 'Ich komme nicht weiter.', now)
 run(
   "INSERT INTO runs (project_id, issue_id, agent_name, provider, status, started_at, cost_usd) VALUES (?,?,?,?,'running',?,0)",
   alpha,
@@ -78,7 +78,7 @@ test('overview lists what runs now, what waits for a human and what just finishe
   assert.equal(overview.running[0].agent, 'Dev')
   assert.deepEqual(
     overview.inbox.map((i) => [i.projectKey, i.number, i.reason]),
-    [['ALP', 1, 'I am stuck.']],
+    [['ALP', 1, 'Ich komme nicht weiter.']],
   )
   assert.equal(overview.feed[0].agent, 'QA')
   assert.equal(overview.feed[0].outcome, 'done')
@@ -120,7 +120,7 @@ test('spend guard stays quiet below the cap and stops the fleet at it', () => {
   assert.ok(guardSettings().trippedAt > 0)
   assert.equal(checkSpendGuard(now), false, 'does not fire again while the switch is on')
 
-  assert.throws(() => killSwitch('resume'), /spend limit/, 'resume while still over the cap is refused')
+  assert.throws(() => killSwitch('resume'), /Ausgabenlimit/, 'resume while still over the cap is refused')
   saveGuardSettings({ capUsd: 0 })
   killSwitch('resume')
   assert.equal(get('SELECT paused FROM projects WHERE id=?', alpha).paused, 0)

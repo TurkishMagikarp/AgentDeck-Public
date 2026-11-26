@@ -24,7 +24,7 @@ const done = (o: Partial<Done> & { words?: Set<string> }): Done => ({
   grp: '',
   agentId: 1,
   tier: 'medium',
-  words: wordsOf('Login form validation'),
+  words: wordsOf('Login Formular Validierung'),
   doneAt: NOW,
   usd: 1,
   tokens: 1000,
@@ -35,7 +35,7 @@ const target = (o: Partial<Target> = {}): Target => ({
   grp: '',
   agentId: 1,
   tier: 'medium',
-  words: wordsOf('Login form validation repair'),
+  words: wordsOf('Login Formular Validierung reparieren'),
   ...o,
 })
 
@@ -145,12 +145,12 @@ describe('forecastFor', () => {
   }
 
   test('reads similar finished issues and follows newly finished ones', () => {
-    finished('Login page build', 0.3)
-    finished('Login form', 0.5)
-    const open = createIssue(pid, { title: 'Login password', assignee_id: agent, grp: 'M1', status: 'todo' })!
+    finished('Login Seite bauen', 0.3)
+    finished('Login Formular', 0.5)
+    const open = createIssue(pid, { title: 'Login Passwort', assignee_id: agent, grp: 'M1', status: 'todo' })!
     assert.equal(forecastFor(open.id), null, 'two are not enough')
 
-    finished('Login error', 0.7)
+    finished('Login Fehler', 0.7)
     const forecast = forecastFor(open.id)!
     assert.equal(forecast.sample, 3)
     assert.equal(forecast.usd.median, 0.5)
@@ -158,7 +158,7 @@ describe('forecastFor', () => {
     assert.equal(forecast.runs.median, 1)
 
     // Reopening one drops it from the index again.
-    const reopened = finished('Login logout', 0.9)
+    const reopened = finished('Login Abmelden', 0.9)
     assert.equal(forecastFor(open.id)!.sample, 4)
     patchIssue(reopened.id, { status: 'todo' })
     assert.equal(forecastFor(open.id)!.sample, 3)
@@ -175,7 +175,7 @@ describe('forecastFor', () => {
     const view = forecastView(open.id)!
     assert.equal(view.cap.usd, 0.4)
     assert.equal(view.overCap, true)
-    const closed = finished('Login Captcha second', 1)
+    const closed = finished('Login Captcha zwei', 1)
     assert.equal(forecastFor(closed.id), null)
   })
 })
