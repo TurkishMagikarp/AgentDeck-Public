@@ -1,6 +1,7 @@
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { DATA_DIR } from './db.ts'
 import { gitIn } from './sandbox.ts'
+import { realPath } from './workspace.ts'
 
 export const cleanupBase = (base: string) => base === 'dev' || base === 'pre-dev'
 export const issueBranch = (key: string, number: number) => `agentdeck/${key}-${number}`
@@ -19,7 +20,7 @@ export async function mergedInto(repo: string, tip: string, base: string) {
 export async function removeLandedIssueBranch(repo: string, key: string, number: number, tip: string) {
   if (!commitId(tip) || !/^[A-Z][A-Z0-9-]*$/.test(key) || !Number.isSafeInteger(number) || number < 1) return false
   const ref = `refs/heads/${issueBranch(key, number)}`
-  const worktree = resolve(join(DATA_DIR, 'worktrees', key, String(number)))
+  const worktree = realPath(join(DATA_DIR, 'worktrees', key, String(number)))
   try {
     const { stdout: current } = await gitIn(repo, ['rev-parse', '--verify', ref])
     if (current.trim() !== tip) return false
@@ -28,7 +29,7 @@ export async function removeLandedIssueBranch(repo: string, key: string, number:
       return stdout.split('\0\0').map((row) => row.split('\0')).filter((row) => row.includes(`branch ${ref}`))
     }
     for (const [path] of await holders()) {
-      if (!path.startsWith('worktree ') || resolve(path.slice(9)) !== worktree) return false
+      if (!path.startsWith('worktree ') || realPath(path.slice(9)) !== worktree) return false
       const { stdout: dirty } = await gitIn(worktree, ['status', '--porcelain', '--untracked-files=all', '--ignored=matching'])
       if (dirty) return false
       await gitIn(repo, ['worktree', 'remove', worktree])

@@ -47,7 +47,7 @@ async function hasCommits(base: string) {
  * comes in its short form ("RUNNER~1"), and a link can stand for a folder: compared as text, the
  * same place would look like two.
  */
-function realPath(path: string) {
+export function realPath(path: string) {
   try {
     return realpathSync.native(path)
   } catch {
