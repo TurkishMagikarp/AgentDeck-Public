@@ -51,6 +51,7 @@ Lies in den Kommentaren, woran es hängt, und geh dann genau einen dieser Wege:
 - Kläre, was offen war (Frage beantworten, Entscheidung treffen, Ursache beheben), und gib das Issue an den Agenten zurück, der die Arbeit macht: Status \`handoff:AGENT_NAME\`, mit deiner Entscheidung in der Übergabe.
 - Erledige es selbst: Status \`done\`.
 - Gib es auf, weil es sich nicht lohnt oder nicht machbar ist: Status \`done\`, begründe das in der Zusammenfassung und lege mit den Board-Befehlen neue Issues für das an, was sich noch lohnt.
+- Teile es auf, wenn Läufen die Zeit ausging oder das Issue für einen Lauf zu groß ist: Lege den Rest mit den Board-Befehlen als kleinere Issues an, jedes in einem Lauf machbar, in Reihenfolge mit \`--blocked-by\`. Nenne in jedem den Branch oder Commit, der den bisherigen Stand hält. Schließe dann dieses Issue mit dem Status \`done\` und zähle die neuen Issues in der Zusammenfassung auf. Gib ein zu großes Issue nicht unverändert zurück.
 Nimm nicht den Status \`blocked\`.`,
 
   testRuleWork: (command) =>
@@ -67,6 +68,7 @@ Nimm nicht den Status \`blocked\`.`,
 - Arbeite nur im aktuellen Verzeichnis${text.where}.
 - Bleib im Rahmen dieses Issues. Ist etwas Wesentliches unklar oder muss ein Mensch entscheiden, hör auf und nimm den Status "blocked".${text.testRule}
 - Brauch wenige Schritte: Jeder Schritt liest das ganze Gespräch neu. Verkette zusammengehörige Shell-Befehle in einem Aufruf (\`a && b && c\`), lies die nötigen Dateien in einem Schritt, und lies keine Datei und starte keinen Befehl noch einmal, deren Ergebnis du schon hast. Halte Ausgaben kurz (\`head\`, \`tail\`, \`grep\`, \`wc\`), statt ganze Dateien oder Logs auszugeben.
+- Committe nach jedem fertigen Teil, damit ein gestoppter Lauf nichts verliert. Zeigt sich, dass das Issue für einen Lauf zu groß ist, arbeite nicht weiter, bis die Zeit abläuft: Mach einen Teil fertig, committe ihn und schreib in die Übergabe, was offen ist.
 - Antworte auf Deutsch.
 ${text.makerRules}- Beende deine letzte Nachricht mit genau diesen drei Blöcken:
 <summary>${text.summary}</summary>
@@ -98,7 +100,7 @@ ${text.maker} hat dieses Issue bearbeitet, und du prüfst es. Prüfe das Ergebni
     `## Screenshots dieses Branches\nDer Server hat die App dieses Branches gestartet und aufgenommen. Öffne die Bilder und beurteile auch das sichtbare Ergebnis:\n${paths}`,
 
   // ---------- wie ein Issue geschrieben wird (ticket.ts) ----------
-  ticketFormat: `## So schreibst du ein Issue
+  ticketFormat: (tokens) => `## So schreibst du ein Issue
 Schreib es so, dass ein Berufsanfänger ohne Vorwissen es ohne Rückfrage erledigen könnte. Nimm diese Überschriften:
 - \`## Ziel\`: warum das wichtig ist, ein bis drei Sätze.
 - \`## Aufgabe\`: was zu tun ist, als nummerierte Schritte.
@@ -106,7 +108,7 @@ Schreib es so, dass ein Berufsanfänger ohne Vorwissen es ohne Rückfrage erledi
 - \`## Fertig wenn\`: Abnahmekriterien als Checkliste. Jeder Punkt lässt sich prüfen, indem man den Code liest, einen Befehl ausführt oder einen Screenshot ansieht.
 - \`## Nicht Teil davon\`: was nicht angefasst wird.
 - \`## Hinweise\`: optional. Stolperfallen, schon getroffene Entscheidungen, auszuführende Befehle.
-Ein Issue ist ein Ergebnis. Teile alles Größere auf.`,
+Ein Issue ist ein Ergebnis, so klein, dass alle seine Läufe zusammen (Arbeit, Nachbesserung, Reviews) voraussichtlich unter ${tokens.toLocaleString('de-DE')} Tokens bleiben, Cache-Lesen nicht mitgezählt. Als Richtwert ist das ein Lauf von etwa einer halben Stunde: eine Änderung in einer Handvoll Dateien, höchstens vier Punkte unter "Fertig wenn", geprüft mit einem Befehl, der Minuten dauert. Lange Dateien ganz lesen, lange Befehlsausgaben und viele Versuche gegen eine langsame Prüfung treiben die Tokens hoch. Alles Größere wird zu mehreren Issues hintereinander, jedes für sich nützlich, jedes nennt seinen Vorgänger mit \`--blocked-by\`. Ein langes Skript, ein ganzer Durchlauf oder ein ganzer Bildschirm ist nie ein Issue: Schneide nach Station, Szene oder Teil.`,
 
   // ---------- Abnahme-Checklisten (checklist.ts) ----------
   checklistSection: (list) => `## Abnahme-Checkliste

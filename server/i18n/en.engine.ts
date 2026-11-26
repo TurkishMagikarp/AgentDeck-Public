@@ -84,6 +84,8 @@ export const en_engine: Record<string, string> = {
   '{streak} Läufe in Folge ohne Ergebnis. Issue blockiert, bitte prüfen.':
     '{streak} runs in a row without a result. Issue blocked, please check.',
   'Mehrere Läufe sind ohne Ergebnis geblieben.': 'Several runs ended without a result.',
+  'Dieses Issue ist zu groß: Läufen ging die Zeit aus, oder es hat mehr Tokens verbraucht, als ein Issue soll. Teile den Rest in kleinere Issues auf, statt es unverändert zurückzugeben.':
+    'This issue is too big: runs ran out of time, or it used more tokens than one issue should. Split what is left into smaller issues instead of handing it back unchanged.',
   'Zweimal derselbe Fehler auf {provider}. Der nächste Lauf nimmt einen anderen Anbieter, falls einer eingerichtet ist.':
     'The same error twice on {provider}. The next run uses another provider, if one is set up.',
   '`{missing}` war in einem Lauf nicht installiert. Vor Gebrauch prüfen und bei Bedarf installieren.':

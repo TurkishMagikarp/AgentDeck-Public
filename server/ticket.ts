@@ -4,8 +4,14 @@
 import { say } from './i18n.ts'
 import { prompts } from './prompts/index.ts'
 
+/**
+ * What one issue should use at most, all its runs together, counted like issueCap.ts counts
+ * (fresh tokens). A project with a token cap per issue names that instead.
+ */
+export const ISSUE_TOKENS = 500_000
+
 /** The format in the language of the run, with that language's headings. */
-export const TICKET_FORMAT = () => prompts().ticketFormat
+export const TICKET_FORMAT = (tokens = ISSUE_TOKENS) => prompts().ticketFormat(tokens)
 
 /** The sections an issue must have, each under its English or its German heading. */
 const REQUIRED = [

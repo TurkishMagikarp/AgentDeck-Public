@@ -52,6 +52,7 @@ Read the comments to see why it hangs, then take exactly one of these ways:
 - Settle what was open (answer the question, make the decision, fix the cause) and hand the issue back to the agent who does the work: status \`handoff:AGENT_NAME\`, with your decision in the handoff note.
 - Finish it yourself: status \`done\`.
 - Drop it because it is not worth doing or cannot be done: status \`done\`, say why in the summary, and file new issues with the board commands for whatever is still worth doing.
+- Split it, when runs ran out of time or the issue is too big for one run: file what is left as smaller issues with the board commands, each one doable in one run, in order with \`--blocked-by\`. Name in each the branch or commit that holds the work so far. Then close this issue with status \`done\` and list the new issues in the summary. Do not hand an issue that is too big back unchanged.
 Do not use status \`blocked\`.`,
 
   testRuleWork: (command: string) =>
@@ -70,6 +71,7 @@ Do not use status \`blocked\`.`,
 - Work only inside the current directory${text.where}.
 - Stay within the scope of this issue. If something essential is unclear or needs a human decision, stop and use status "blocked".${text.testRule}
 - Use few steps: every step re-reads the whole conversation. Chain related shell commands in one call (\`a && b && c\`), read the files you need in one step, and do not read a file or run a command again whose result you already have. Keep output short (\`head\`, \`tail\`, \`grep\`, \`wc\`) instead of printing whole files or logs.
+- Commit after every finished part, so a run that is stopped loses nothing. If the issue turns out too big for one run, do not push on until time runs out: finish one part, commit it, and say in the handoff what is left.
 - Answer in English.
 ${text.makerRules}- End your final message with exactly these three blocks:
 <summary>${text.summary}</summary>
@@ -106,7 +108,7 @@ ${text.maker} finished this issue and you are its reviewer. Check the result in 
     `## Screenshots of this branch\nThe server started the app of this branch and captured it. Open the images and judge the visible result too:\n${paths}`,
 
   // ---------- how an issue is written (ticket.ts) ----------
-  ticketFormat: `## How to write an issue
+  ticketFormat: (tokens: number) => `## How to write an issue
 Write it so that a junior developer with no context could do it without asking. Use these headings:
 - \`## Goal\`: why this matters, one to three sentences.
 - \`## Task\`: what to do, as numbered steps.
@@ -114,7 +116,7 @@ Write it so that a junior developer with no context could do it without asking. 
 - \`## Done when\`: acceptance criteria as a checklist. Each item can be checked by reading the code, running a command or looking at a screenshot.
 - \`## Out of scope\`: what not to touch.
 - \`## Notes\`: optional. Pitfalls, decisions already made, commands to run.
-One issue is one result. Split anything bigger.`,
+One issue is one result, small enough that all its runs together (work, fixes, reviews) are expected to stay under ${tokens.toLocaleString('en-US')} tokens, cache reads not counted. As a guide, that is one run of about half an hour: one change in a handful of files, at most four items under "Done when", checked by a command that takes minutes. Long files read whole, long command output and many tries against a slow check drive the tokens up. Anything bigger becomes several issues in a row, each useful on its own and each naming its predecessor with \`--blocked-by\`. A long script, a whole walkthrough or a whole screen is never one issue: cut it by station, scene or part.`,
 
   // ---------- acceptance checklists (checklist.ts) ----------
   checklistSection: (list: string) => `## Acceptance checklist

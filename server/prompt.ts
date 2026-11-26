@@ -21,7 +21,8 @@ export type RunKind = 'work' | 'review'
 // tokens, same technical content. Only prose shrinks, everything an agent or tool parses stays exact.
 export const ADHD_SUMMARY = () => prompts().adhdSummary
 export const CAVEMAN = () => prompts().caveman
-export const AGENT_CLI = () => prompts().agentCli(SANDBOX ? prompts().install : '', TICKET_FORMAT())
+export const AGENT_CLI = (issueTokens?: number) =>
+  prompts().agentCli(SANDBOX ? prompts().install : '', TICKET_FORMAT(issueTokens))
 export const DECIDE_ALONE = () => prompts().decideAlone
 
 /** Connections this run does not carry (mcp.ts, connectionsFor) and how the agent gets them. */
@@ -129,7 +130,7 @@ function promptFor(input: PromptInput) {
     comments.length &&
       `${text.latestComments}\n${comments.map((comment) => `**${comment.author}:** ${comment.body}`).join('\n\n')}`,
     others.length && `${text.team}\n${others.join('\n')}`,
-    AGENT_CLI(),
+    AGENT_CLI(project.settings?.issueCap?.tokens || undefined),
     kind === 'work' && heldBackSection(input.heldBack ?? [], agent.name),
     input.decides && DECIDE_ALONE(),
     kind === 'review' && input.changes && changesSection(input.changes),

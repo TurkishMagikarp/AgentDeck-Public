@@ -53,11 +53,12 @@ import { notifyOwner } from './notify.ts'
 import { runFailed } from './webhooks.ts'
 import { blockerWeights, byBlockerWeight, cycles, type Weight } from './blockers.ts'
 import { partialStep, waitingLines } from './partial.ts'
-import { overCap } from './issueCap.ts'
+import { overCap, spentOn } from './issueCap.ts'
 import { capturePreview } from './preview.ts'
 import { precheck } from './precheck.ts'
 import { bigIssues, paceOf, type Pace } from './pacing.ts'
 import { buildPrompt, tag, type RunKind } from './prompt.ts'
+import { ISSUE_TOKENS } from './ticket.ts'
 import { rtkEnv } from './rtk.ts'
 import { createRunToken, revokeRunToken } from './runTokens.ts'
 import { prepareWorkdir, releaseWorkdir, type Workdir } from './workspace.ts'
@@ -91,7 +92,8 @@ type Live = {
   startedAt: number
   lastActivity: number
   warned: Set<string>
-  stop?: { to: string }
+  /** Set once the run is being stopped. `outOfTime`: the watchdog's time limit ended it. */
+  stop?: { to: string; outOfTime?: boolean }
   /** The agent has ended and the server checks its work (precheck.ts); the watchdog leaves it alone. */
   checking?: boolean
   /** The replay of the run (runEvents.ts), when the project records them. */
@@ -388,6 +390,9 @@ function endSummary(status: string, res: RunResult, note: string, verdict: strin
     .filter(Boolean)
     .join('\n')
 }
+
+/** Tries in a row without a result after which an issue that proved too big goes to be split. */
+const TOO_BIG_TRIES = 2
 
 /** Failed runs in a row on this issue. A limit or a broken login is the provider's fault and does not count. */
 function failedStreak(issueId: number) {
@@ -950,10 +955,15 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
   const queue = l.kind === 'review' ? 'review' : 'todo'
   let to = l.stop?.to === 'todo' ? queue : (l.stop?.to ?? queue)
   const providersFault = failure && PROVIDER_FAILURES.includes(failure.kind)
+  const tooBig =
+    !!l.stop?.outOfTime || spentOn(issue.id).tokens >= (p.settings.issueCap.tokens || ISSUE_TOKENS)
   if (to === queue && !providersFault) {
     const watchdog = p.settings.watchdog
     const streak = failedStreak(issue.id)
-    const limit = (watchdog.enabled && watchdog.rules.find((r: any) => r.type === 'attempts')?.value) || 5
+    const attempts = (watchdog.enabled && watchdog.rules.find((r: any) => r.type === 'attempts')?.value) || 5
+    // A run that used up its whole time will do so again, and an issue past its tokens only gets
+    // dearer with every try. So the second try in a row without a result already goes to be split.
+    const limit = tooBig ? Math.min(attempts, TOO_BIG_TRIES) : attempts
     if (streak >= limit) {
       to = 'blocked'
       addComment(
@@ -968,7 +978,16 @@ function finishFailed(l: Live, p: any, issue: any, agent: any, res: RunResult) {
     }
   }
   moveIssue(issue.id, { status: to })
-  if (to === 'blocked') needsHuman(p, issue.id, t('Mehrere Läufe sind ohne Ergebnis geblieben.'))
+  if (to !== 'blocked') return
+  needsHuman(
+    p,
+    issue.id,
+    tooBig
+      ? t(
+          'Dieses Issue ist zu groß: Läufen ging die Zeit aus, oder es hat mehr Tokens verbraucht, als ein Issue soll. Teile den Rest in kleinere Issues auf, statt es unverändert zurückzugeben.',
+        )
+      : t('Mehrere Läufe sind ohne Ergebnis geblieben.'),
+  )
 }
 
 /** Position of the next reviewer who can actually review: enabled, and not the maker. */
@@ -1922,6 +1941,7 @@ function applyRules(l: Live, rules: any[], now: number) {
       l.warned.add(rule.type)
     } else {
       stopRun(l.runId, `${message} ${t('Lauf gestoppt.')}`, rule.action === 'block' ? 'blocked' : 'todo')
+      if (rule.type === 'runtime' && l.stop) l.stop.outOfTime = true
       return
     }
   }

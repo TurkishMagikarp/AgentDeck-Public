@@ -6,7 +6,7 @@ import { describe, test } from 'node:test'
 import { doneWhenItems, parseReport } from '../server/checklist.ts'
 import { blueprintGuide, blueprintRequest } from '../server/blueprint.ts'
 import { withLang } from '../server/i18n.ts'
-import { buildPrompt, tag } from '../server/prompt.ts'
+import { buildPrompt, DECIDE_ALONE, tag } from '../server/prompt.ts'
 import { de } from '../server/prompts/de.ts'
 import { en } from '../server/prompts/en.ts'
 import { listTemplates } from '../server/templates.ts'
@@ -162,6 +162,18 @@ describe('issues in both languages', () => {
     for (const heading of ['Goal', 'Task', 'Files', 'Done when', 'Out of scope', 'Notes'])
       assert.ok(english.includes(`\`## ${heading}\``), heading)
     assert.deepEqual(missingSections('## Aufgabe\n1. x\n## Dateien\n- a\n## Fertig wenn\n- y'), [])
+  })
+
+  test('the format names how many tokens an issue may take, and how to cut a bigger one', () => {
+    assert.match(withLang('de', TICKET_FORMAT), /unter 500\.000 Tokens/)
+    assert.match(withLang('en', TICKET_FORMAT), /under 500,000 tokens/)
+    assert.match(withLang('en', () => TICKET_FORMAT(200_000)), /under 200,000 tokens/)
+    for (const lang of ['de', 'en'] as const) assert.match(withLang(lang, TICKET_FORMAT), /--blocked-by/)
+  })
+
+  test('the deputy may split an issue that is too big', () => {
+    assert.match(withLang('de', DECIDE_ALONE), /Teile es auf/)
+    assert.match(withLang('en', DECIDE_ALONE), /Split it/)
   })
 
   test('"Fertig wenn" becomes the checklist like "Done when"', () => {
