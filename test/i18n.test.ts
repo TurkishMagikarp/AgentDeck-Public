@@ -1,13 +1,16 @@
 // Every text passed to t('…') in the web UI needs an English entry with the same placeholders.
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { en } from '../web/src/i18n/en.ts'
 
 const SRC = join(import.meta.dirname, '..', 'web', 'src')
 
-const sources = readdirSync(SRC)
+// The server image carries no web source; the suite runs there too and skips these checks.
+const WEB = { skip: existsSync(SRC) ? false : 'no web source here' }
+const en: Record<string, string> = WEB.skip ? {} : (await import('../web/src/i18n/en.ts')).en
+
+const sources = (WEB.skip ? [] : readdirSync(SRC))
   .filter((name) => /\.(ts|tsx)$/.test(name) && name !== 'i18n.ts')
   .map((name) => ({ name, text: readFileSync(join(SRC, name), 'utf8') }))
 
@@ -29,23 +32,23 @@ for (const { name, text } of sources) {
 
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort()
 
-test('the scan finds the UI texts', () => {
+test('the scan finds the UI texts', WEB, () => {
   assert.ok(keys.length > 50, `only ${keys.length} t() calls found`)
 })
 
-test('every t() text has an English translation', () => {
+test('every t() text has an English translation', WEB, () => {
   const missing = keys.filter(({ key }) => !(key in en)).map(({ file, key }) => `${file}: ${key}`)
   assert.deepEqual(missing, [])
 })
 
-test('English texts keep the placeholders of the German key', () => {
+test('English texts keep the placeholders of the German key', WEB, () => {
   const broken = Object.entries(en)
     .filter(([key, value]) => placeholders(key).join() !== placeholders(value).join())
     .map(([key]) => key)
   assert.deepEqual(broken, [])
 })
 
-test('no English entry is left empty or identical by accident', () => {
+test('no English entry is left empty or identical by accident', WEB, () => {
   const empty = Object.entries(en).filter(([, value]) => !value.trim()).map(([key]) => key)
   assert.deepEqual(empty, [])
 })
@@ -77,7 +80,7 @@ function split(text: string) {
   return { literals, rest: rest + text.slice(at) }
 }
 
-test('no German text bypasses t()', () => {
+test('no German text bypasses t()', WEB, () => {
   const found: string[] = []
   for (const { name, text } of sources) {
     const { literals, rest } = split(text)
