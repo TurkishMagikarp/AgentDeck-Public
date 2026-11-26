@@ -8,6 +8,8 @@ export const de: typeof en = {
   intro: (agent, role, project) =>
     `Du bist "${agent}"${role ? `, ${role},` : ''} und arbeitest selbstständig im Projekt "${project}".`,
   projectContext: (description) => `Projektkontext: ${description}`,
+  ownerNote:
+    '## Hinweis des Besitzers, gilt für alle Agenten\nEr geht deinen Anweisungen und Skills vor, wo sie sich widersprechen.',
   yourInstructions: '## Deine Anweisungen',
   skills: '## Skills',
   noDescription: '(keine Beschreibung)',

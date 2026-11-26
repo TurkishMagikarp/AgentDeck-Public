@@ -109,6 +109,7 @@ import {
 import { buildReport, reportSettings, saveReportSettings, sendReport, startReports } from './report.ts'
 import { createRoutine, deleteRoutine, listRoutines, startRoutines, updateRoutine } from './routines.ts'
 import { CONNECTIONS, listConnections, setConnectionKey } from './mcp.ts'
+import { MAX_OWNER_NOTE, ownerNote, saveOwnerNote } from './ownerNote.ts'
 import { forProject, instanceLang, isLang, requestLang, t, tIn, withLang } from './i18n.ts'
 import {
   ENVIRONMENT_KEY_SECRET,
@@ -1364,6 +1365,13 @@ app.post('/api/report/send', async (c) => {
   } catch (e: any) {
     return bad(e.message)
   }
+})
+
+app.get('/api/agent-note', (c) => c.json({ note: ownerNote(), max: MAX_OWNER_NOTE }))
+app.put('/api/agent-note', async (c) => {
+  const saved = saveOwnerNote(await body(c))
+  audit(actor(c), 'agents.note', '', { length: saved.note.length })
+  return c.json({ ...saved, max: MAX_OWNER_NOTE })
 })
 
 app.get('/api/mail', (c) => c.json(mailSettings()))

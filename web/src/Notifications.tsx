@@ -102,6 +102,43 @@ export function PushSettings() {
   )
 }
 
+/** One note that every agent of every project reads at the top of its prompt. */
+export function OwnerNote() {
+  const [saved, { mutate }] = createResource(() => api.get<{ note: string; max: number }>('/agent-note'))
+  const [draft, setDraft] = createSignal<string>()
+  const text = () => draft() ?? saved()?.note ?? ''
+  const changed = () => draft() !== undefined && draft() !== saved()?.note
+
+  function save() {
+    api
+      .put<{ note: string; max: number }>('/agent-note', { note: text() })
+      .then((next) => {
+        mutate(next)
+        setDraft(undefined)
+      })
+      .catch(fail)
+  }
+
+  return (
+    <section class="provider">
+      <textarea
+        rows="4"
+        maxLength={saved()?.max}
+        aria-label={t('Hinweis an alle Agenten')}
+        placeholder={t('z. B.: Wir pushen nicht mehr zu GitHub. Das Repository liegt auf unserem Forgejo.')}
+        value={text()}
+        onInput={(e) => setDraft(e.currentTarget.value)}
+      />
+      <div class="key-form">
+        <span class="muted grow">{text() ? t('Steht in jedem Auftrag, ab dem nächsten Lauf.') : t('(aus)')}</span>
+        <button classList={{ primary: changed() }} disabled={!changed()} onClick={save}>
+          {t('Speichern')}
+        </button>
+      </div>
+    </section>
+  )
+}
+
 export function ReportSettings() {
   const [report, { mutate }] = createResource(() => api.get<Report>('/report'))
   const [showPreview, setShowPreview] = createSignal(false)

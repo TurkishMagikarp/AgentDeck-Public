@@ -22,7 +22,9 @@ export const PROVIDERS: Record<
   anthropic: { label: 'Anthropic (Claude Code)', cli: 'claude', defaultModel: '' },
   'claude-managed': { label: 'Claude Managed Agents (API)', cli: 'managed', defaultModel: 'claude-opus-5-5' },
   openai: { label: 'OpenAI (Codex)', cli: 'codex', defaultModel: '' },
-  opencode: { label: 'Opencode Go', cli: 'opencode', defaultModel: '' },
+  // Without a model the opencode CLI picks one the account may not have access to, so runs that
+  // land here without a tier model (a fallback from another provider) get this one.
+  opencode: { label: 'Opencode Go', cli: 'opencode', defaultModel: 'opencode-go/deepseek-v4.1-flash' },
   deepseek: {
     label: 'Deepseek',
     cli: 'api',

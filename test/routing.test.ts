@@ -172,6 +172,32 @@ describe('pickProvider', () => {
   })
 })
 
+describe('a fallback to opencode', () => {
+  const toOpencode = (model = '') =>
+    project((s) => {
+      s.fallbackEnabled = true
+      s.fallback = ['anthropic', 'opencode']
+      if (model) s.modelTiers.strong.opencode = model
+    })
+  const fable = { provider: 'anthropic', model: 'claude-fable-5-2' }
+
+  test('runs on DeepSeek Flash while its tier has no model, never on the CLI default', () => {
+    setQuota('anthropic', 'seven_day_fable', 1)
+    setMode('opencode', 'subscription')
+    assert.deepEqual(pickProvider(toOpencode(), fable), {
+      provider: 'opencode',
+      model: 'opencode-go/deepseek-v4.1-flash',
+      fallback: true,
+    })
+  })
+
+  test('takes the model of the tier once one is set', () => {
+    setQuota('anthropic', 'seven_day_fable', 1)
+    setMode('opencode', 'subscription')
+    assert.equal(pickProvider(toOpencode('opencode-go/some-model'), fable)?.model, 'opencode-go/some-model')
+  })
+})
+
 describe('old fallbackModels', () => {
   test('fill only the tiers the project never set', () => {
     const s = mergeSettings({ fallbackModels: { openai: 'gpt-6' }, modelTiers: { light: { openai: 'gpt-light' } } })

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { checklistSection, MAKER_RULES, reviewSection } from './checklist.ts'
 import { all } from './db.ts'
 import { lessonsForPrompt } from './lessons.ts'
+import { ownerNote } from './ownerNote.ts'
 import { CONNECTIONS } from './mcp.ts'
 import { listShots, shotsDir } from './preview.ts'
 import type { FileChange } from './diff.ts'
@@ -116,6 +117,7 @@ function promptFor(input: PromptInput) {
   const sections = [
     text.intro(agent.name, agent.role, project.name),
     project.description && text.projectContext(project.description),
+    ownerNote() && `${text.ownerNote}\n${ownerNote()}`,
     agent.instructions && `${text.yourInstructions}\n${agent.instructions}`,
     skills.length &&
       `${text.skills}\n${skills.map((skill) => `### ${skill.name}\n${skill.content}`).join('\n\n')}`,

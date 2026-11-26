@@ -19,7 +19,7 @@ type Rule = [method: 'GET' | 'WRITE' | '*', path: RegExp, role: Role]
 
 const RULES: Rule[] = [
   ['*', /^\/api\/(audit|users)(\/|$)/, 'admin'],
-  ['*', /^\/api\/(mail|report|mcp)(\/|$)/, 'admin'],
+  ['*', /^\/api\/(mail|report|mcp|agent-note)(\/|$)/, 'admin'],
   // The limit that stops the fleet is a decision about cost; pausing the fleet is the operator's.
   ['WRITE', /^\/api\/spend-guard$/, 'admin'],
   ['GET', /^\/api\/me$/, 'viewer'],

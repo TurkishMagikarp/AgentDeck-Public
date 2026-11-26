@@ -34,6 +34,7 @@ const ACTIONS: Record<string, string> = {
   'routine.delete': 'Routine gelöscht',
   'mail.settings': 'Mail-Einstellungen geändert',
   'report.settings': 'Morgenbericht geändert',
+  'agents.note': 'Hinweis an alle Agenten geändert',
   'mcp.key': 'MCP-Key geändert',
   'push.subscribe': 'Push-Gerät hinzugefügt',
   'push.unsubscribe': 'Push-Gerät entfernt',

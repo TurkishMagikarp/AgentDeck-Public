@@ -1,7 +1,7 @@
 import { createResource, createSignal, For, Match, onCleanup, Show, Switch } from 'solid-js'
 import { api } from './api'
 import { fail } from './store'
-import { PushSettings, ReportSettings } from './Notifications'
+import { OwnerNote, PushSettings, ReportSettings } from './Notifications'
 import { Modal } from './ui'
 import { t } from './i18n'
 
@@ -43,6 +43,12 @@ export function Providers(props: { onClose: () => void }) {
       <div class="provider-list">
         <For each={providers()}>{(provider) => <ProviderRow provider={provider} onChange={refetch} />}</For>
       </div>
+
+      <h3 class="modal-section">{t('Hinweis an alle Agenten')}</h3>
+      <p class="muted intro">
+        {t('Ein Text, den jeder Agent in jedem Projekt am Anfang seines Auftrags liest. Für Regeln, die sich für alle auf einmal ändern.')}
+      </p>
+      <OwnerNote />
 
       <h3 class="modal-section">{t('Mail an dich')}</h3>
       <p class="muted intro">

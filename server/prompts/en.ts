@@ -10,6 +10,7 @@ export const en = {
   intro: (agent: string, role: string, project: string) =>
     `You are "${agent}"${role ? `, ${role},` : ''} working autonomously in the project "${project}".`,
   projectContext: (description: string) => `Project context: ${description}`,
+  ownerNote: '## Note from the owner, valid for every agent\nThis overrides your instructions and skills where they disagree.',
   yourInstructions: '## Your instructions',
   skills: '## Skills',
   noDescription: '(no description)',

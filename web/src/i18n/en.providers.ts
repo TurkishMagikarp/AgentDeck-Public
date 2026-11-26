@@ -184,6 +184,13 @@ export const en_providers: Record<string, string> = {
   'Routine gelöscht': 'Routine deleted',
   'Mail-Einstellungen geändert': 'Email settings changed',
   'Morgenbericht geändert': 'Morning report changed',
+  'Hinweis an alle Agenten geändert': 'Note for all agents changed',
+  'Hinweis an alle Agenten': 'Note for all agents',
+  'Ein Text, den jeder Agent in jedem Projekt am Anfang seines Auftrags liest. Für Regeln, die sich für alle auf einmal ändern.':
+    'A text every agent in every project reads at the top of its task. For rules that change for all of them at once.',
+  'z. B.: Wir pushen nicht mehr zu GitHub. Das Repository liegt auf unserem Forgejo.':
+    'e.g.: We no longer push to GitHub. The repository lives on our Forgejo.',
+  'Steht in jedem Auftrag, ab dem nächsten Lauf.': 'In every task, from the next run on.',
   'MCP-Key geändert': 'MCP key changed',
   'Push-Gerät hinzugefügt': 'Push device added',
   'Push-Gerät entfernt': 'Push device removed',
